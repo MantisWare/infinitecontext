@@ -15,7 +15,7 @@
         "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/vault.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && pnpm run build",
         "prepack": "pnpm run build",
         "postinstall": "node postinstall.mjs",
-        "test": "node --import tsx --test tests/**/*.test.mjs tests/*.test.mjs"
+        "test": "node --test tests/**/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs"
     },
     "main": "./dist/index.mjs",
     "types": "./dist/index.d.mts",
