@@ -7,7 +7,6 @@ import {
     isEncryptedContent,
     isEncryptedWritePayload,
     metadataHasSensitivePlaintext,
-    vaultMessageRowViolations,
 } from '@infinitecontext/crypto';
 import type { AuthRepository } from '@infinitecontext/auth';
 
@@ -35,6 +34,7 @@ async function validateInitializedVaultWrites(
     deps: VaultEncryptionDeps,
     body: unknown,
     mode: 'create_root' | 'messages',
+    { newMessageIdsOnly = false }: { newMessageIdsOnly?: boolean } = {},
 ): Promise<Response | null> {
     const auth = c.get('auth');
     if (auth.kind !== 'user_session') return null;
@@ -66,6 +66,9 @@ async function validateInitializedVaultWrites(
                 'Vault message writes must include `id` (icn_* for new messages or msg_* when updating by id).',
             );
         }
+        if (newMessageIdsOnly && !isClientNodeId(write.clientNodeId)) {
+            return reject(c, 422, 'New message ids must be icn_ followed by 24 lowercase hex digits.');
+        }
         if (!isClientNodeId(write.metadata.ic_client_node_id)) {
             return reject(c, 422, 'metadata.ic_client_node_id must be set to the stable icn_* client node id.');
         }
@@ -79,6 +82,9 @@ async function validateInitializedVaultWrites(
                 'Encrypted vault accounts must send ciphertext payloads only (strict __ic_enc envelope).',
             );
         }
+        if (metadataHasSensitivePlaintext(write.metadata)) {
+            return reject(c, 422, 'Encrypted vault accounts must send sensitive metadata inside ic_sensitive.');
+        }
     }
     return null;
 }
@@ -87,6 +93,7 @@ export async function validateVaultMessageRead(
     c: HttpContext,
     deps: VaultEncryptionDeps,
     body: { data?: Array<Record<string, unknown>> },
+    { allowLegacyMigrateRead = false }: { allowLegacyMigrateRead?: boolean } = {},
 ): Promise<Response | null> {
     const auth = c.get('auth');
     if (auth.kind !== 'user_session') return null;
@@ -101,28 +108,19 @@ export async function validateVaultMessageRead(
     if (rows.length === 0) return null;
 
     const encryptedCount = rows.filter((row) => isEncryptedContent(row)).length;
-    if (encryptedCount === 0) {
-        // Legacy plaintext context (pre-migrate); still readable for migration tooling.
+    if (allowLegacyMigrateRead && encryptedCount === 0) {
         return null;
     }
     if (encryptedCount !== rows.length) {
         return reject(
             c,
             422,
-            'Vault context contains a mix of plaintext and encrypted messages. Run migrate-encrypt to converge.',
+            encryptedCount === 0
+                ? 'Vault accounts cannot read plaintext message payloads. Run migrate-encrypt to converge.'
+                : 'Vault context contains a mix of plaintext and encrypted messages. Run migrate-encrypt to converge.',
         );
     }
 
-    for (const row of rows) {
-        const violations = vaultMessageRowViolations(row);
-        if (violations.length > 0) {
-            return reject(
-                c,
-                422,
-                `Vault context response contains forbidden plaintext: ${violations[0]}`,
-            );
-        }
-    }
     return null;
 }
 
@@ -131,8 +129,9 @@ export async function validateVaultContextWrite(
     deps: VaultEncryptionDeps,
     body: unknown,
     mode: 'create_root' | 'messages',
+    options?: { newMessageIdsOnly?: boolean },
 ): Promise<Response | null> {
-    return validateInitializedVaultWrites(c, deps, body, mode);
+    return validateInitializedVaultWrites(c, deps, body, mode, options);
 }
 
 export async function validateVaultHistoricalRead(
@@ -153,7 +152,8 @@ export async function validateVaultHistoricalRead(
     const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
     if (!policy.initialized) return null;
 
-    return validateVaultMessageRead(c, deps, body);
+    const allowLegacyMigrateRead = c.req.header('x-ic-vault-migrate-read') === '1';
+    return validateVaultMessageRead(c, deps, body, { allowLegacyMigrateRead });
 }
 
 export async function validateVaultDeleteWrite(

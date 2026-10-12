@@ -1,5 +1,6 @@
 import {
     appendMessages,
+    prunePlaintextVersionHeads,
     createContext,
     deleteContextPermanent,
     deleteManyContexts,
@@ -113,13 +114,25 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         const body = await c.req.json();
 
         if (vaultDeps) {
-            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages');
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages', {
+                newMessageIdsOnly: true,
+            });
             if (denied) return denied;
         }
 
         const result = await appendMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         return c.json(result.data, 201);
+    });
+
+    app.post('/contexts/:id/prune-plaintext-versions', async (c) => {
+        const { projectId } = c.get('auth');
+        const storage = c.get('storage');
+        const contextPublicId = c.req.param('id');
+
+        const result = await prunePlaintextVersionHeads(storage, projectId, contextPublicId);
+        if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        return c.json(result.data);
     });
 
     // get context — parse query selectors, call core, map Result
@@ -139,9 +152,10 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
 
         if (vaultDeps) {
+            const allowLegacyMigrateRead = c.req.header('x-ic-vault-migrate-read') === '1';
             const denied =
                 (await validateVaultHistoricalRead(c, vaultDeps, opts, result.data)) ??
-                (await validateVaultMessageRead(c, vaultDeps, result.data));
+                (await validateVaultMessageRead(c, vaultDeps, result.data, { allowLegacyMigrateRead }));
             if (denied) return denied;
         }
 

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import process from "node:process";
 import readline from "node:readline/promises";
 
@@ -66,12 +67,39 @@ async function promptVisible(question) {
   }
 }
 
+async function readPassphraseFromArgv(argv) {
+  const fileFlag = argv.find((a) => a.startsWith("--passphrase-file="));
+  if (fileFlag) {
+    const filePath = fileFlag.slice("--passphrase-file=".length);
+    const passphrase = fs.readFileSync(filePath, "utf8").replace(/\r?\n$/, "");
+    if (!passphrase.trim()) throw new Error("Passphrase file is empty.");
+    return passphrase;
+  }
+  if (argv.includes("--passphrase-stdin")) {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const passphrase = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    if (!passphrase.trim()) throw new Error("Passphrase from stdin is empty.");
+    return passphrase;
+  }
+  const fromEnv = process.env.INFINITECONTEXT_VAULT_PASSPHRASE?.trim()
+    ? process.env.INFINITECONTEXT_VAULT_PASSPHRASE
+    : null;
+  if (fromEnv) {
+    delete process.env.INFINITECONTEXT_VAULT_PASSPHRASE;
+    return fromEnv;
+  }
+  return null;
+}
+
 function printVaultHelp() {
   console.log(`Usage: infinitecontext vault <command>
 
 Commands:
   init                 Create vault crypto (shows recovery key once)
   unlock               Unlock vault (passphrase; use --recovery for recovery key)
+    --passphrase-file=PATH   Read passphrase from file (0600 recommended)
+    --passphrase-stdin       Read passphrase from stdin (single line)
   lock                 Clear cached DEK from memory/keychain
   status               Show vault initialization/unlock state
   change-passphrase    Re-wrap DEK with a new vault passphrase
@@ -120,9 +148,8 @@ async function cmdUnlock(baseUrl, argv) {
     const key = await promptVisible("Recovery key: ");
     await unlockVaultWithRecoveryKey({ baseUrl, recoveryKey: key, accountKey, crypto });
   } else {
-    const passphrase = process.env.INFINITECONTEXT_VAULT_PASSPHRASE?.trim()
-      ? process.env.INFINITECONTEXT_VAULT_PASSPHRASE
-      : await promptHidden("Vault passphrase: ");
+    const fromFlags = await readPassphraseFromArgv(argv);
+    const passphrase = fromFlags ?? (await promptHidden("Vault passphrase: "));
     await unlockVaultWithPassphrase({ baseUrl, passphrase, accountKey, crypto });
   }
   console.log("Vault unlocked.");

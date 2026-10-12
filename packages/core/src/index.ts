@@ -43,6 +43,8 @@ export type { GetContextOptions } from './ops/get-context';
 
 export { appendMessages } from './ops/append-messages';
 
+export { prunePlaintextVersionHeads } from './ops/prune-plaintext-versions';
+
 export { updateMessages } from './ops/update-messages';
 
 export { deleteContextPermanent } from './ops/delete-context';

@@ -29,9 +29,9 @@ export const CLEARTEXT_METADATA_KEYS = [
     'ic_root_aad',
     /** Stable client-chosen id for AAD binding (survives message COW). */
     'ic_client_node_id',
-    /** Monotonic per-message chain index (vault integrity). */
+    /** Legacy preview field; ignored by clients (integrity deferred). */
     'ic_chain_index',
-    /** HMAC chain link for rollback/truncation detection. */
+    /** Legacy preview field; ignored by clients (integrity deferred). */
     'ic_chain_link',
 ] as const;
 

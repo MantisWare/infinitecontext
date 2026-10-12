@@ -58,7 +58,7 @@ export class SqliteAdapter implements StorageAdapter {
 
     async findRootContext(projectId: number, publicId: string) {
         const rows = await this.db
-            .select({ public_id: nodes.public_id })
+            .select({ public_id: nodes.public_id, metadata: nodes.metadata })
             .from(nodes)
             .where(and(eq(nodes.project_id, projectId), eq(nodes.public_id, publicId), eq(nodes.type, 'context'), isNull(nodes.context_id)))
             .limit(1);
@@ -70,6 +70,15 @@ export class SqliteAdapter implements StorageAdapter {
             .select({ public_id: nodes.public_id })
             .from(nodes)
             .where(and(eq(nodes.public_id, publicId), eq(nodes.type, 'context'), isNull(nodes.context_id)))
+            .limit(1);
+        return rows[0] ?? null;
+    }
+
+    async findNodeByPublicId(projectId: number, publicId: string) {
+        const rows = await this.db
+            .select({ public_id: nodes.public_id })
+            .from(nodes)
+            .where(and(eq(nodes.project_id, projectId), eq(nodes.public_id, publicId)))
             .limit(1);
         return rows[0] ?? null;
     }

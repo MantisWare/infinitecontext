@@ -37,11 +37,16 @@ export class MemoryStorage implements StorageAdapter {
         const n = this.nodes.find(
             (n) => n.project_id === projectId && n.public_id === publicId && n.type === 'context' && n.context_id === null
         );
-        return n ? { public_id: n.public_id } : null;
+        return n ? { public_id: n.public_id, metadata: n.metadata } : null;
     }
 
     async findRootContextByPublicId(publicId: string) {
         const n = this.nodes.find((n) => n.public_id === publicId && n.type === 'context' && n.context_id === null);
+        return n ? { public_id: n.public_id } : null;
+    }
+
+    async findNodeByPublicId(projectId: number, publicId: string) {
+        const n = this.nodes.find((n) => n.project_id === projectId && n.public_id === publicId);
         return n ? { public_id: n.public_id } : null;
     }
 

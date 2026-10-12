@@ -4,11 +4,9 @@ import assert from 'node:assert/strict';
 import { createMockGoogleOAuthClient } from '@infinitecontext/auth';
 import { MemoryAuthRepository } from '@infinitecontext/auth/testing';
 import {
-    computeChainLink,
     computeDekProof,
     createVaultCryptoMaterial,
     decodeRecoveryKey,
-    deriveContextChainKey,
     deriveVaultKek,
     encryptNodeContent,
     encryptNodeMetadata,
@@ -92,12 +90,10 @@ function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: stri
         { source: 'cli-test', note: 'hidden', ic_client_node_id: nodeId },
         aad,
     );
-    const chainKey = deriveContextChainKey(dek, contextId, 1);
-    const link = computeChainLink(chainKey, contextId, 0, nodeId, content, 'GENESIS');
     return {
         id: nodeId,
         ...content,
-        metadata: { ...metadata, ic_chain_index: 0, ic_chain_link: link },
+        metadata,
     };
 }
 
@@ -140,6 +136,19 @@ describe('vault CLI-equivalent e2e', () => {
         const enc = encryptedMessage(material.dek, userPublicId, contextId);
         const append = await json('POST', `/contexts/${contextId}`, enc, accessToken);
         assert.equal(append.res.status, 201);
+
+        const badMeta = {
+            ...encryptedMessage(material.dek, userPublicId, contextId),
+            metadata: {
+                ...(enc.metadata as Record<string, unknown>),
+                note: 'plaintext-in-metadata',
+            },
+        };
+        const metaReject = await json('POST', `/contexts/${contextId}`, badMeta, accessToken);
+        assert.equal(metaReject.res.status, 422);
+
+        const dup = await json('POST', `/contexts/${contextId}`, enc, accessToken);
+        assert.equal(dup.res.status, 409);
 
         const storedNodes = (storage as unknown as { nodes: Array<{ content: Record<string, unknown> }> }).nodes;
         const hasCipher = storedNodes.some((n) => n.content.__ic_enc === 1);

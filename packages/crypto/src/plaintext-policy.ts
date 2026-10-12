@@ -44,6 +44,9 @@ function stripWriteSelectors(content: Record<string, unknown>): Record<string, u
 export function isEncryptedWritePayload(content: Record<string, unknown>, metadata: Record<string, unknown>): boolean {
     try {
         validateEncryptedWriteShape(stripWriteSelectors(content), metadata);
+        if (metadataHasSensitivePlaintext(metadata)) {
+            throw new Error('metadata contains sensitive plaintext');
+        }
         return true;
     } catch {
         return false;

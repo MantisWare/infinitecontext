@@ -1,16 +1,12 @@
 import {
-  ChainVerificationError,
   DecryptionFailedError,
-  computeChainLink,
   decryptNodeContent,
   decryptNodeMetadata,
-  deriveContextChainKey,
   encryptNodeContent,
   encryptNodeMetadata,
   generateClientNodeId,
   isEncryptedContent,
   pickCleartextMetadata,
-  verifyContextMessageChain,
 } from "./ic-crypto.mjs";
 
 import { randomRootAadNonce } from "./vault-agent.mjs";
@@ -58,42 +54,6 @@ function encryptMessageFields(message, ctx, contextId, nodePublicId) {
     content: encryptNodeContent(ctx.dek, ctx.dekVersion, content, binding),
     metadata: encryptNodeMetadata(ctx.dek, ctx.dekVersion, meta, binding),
   };
-}
-
-function chainKeyFor(ctx, contextId) {
-  return deriveContextChainKey(ctx.dek, contextId, ctx.dekVersion);
-}
-
-function chainTipFromRows(rows) {
-  let prevLink = "GENESIS";
-  let chainIndex = -1;
-  for (const row of rows) {
-    const idx = Number(row?.metadata?.ic_chain_index);
-    if (Number.isInteger(idx) && idx > chainIndex) {
-      chainIndex = idx;
-      prevLink = String(row.metadata.ic_chain_link ?? prevLink);
-    }
-  }
-  return { prevLink, chainIndex };
-}
-
-function attachChainFields(content, metadata, ctx, contextId, nodeId, chainIndex, prevLink) {
-  const link = computeChainLink(chainKeyFor(ctx, contextId), contextId, chainIndex, nodeId, content, prevLink);
-  return {
-    content,
-    metadata: {
-      ...(metadata ?? {}),
-      ic_chain_index: chainIndex,
-      ic_chain_link: link,
-    },
-    link,
-  };
-}
-
-function verifyStoredChain(rows, ctx, contextId) {
-  verifyContextMessageChain(rows, chainKeyFor(ctx, contextId), contextId, {
-    pickContent: (row) => (isEncryptedContent(row) ? pickContentEnvelope(row) : row),
-  });
 }
 
 function decryptMessageRow(row, ctx, contextId, { allowPlaintext = false } = {}) {
@@ -155,21 +115,12 @@ function decryptRootMetadata(metadata, ctx) {
 }
 
 async function loadSourceRootMetadata(client, sourceContextId) {
-  let after;
-  for (;;) {
-    const res = await client.get({ limit: 500, ...(after ? { after } : {}) });
-    const row = res?.data?.find((c) => c.id === sourceContextId);
-    if (row) return row.metadata ?? {};
-    if (!res?.data?.length || res.data.length < 500) break;
-    after = res.data[res.data.length - 1]?.created_at;
-  }
-  return {};
+  const res = await client.get(sourceContextId);
+  return res?.metadata ?? {};
 }
 
 async function rebindForkedContext(client, ctx, newContextId, sourceContextId) {
   const res = await client.get(newContextId);
-  let prevLink = "GENESIS";
-  let chainIndex = -1;
   const updates = [];
   for (const row of res.data ?? []) {
     if (!isEncryptedContent(row)) continue;
@@ -196,16 +147,13 @@ async function rebindForkedContext(client, ctx, newContextId, sourceContextId) {
           })
         : {};
     const nodeId = stableNodeId(row);
-    chainIndex += 1;
     const { content, metadata } = encryptMessageFields(
       { ...plaintext, metadata: meta },
       ctx,
       newContextId,
       nodeId,
     );
-    const chained = attachChainFields(content, metadata, ctx, newContextId, nodeId, chainIndex, prevLink);
-    prevLink = chained.link;
-    updates.push({ id: row.id, ...chained.content, metadata: chained.metadata });
+    updates.push({ id: row.id, ...content, metadata });
   }
   if (updates.length > 0) {
     await client.update(newContextId, { updates });
@@ -213,24 +161,18 @@ async function rebindForkedContext(client, ctx, newContextId, sourceContextId) {
 }
 
 async function encryptAppendBatch(client, contextId, items, ctx) {
-  const head = await client.get(contextId);
-  const rows = head?.data ?? [];
-  let { prevLink, chainIndex } = chainTipFromRows(rows);
   const list = Array.isArray(items) ? items : [items];
   const encrypted = [];
   for (const msg of list) {
     const nodeId =
       typeof msg.id === "string" && msg.id.startsWith("icn_") ? msg.id : generateClientNodeId();
-    chainIndex += 1;
     const { content, metadata } = encryptMessageFields(
       { ...msg, metadata: withClientNodeId(msg.metadata, nodeId) },
       ctx,
       contextId,
       nodeId,
     );
-    const chained = attachChainFields(content, metadata, ctx, contextId, nodeId, chainIndex, prevLink);
-    prevLink = chained.link;
-    encrypted.push({ id: nodeId, ...chained.content, metadata: chained.metadata });
+    encrypted.push({ id: nodeId, ...content, metadata });
   }
   return encrypted;
 }
@@ -247,14 +189,6 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
   const allowPlaintext = migrationMode;
 
   function mapGetResponse(res, contextId) {
-    if (!allowPlaintext && res?.data?.length) {
-      try {
-        verifyStoredChain(res.data, ctx, contextId);
-      } catch (error) {
-        res.chain_error =
-          error instanceof ChainVerificationError ? error.message : "Chain verification failed";
-      }
-    }
     res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
     return res;
   }
@@ -307,9 +241,6 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     async update(contextId, input, options) {
       ctx.contextId = contextId;
       const rawUpdates = Array.isArray(input) ? input : input?.updates ?? [input];
-      const snap = await client.get(contextId);
-      const indexById = new Map();
-      for (const row of snap.data ?? []) indexById.set(row.id, row.index);
       const encrypted = rawUpdates.map((msg) => {
         const nodeId = msg.id ?? (() => {
           throw new Error("Vault update requires message id");
@@ -367,28 +298,29 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async migrateEncryptContext(contextId) {
       ctx.contextId = contextId;
-      const beforeHead = await client.get(contextId, { history: true });
+      const beforeHead = await client.get(contextId, { history: true, vaultMigrateRead: true });
       const rows = beforeHead?.data ?? [];
       const plaintextRows = rows.filter((row) => !isEncryptedContent(row));
       if (plaintextRows.length === 0) {
+        if (typeof client.prunePlaintextVersions === "function") {
+          await client.prunePlaintextVersions(contextId);
+        }
         return { encrypted: true, id: contextId, skipped: true };
       }
-      let prevLink = "GENESIS";
-      let chainIndex = -1;
       const batchUpdates = plaintextRows.map((row) => {
         const nodeId = generateClientNodeId();
-        chainIndex += 1;
         const { content, metadata } = encryptMessageFields(
           { ...row, metadata: withClientNodeId(row.metadata, nodeId) },
           ctx,
           contextId,
           nodeId,
         );
-        const chained = attachChainFields(content, metadata, ctx, contextId, nodeId, chainIndex, prevLink);
-        prevLink = chained.link;
-        return { index: row.index, ...chained.content, metadata: chained.metadata };
+        return { index: row.index, ...content, metadata };
       });
       await client.update(contextId, { updates: batchUpdates });
+      if (typeof client.prunePlaintextVersions === "function") {
+        await client.prunePlaintextVersions(contextId);
+      }
       const after = await client.get(contextId);
       for (const row of after.data ?? []) {
         const violations = [];
@@ -396,6 +328,16 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         if (row.role || row.text || row.content) violations.push("plaintext body fields");
         if (violations.length) {
           throw new Error(`Migration verification failed at index ${row.index}: ${violations.join(", ")}`);
+        }
+      }
+      const withHistory = await client.get(contextId, { history: true });
+      const versionCount = withHistory?.versions?.length ?? 1;
+      for (let v = 0; v < versionCount; v += 1) {
+        const snap = await client.get(contextId, { version: v });
+        for (const row of snap.data ?? []) {
+          if (!isEncryptedContent(row)) {
+            throw new Error(`Migration verification failed: version ${v} still has plaintext`);
+          }
         }
       }
       return {

@@ -31,6 +31,12 @@ function pidPath() {
   return path.join(infinitecontextHome(), PID_NAME);
 }
 
+function vaultAgentChildEnv() {
+  const env = { ...process.env };
+  delete env.INFINITECONTEXT_VAULT_PASSPHRASE;
+  return env;
+}
+
 function agentRequest(payload, { timeoutMs = 3000 } = {}) {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(socketPath());
@@ -73,10 +79,11 @@ async function pingAgent() {
 
 export async function ensureDetachedVaultAgent() {
   if (await pingAgent()) return;
-  const child = spawn(process.execPath, [resolveServeScript()], {
+  const serveScript = resolveServeScript();
+  const child = spawn(process.execPath, [serveScript], {
     detached: true,
     stdio: "ignore",
-    env: process.env,
+    env: vaultAgentChildEnv(),
   });
   child.unref();
   for (let i = 0; i < 20; i += 1) {
@@ -116,15 +123,32 @@ export async function vaultAgentClear(accountKey) {
   }
 }
 
-export async function vaultAgentShutdown() {
+async function pidLooksLikeVaultAgent(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    await agentRequest({ cmd: "shutdown" }, { timeoutMs: 1500 });
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    const serveBase = path.basename(resolveServeScript());
+    return cmdline.includes("vault-agent-serve") || cmdline.includes(serveBase);
   } catch {
-    // ignore
+    return false;
+  }
+}
+
+export async function vaultAgentShutdown() {
+  const agentAlive = await pingAgent();
+  if (agentAlive) {
+    try {
+      await agentRequest({ cmd: "shutdown" }, { timeoutMs: 1500 });
+    } catch {
+      // ignore
+    }
+    return;
   }
   try {
-    const pid = fs.readFileSync(pidPath(), "utf8").trim();
-    if (pid) process.kill(Number(pid), "SIGTERM");
+    const pid = Number(fs.readFileSync(pidPath(), "utf8").trim());
+    if (await pidLooksLikeVaultAgent(pid)) {
+      process.kill(pid, "SIGTERM");
+    }
   } catch {
     // ignore
   }

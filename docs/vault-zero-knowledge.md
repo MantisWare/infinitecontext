@@ -9,7 +9,6 @@ InfiniteContext encrypts **all context node payloads on the client** before they
 | Vault passphrase → KEK | Argon2id (64 MiB, t=3, p=4) | Per-user salt in `user_crypto`; **not** the server login password hash |
 | Data encryption (DEK) | Random 256-bit DEK | One DEK per user account |
 | Node payloads | XChaCha20-Poly1305 (`XC20P`) | `@noble/ciphers`; **AAD v4** binds user id, context id, dek version, field, and stable **`ic_client_node_id`** (cleartext metadata, survives COW). Legacy v3 (ordinal index) is decrypt-only. |
-| Integrity chain | HMAC-SHA256 (`ic_chain_index` + `ic_chain_link`) | Per-context chain MAC derived from the DEK detects rollback (duplicate index / bad link) and optional truncation checks. |
 | DEK wrap | XChaCha20-Poly1305 | Dual wrap: vault passphrase KEK + recovery key KEK |
 
 Envelope stored in `nodes.content` / sensitive metadata:
@@ -41,6 +40,12 @@ Message bodies and all other metadata fields are encrypted (`ic_sensitive` envel
 
 Everything else (notes, titles, custom tags, message text, etc.) must be ciphertext once the vault is initialized.
 
+## Known limits (confidentiality-only)
+
+Until [vault integrity](../design/vault-integrity.md) ships, a **malicious or compromised server** can **roll back**, **drop**, or **reorder** messages in API responses without breaking decryption. Clients trust the version head the server returns. AAD v4 still prevents swapping ciphertext between contexts or client node ids.
+
+Cleartext **`ic_chain_index` / `ic_chain_link`** fields may appear on older rows from preview builds; they are **ignored** in PR #5 and carry no security guarantee.
+
 ## Key recovery (strict zero-knowledge)
 
 See [plan §7.1](/docs/plan/infinitecontext-plan.md).
@@ -55,6 +60,7 @@ See [plan §7.1](/docs/plan/infinitecontext-plan.md).
 ```bash
 infinitecontext vault init                 # creates DEK + dual wrap; shows recovery key once
 infinitecontext vault unlock               # passphrase → cache DEK (OS keychain when available; else background vault-agent)
+  # Non-interactive: --passphrase-file=PATH or --passphrase-stdin (avoid INFINITECONTEXT_VAULT_PASSPHRASE — visible in /proc on Linux)
 infinitecontext vault unlock --recovery    # recovery key unlock (new device)
 infinitecontext vault lock
 infinitecontext vault change-passphrase    # re-wrap DEK only

@@ -43,11 +43,14 @@ export type GetContextInput = {
     at?: number;
     before?: string;
     history?: boolean;
+    /** One-time plaintext read for vault migrate-encrypt tooling (sets X-IC-Vault-Migrate-Read). */
+    vaultMigrateRead?: boolean;
 };
 
 export type GetContextResponse<T = unknown> = {
     data: Array<{ id: string; index: number; metadata: Record<string, unknown> } & T>;
     version: number;
+    metadata?: Record<string, unknown>;
     versions?: Version[];
 };
 
@@ -189,7 +192,10 @@ export class InfiniteContext {
         if (options?.before) params.set('before', options.before);
         if (options?.history) params.set('history', 'true');
         const query = params.toString();
-        return this.request<GetContextResponse<T>>(`/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`, { method: 'GET' });
+        return this.request<GetContextResponse<T>>(`/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`, {
+            method: 'GET',
+            headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
+        });
     }
 
     async update<T = unknown>(contextId: string, input: UpdateInput, options?: MutationOptions): Promise<UpdateResponse<T>> {
@@ -237,6 +243,13 @@ export class InfiniteContext {
             body: { ids },
             acceptStatuses: [200, 207, 500],
         });
+    }
+
+    async prunePlaintextVersions(contextId: string): Promise<{ pruned: number }> {
+        return this.request<{ pruned: number }>(
+            `/contexts/${encodeURIComponent(contextId)}/prune-plaintext-versions`,
+            { method: 'POST', body: {} },
+        );
     }
 
     private async resolveBearerToken(): Promise<string> {

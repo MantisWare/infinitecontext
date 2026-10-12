@@ -505,6 +505,7 @@ function stripWriteSelectors(content) {
 function isEncryptedWritePayload(content, metadata) {
 	try {
 		validateEncryptedWriteShape(stripWriteSelectors(content), metadata);
+		if (metadataHasSensitivePlaintext(metadata)) throw new Error("metadata contains sensitive plaintext");
 		return true;
 	} catch {
 		return false;

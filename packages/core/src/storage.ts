@@ -58,8 +58,12 @@ export interface StorageAdapter {
     findContextBranches(contextId: string): Promise<Pick<NodeRow, 'public_id' | 'prev_id' | 'created_at'>[]>;
     findVersions(contextId: string): Promise<Pick<NodeRow, 'public_id' | 'created_at' | 'metadata'>[]>;
     findNonContextNodes(contextId: string): Promise<NodeRow[]>;
-    findRootContext(projectId: number, publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
+    findRootContext(
+        projectId: number,
+        publicId: string,
+    ): Promise<Pick<NodeRow, 'public_id' | 'metadata'> | null>;
     findRootContextByPublicId(publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
+    findNodeByPublicId(projectId: number, publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
     listRootContexts(projectId: number, limit: number, filters?: ContextFilters): Promise<Pick<NodeRow, 'public_id' | 'metadata' | 'created_at'>[]>;
 
     // nodes — mutations

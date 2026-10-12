@@ -12,7 +12,11 @@ import { ok, err, type Result } from '../result';
 // or an error marker carrying the original HTTP status, resolved to a Result
 // once the tx completes.
 
-type AppendOutcome = { data: MessageView[]; version: number } | { code: 'not_found' | 'internal'; message: string };
+type AppendOutcome =
+    | { data: MessageView[]; version: number }
+    | { code: 'not_found' | 'internal' | 'conflict' | 'invalid_input'; message: string };
+
+const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
 
 // -- op -----------------------------------------------------------------------
 
@@ -45,6 +49,9 @@ export async function appendMessages(
             const nodeInputs = items.map((msg) => {
                 const { metadata, id, ...content } = msg as Record<string, unknown>;
                 const clientPublicId = typeof id === 'string' ? id : undefined;
+                if (clientPublicId !== undefined && !CLIENT_NODE_ID_PATTERN.test(clientPublicId)) {
+                    return { invalidId: true as const };
+                }
                 return {
                     type: 'message',
                     content: content as Record<string, unknown>,
@@ -52,7 +59,23 @@ export async function appendMessages(
                     clientPublicId,
                 };
             });
-            const insertRecords = buildNodeInsertRecords(nodeInputs, projectId, head.public_id, tailPublicId);
+            if (nodeInputs.some((n) => 'invalidId' in n)) {
+                return { code: 'invalid_input', message: 'Message id must be icn_ followed by 24 lowercase hex digits' };
+            }
+            const typedInputs = nodeInputs as Array<{
+                type: string;
+                content: Record<string, unknown>;
+                metadata: Record<string, unknown>;
+                clientPublicId?: string;
+            }>;
+            for (const input of typedInputs) {
+                if (!input.clientPublicId) continue;
+                const existing = await tx.findNodeByPublicId(projectId, input.clientPublicId);
+                if (existing) {
+                    return { code: 'conflict', message: `Client node id already exists: ${input.clientPublicId}` };
+                }
+            }
+            const insertRecords = buildNodeInsertRecords(typedInputs, projectId, head.public_id, tailPublicId);
 
             // append the new message nodes after the tail
             const createdNodes = await tx.insertNodes(insertRecords);

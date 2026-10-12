@@ -2,6 +2,9 @@
   "name": "infinitecontext-monorepo",
   "private": true,
   "packageManager": "pnpm@10.28.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["node-pty", "keytar"]
+  },
   "scripts": {
     "check": "pnpm -r --if-present run check",
     "dev:sync": "pnpm --filter @infinitecontext/sync run dev",

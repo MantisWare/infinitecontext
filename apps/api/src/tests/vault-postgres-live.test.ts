@@ -198,8 +198,8 @@ describe('vault postgres live e2e', () => {
         assert.equal(swap.res.status, 200);
 
         const afterSwap = await vaultClient.get(created.id);
-        assert.ok(afterSwap.data[0]?.decrypt_error || afterSwap.chain_error, 'expected decrypt or chain failure');
-        assert.ok(afterSwap.data[1]?.decrypt_error || afterSwap.chain_error, 'expected decrypt or chain failure');
+        assert.ok(afterSwap.data[0]?.decrypt_error, 'expected decrypt failure after ciphertext swap');
+        assert.ok(afterSwap.data[1]?.decrypt_error, 'expected decrypt failure after ciphertext swap');
     });
 
     it('fork preserves root title and message metadata', async (t) => {
@@ -295,6 +295,16 @@ describe('vault postgres live e2e', () => {
         const after = await migrator.get(contextId);
         assert.equal(after.data[0]?.text, 'legacy plaintext');
         assert.ok(!after.data[0]?.decrypt_error);
+        const hist = await json('GET', `/contexts/${contextId}?history=true`, undefined, plainToken);
+        const versionCount = ((hist.body.versions ?? []) as unknown[]).length || 1;
+        for (let v = 0; v < versionCount; v += 1) {
+            const ver = await json('GET', `/contexts/${contextId}?version=${v}`, undefined, plainToken);
+            assert.equal(ver.res.status, 200, `version ${v} should be readable`);
+            const data = (ver.body.data ?? []) as Record<string, unknown>[];
+            for (const row of data) {
+                assert.equal(row.__ic_enc, 1, `version ${v} must not contain plaintext content`);
+            }
+        }
     });
 
     it('rejects historical plaintext version reads', async (t) => {
