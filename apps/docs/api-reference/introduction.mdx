@@ -6,7 +6,7 @@ description: 'InfiniteContext API reference'
 ## Base URL
 
 ```
-https://api.infinitecontext.ai
+https://your-api.example.com
 ```
 
 ## Authentication
@@ -14,7 +14,7 @@ https://api.infinitecontext.ai
 All endpoints require a Bearer token. Get your API key from the dashboard.
 
 ```bash
-curl https://api.infinitecontext.ai/contexts \
+curl https://your-api.example.com/contexts \
   -H "Authorization: Bearer ic_live_xxxxx"
 ```
 
@@ -55,18 +55,18 @@ result = uc.get(ctx["id"])
 
 ```bash curl
 # create a context
-curl -X POST https://api.infinitecontext.ai/contexts \
+curl -X POST https://your-api.example.com/contexts \
   -H "Authorization: Bearer $INFINITECONTEXT_API_KEY" \
   -H "Content-Type: application/json"
 
 # append a message
-curl -X POST https://api.infinitecontext.ai/contexts/ctx_abc123 \
+curl -X POST https://your-api.example.com/contexts/ctx_abc123 \
   -H "Authorization: Bearer $INFINITECONTEXT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"role": "user", "content": "Hello!"}'
 
 # retrieve the context
-curl https://api.infinitecontext.ai/contexts/ctx_abc123 \
+curl https://your-api.example.com/contexts/ctx_abc123 \
   -H "Authorization: Bearer $INFINITECONTEXT_API_KEY"
 ```
 </CodeGroup>

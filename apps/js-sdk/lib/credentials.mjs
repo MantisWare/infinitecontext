@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { resolveBaseUrl } from "./client-config.mjs";
+
 const CREDENTIALS_VERSION = 1;
 
 /** @type {Promise<{ accessToken: string; baseUrl: string; credentials: object } | null> | null} */
@@ -84,7 +86,7 @@ export async function getValidAccessToken({ baseUrl, fetchFn = fetch }) {
   const credentials = loadCredentials();
   if (!credentials?.refreshToken) return null;
 
-  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? "https://api.infinitecontext.ai").replace(/\/+$/, "");
+  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? resolveBaseUrl()).replace(/\/+$/, "");
   if (!isExpired(credentials.accessTokenExpiresAt) && credentials.accessToken) {
     return {
       accessToken: String(credentials.accessToken),

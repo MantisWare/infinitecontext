@@ -4,9 +4,8 @@ import os from "node:os";
 import process from "node:process";
 import readline from "node:readline/promises";
 
+import { describeActiveServer, resolveBaseUrl, KEYS_AND_SERVICES_DOC_URL, resolveBaseUrlSource } from "../../lib/client-config.mjs";
 import { saveCredentials } from "./credentials.mjs";
-
-const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
 const LOCAL_CALLBACK_PORT = 53682;
 
 function parseFlagValue(argv, flagName) {
@@ -28,7 +27,7 @@ function parseArgs(argv) {
     localhost: booleanFlags.has("localhost"),
     passwordStdin: booleanFlags.has("password-stdin"),
     email: parseFlagValue(argv, "email") ?? process.env.INFINITECONTEXT_LOGIN_EMAIL ?? "",
-    baseUrl: parseFlagValue(argv, "base-url") ?? process.env.INFINITECONTEXT_BASE_URL ?? DEFAULT_BASE_URL,
+    baseUrl: parseFlagValue(argv, "base-url"),
   };
 }
 
@@ -116,9 +115,24 @@ async function postJson(baseUrl, path, body) {
   return parsed;
 }
 
-async function afterLoginVaultGate(baseUrl, { google = false } = {}) {
+const VAULT_INIT_HINT =
+  "Tip: on hosted, run `infinitecontext vault init` for zero-knowledge encryption (optional until you enable vault).";
+
+async function afterLoginVaultGate(baseUrl, { google = false, skipInteractiveVault = false } = {}) {
+  if (skipInteractiveVault) {
+    const { isHostedApiBaseUrl } = await import("../../lib/client-config.mjs");
+    if (isHostedApiBaseUrl(baseUrl)) {
+      console.log(VAULT_INIT_HINT);
+    }
+    return;
+  }
   const { runInteractiveVaultInitIfRequired } = await import("../../lib/vault-require.mjs");
-  await runInteractiveVaultInitIfRequired({ baseUrl, googleAccount: google });
+  const { isHostedApiBaseUrl } = await import("../../lib/client-config.mjs");
+  await runInteractiveVaultInitIfRequired({
+    baseUrl,
+    googleAccount: google,
+    hostedVaultRecommended: isHostedApiBaseUrl(baseUrl),
+  });
 }
 
 function persistTokens(baseUrl, body, extra = {}) {
@@ -144,7 +158,9 @@ async function loginWithPassword({ baseUrl, email, passwordStdin }) {
   });
   persistTokens(baseUrl, body, { email: resolvedEmail });
   console.log(`Signed in as ${resolvedEmail}`);
-  await afterLoginVaultGate(baseUrl, { google: false });
+  const skipVault =
+    passwordStdin || Boolean(process.env.INFINITECONTEXT_LOGIN_PASSWORD) || !process.stdin.isTTY;
+  await afterLoginVaultGate(baseUrl, { google: false, skipInteractiveVault: skipVault });
 }
 
 async function loginWithGoogleDevice(baseUrl) {
@@ -260,9 +276,37 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function fetchAuthProviders(baseUrl) {
+  try {
+    const res = await fetch(`${baseUrl}/auth/providers`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function runLogin(argv = process.argv.slice(3)) {
   const args = parseArgs(argv);
-  const baseUrl = String(args.baseUrl).replace(/\/+$/, "");
+  const baseUrl = String(args.baseUrl ?? resolveBaseUrl()).replace(/\/+$/, "");
+  const active = describeActiveServer(baseUrl);
+  const src = args.baseUrl
+    ? resolveBaseUrlSource({ cliBaseUrl: args.baseUrl })
+    : resolveBaseUrlSource();
+  console.log(`Server: ${active.baseUrl} (${active.label}, source: ${src.source})`);
+
+  if (args.google) {
+    const providers = await fetchAuthProviders(baseUrl);
+    if (providers && providers.google === false) {
+      console.error(
+        "Google sign-in is not enabled on this server (missing INFINITECONTEXT_GOOGLE_CLIENT_ID / SECRET). " +
+          "Use email/password login, or configure Google OAuth on the server.",
+      );
+      console.error(`See ${KEYS_AND_SERVICES_DOC_URL}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   if (args.google && args.localhost) {
     await loginWithGoogleLocalhost(baseUrl);

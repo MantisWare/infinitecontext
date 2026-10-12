@@ -1,10 +1,12 @@
 """InfiniteContext API client."""
 
+import os
 from typing import Any, Dict, List, Optional, Union, overload
 from urllib.parse import quote
 
 import httpx
 
+from .constants import HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL
 from .exceptions import InfiniteContextHttpError
 from .types import (
     AppendResponse,
@@ -21,7 +23,6 @@ from .types import (
 class _BaseClient:
     """Base client with shared config."""
 
-    DEFAULT_BASE_URL = "https://api.infinitecontext.ai"
     DEFAULT_TIMEOUT = 30.0
 
     def __init__(
@@ -33,7 +34,12 @@ class _BaseClient:
         headers: Optional[Dict[str, str]] = None,
     ):
         self._api_key = api_key
-        self._base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        resolved = (
+            base_url
+            or os.environ.get("INFINITECONTEXT_BASE_URL")
+            or HOSTED_API_BASE_URL
+        ).strip().rstrip("/")
+        self._base_url = resolved
         self._timeout = timeout or self.DEFAULT_TIMEOUT
         self._headers = headers or {}
 

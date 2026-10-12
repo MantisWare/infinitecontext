@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://api.infinitecontext.ai"
+      "url": "https://your-api.example.com"
     }
   ],
   "security": [
@@ -38,7 +38,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "curl -X POST https://api.infinitecontext.ai/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"metadata\": {\"name\": \"my-session\"}}'\n\n# Fork from specific version\ncurl -X POST https://api.infinitecontext.ai/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"from\": \"ctx_abc123\", \"version\": 1}'\n\n# Fork from point-in-time\ncurl -X POST https://api.infinitecontext.ai/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"from\": \"ctx_abc123\", \"before\": \"2024-01-15T10:30:00Z\"}'"
+            "source": "curl -X POST https://your-api.example.com/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"metadata\": {\"name\": \"my-session\"}}'\n\n# Fork from specific version\ncurl -X POST https://your-api.example.com/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"from\": \"ctx_abc123\", \"version\": 1}'\n\n# Fork from point-in-time\ncurl -X POST https://your-api.example.com/contexts \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"from\": \"ctx_abc123\", \"before\": \"2024-01-15T10:30:00Z\"}'"
           }
         ],
         "requestBody": {
@@ -111,7 +111,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "curl https://api.infinitecontext.ai/contexts \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# With limit\ncurl \"https://api.infinitecontext.ai/contexts?limit=10\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Filter by source + project\ncurl \"https://api.infinitecontext.ai/contexts?source=claude&project_path=/Users/alice/Code/myapp\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Time range\ncurl \"https://api.infinitecontext.ai/contexts?after=2026-03-01T00:00:00Z&before=2026-03-08T00:00:00Z\" \\\n  -H \"Authorization: Bearer $API_KEY\""
+            "source": "curl https://your-api.example.com/contexts \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# With limit\ncurl \"https://your-api.example.com/contexts?limit=10\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Filter by source + project\ncurl \"https://your-api.example.com/contexts?source=claude&project_path=/Users/alice/Code/myapp\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Time range\ncurl \"https://your-api.example.com/contexts?after=2026-03-01T00:00:00Z&before=2026-03-08T00:00:00Z\" \\\n  -H \"Authorization: Bearer $API_KEY\""
           }
         ],
         "parameters": [
@@ -217,7 +217,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "# List available tools\ncurl -X POST https://api.infinitecontext.ai/mcp \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":1}'\n\n# Call a tool\ncurl -X POST https://api.infinitecontext.ai/mcp \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"list_contexts\",\"arguments\":{\"limit\":5}},\"id\":2}'"
+            "source": "# List available tools\ncurl -X POST https://your-api.example.com/mcp \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":1}'\n\n# Call a tool\ncurl -X POST https://your-api.example.com/mcp \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"list_contexts\",\"arguments\":{\"limit\":5}},\"id\":2}'"
           }
         ],
         "requestBody": {
@@ -313,7 +313,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "# Get current version\ncurl https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# With version history\ncurl \"https://api.infinitecontext.ai/contexts/ctx_abc123?history=true\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Get specific version\ncurl \"https://api.infinitecontext.ai/contexts/ctx_abc123?version=1\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Get point-in-time state\ncurl \"https://api.infinitecontext.ai/contexts/ctx_abc123?before=2024-01-15T10:30:00Z\" \\\n  -H \"Authorization: Bearer $API_KEY\""
+            "source": "# Get current version\ncurl https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# With version history\ncurl \"https://your-api.example.com/contexts/ctx_abc123?history=true\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Get specific version\ncurl \"https://your-api.example.com/contexts/ctx_abc123?version=1\" \\\n  -H \"Authorization: Bearer $API_KEY\"\n\n# Get point-in-time state\ncurl \"https://your-api.example.com/contexts/ctx_abc123?before=2024-01-15T10:30:00Z\" \\\n  -H \"Authorization: Bearer $API_KEY\""
           }
         ],
         "parameters": [
@@ -414,7 +414,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "curl -X POST https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"role\": \"user\", \"content\": \"Hello!\", \"metadata\": {\"source\": \"web\"}}'"
+            "source": "curl -X POST https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"role\": \"user\", \"content\": \"Hello!\", \"metadata\": {\"source\": \"web\"}}'"
           }
         ],
         "parameters": [
@@ -482,7 +482,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "# Update by id\ncurl -X PATCH https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"id\": \"msg_xyz\", \"content\": \"Fixed typo!\"}'\n\n# Update by index (0 = first, -1 = last)\ncurl -X PATCH https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"index\": 0, \"content\": \"New system prompt\"}'\n\n# Update last message\ncurl -X PATCH https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"index\": -1, \"content\": \"Fixed last message\"}'\n\n# With audit metadata\ncurl -X PATCH https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"updates\": [{\"index\": 0, \"content\": \"Fixed!\"}], \"metadata\": {\"reason\": \"typo fix\"}}'"
+            "source": "# Update by id\ncurl -X PATCH https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"id\": \"msg_xyz\", \"content\": \"Fixed typo!\"}'\n\n# Update by index (0 = first, -1 = last)\ncurl -X PATCH https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"index\": 0, \"content\": \"New system prompt\"}'\n\n# Update last message\ncurl -X PATCH https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"index\": -1, \"content\": \"Fixed last message\"}'\n\n# With audit metadata\ncurl -X PATCH https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"updates\": [{\"index\": 0, \"content\": \"Fixed!\"}], \"metadata\": {\"reason\": \"typo fix\"}}'"
           }
         ],
         "parameters": [
@@ -560,7 +560,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "# Delete entire context (permanent)\ncurl -X DELETE https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"permanent\": true}'\n\n# Delete messages by id (soft, versioned)\ncurl -X DELETE https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": \"msg_xyz\"}'\n\n# Delete by index\ncurl -X DELETE https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": 0}'\n\n# With audit metadata\ncurl -X DELETE https://api.infinitecontext.ai/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": [0, \"msg_xyz\"], \"metadata\": {\"reason\": \"cleanup\"}}'"
+            "source": "# Delete entire context (permanent)\ncurl -X DELETE https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"permanent\": true}'\n\n# Delete messages by id (soft, versioned)\ncurl -X DELETE https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": \"msg_xyz\"}'\n\n# Delete by index\ncurl -X DELETE https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": 0}'\n\n# With audit metadata\ncurl -X DELETE https://your-api.example.com/contexts/ctx_abc123 \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": [0, \"msg_xyz\"], \"metadata\": {\"reason\": \"cleanup\"}}'"
           }
         ],
         "parameters": [
@@ -645,7 +645,7 @@
           {
             "lang": "bash",
             "label": "cURL",
-            "source": "curl -X POST https://api.infinitecontext.ai/contexts/delete-many \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": [\"ctx_abc123\", \"ctx_def456\"]}'"
+            "source": "curl -X POST https://your-api.example.com/contexts/delete-many \\\n  -H \"Authorization: Bearer $API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"ids\": [\"ctx_abc123\", \"ctx_def456\"]}'"
           }
         ],
         "requestBody": {

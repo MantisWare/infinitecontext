@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 
 // shared utils from parsers
-export { expandHome, truncateString, safeJsonParse, extractSessionIdFromPath } from "@infinitecontext/parsers/utils";
+export { expandHome, truncateString, safeJsonParse, extractSessionIdFromPath } from "#parsers/utils";
 
 export function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");

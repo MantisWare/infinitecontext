@@ -23,7 +23,8 @@
                         "pages": [
                             "index",
                             "quickstart",
-                            "configuration"
+                            "configuration",
+                            "configuration/keys-and-services"
                         ]
                     },
                     {

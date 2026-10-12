@@ -6,14 +6,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { heroArtForWidth } from "@infinitecontext/sync/ui/hero-art";
-import {
+import { importSync } from "../../lib/sync-import.mjs";
+
+const { heroArtForWidth } = await importSync("ui/hero-art");
+const {
   buildOnboardingConfigPatch,
   ONBOARDING_AGENT_OPTIONS,
   ONBOARDING_AGENT_ALL_OPTION,
   ONBOARDING_CAPTURE_OPTIONS,
-} from "@infinitecontext/sync/onboarding-preferences";
-import { discoverRecentProjects } from "@infinitecontext/sync/recent-projects";
+} = await importSync("onboarding-preferences");
+const { discoverRecentProjects } = await importSync("recent-projects");
+import { HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
 
 // agents list rendered in the wizard — "All" shortcut first, then each agent
 const AGENT_ROWS = [ONBOARDING_AGENT_ALL_OPTION, ...ONBOARDING_AGENT_OPTIONS];
@@ -68,11 +71,21 @@ function isValidKey(key) {
 
 // ── step constants ──────────────────────────────────────────────
 
-const STEPS = ["welcome", "mode", "url", "key", "agents", "projects", "capture", "launch", "done"];
+const STEPS = ["welcome", "hosting", "url", "mode", "vaultOffer", "key", "agents", "projects", "capture", "launch", "done"];
+
+const HOSTING_OPTIONS = [
+  { label: "Hosted (free — vault optional, zero-knowledge when enabled)", value: "hosted" },
+  { label: "Self-host (your own Context API)", value: "selfhost" },
+];
+
+const VAULT_OFFER_OPTIONS = [
+  { label: "Yes — initialize vault after login (recommended)", value: true },
+  { label: "No — skip for now", value: false },
+];
 
 const MODE_OPTIONS = [
-  { label: "Login (infinitecontext.ai)", value: "cloud" },
-  { label: "Self-host", value: "selfhost" },
+  { label: "API key (legacy project key)", value: "apikey" },
+  { label: "Account login (email / Google)", value: "login" },
 ];
 
 const LAUNCH_OPTIONS = [
@@ -84,8 +97,9 @@ const LAUNCH_OPTIONS = [
 
 function stepNumber(step) {
   if (step === "welcome") return 1;
-  if (step === "mode") return 2;
-  if (step === "url" || step === "key") return 3;
+  if (step === "hosting") return 2;
+  if (step === "url") return 2;
+  if (step === "mode" || step === "key") return 3;
   if (step === "agents") return 4;
   if (step === "projects") return 5;
   if (step === "capture") return 6;
@@ -104,8 +118,9 @@ function Onboarding({ onDone }) {
   const [step, setStep] = React.useState("welcome");
   // stack of prior steps — every forward transition pushes, goBack pops
   const [history, setHistory] = React.useState([]);
-  const [hosting, setHosting] = React.useState("cloud");
-  const [baseUrl, setBaseUrl] = React.useState("https://api.infinitecontext.ai");
+  const [hosting, setHosting] = React.useState("hosted");
+  const [authMode, setAuthMode] = React.useState("apikey");
+  const [baseUrl, setBaseUrl] = React.useState(HOSTED_API_BASE_URL);
   const [apiKey, setApiKey] = React.useState("");
   // multi-select agent list — default: watch them all
   const [captureAgents, setCaptureAgents] = React.useState(
@@ -115,7 +130,7 @@ function Onboarding({ onDone }) {
   const [autoCaptureMode, setAutoCaptureMode] = React.useState("all");
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const [keyInput, setKeyInput] = React.useState("");
-  const [urlInput, setUrlInput] = React.useState("https://");
+  const [urlInput, setUrlInput] = React.useState("http://127.0.0.1:8787");
   const [error, setError] = React.useState("");
 
   // discovered projects from Claude/Cursor session dirs — computed once.
@@ -176,25 +191,25 @@ function Onboarding({ onDone }) {
 
     // ── welcome ──
     if (step === "welcome") {
-      if (key.return) pushStep("mode");
+      if (key.return) pushStep("hosting");
       return;
     }
 
-    // ── mode selection ──
-    if (step === "mode") {
+    // ── hosted vs self-host ──
+    if (step === "hosting") {
       if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
-      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, MODE_OPTIONS.length - 1));
+      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, HOSTING_OPTIONS.length - 1));
       if (input === "1") setSelectedIndex(0);
       if (input === "2") setSelectedIndex(1);
 
       if (key.return || input === " ") {
-        const chosen = MODE_OPTIONS[selectedIndex].value;
+        const chosen = HOSTING_OPTIONS[selectedIndex].value;
         setHosting(chosen);
-        if (chosen === "selfhost") {
-          pushStep("url");
+        if (chosen === "hosted") {
+          setBaseUrl(HOSTED_API_BASE_URL);
+          pushStep("mode");
         } else {
-          setBaseUrl("https://api.infinitecontext.ai");
-          pushStep("key");
+          pushStep("url");
         }
       }
       return;
@@ -204,12 +219,12 @@ function Onboarding({ onDone }) {
     if (step === "url") {
       if (key.return) {
         const trimmed = urlInput.trim();
-        if (!trimmed || trimmed === "https://") {
-          setError("Enter a valid base URL");
+        if (!trimmed || !/^https?:\/\/.+/i.test(trimmed)) {
+          setError(`Enter your Context API URL (e.g. http://127.0.0.1:8787). See ${KEYS_AND_SERVICES_DOC_URL}`);
           return;
         }
-        setBaseUrl(trimmed);
-        pushStep("key");
+        setBaseUrl(trimmed.replace(/\/+$/, ""));
+        pushStep("mode");
         return;
       }
       if (key.backspace || key.delete) {
@@ -220,6 +235,47 @@ function Onboarding({ onDone }) {
       if (input && !key.ctrl && !key.meta) {
         setUrlInput((v) => v + input);
         setError("");
+      }
+      return;
+    }
+
+    // ── vault offer (hosted + account login) ──
+    if (step === "vaultOffer") {
+      if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
+      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, VAULT_OFFER_OPTIONS.length - 1));
+      if (input === "1") setSelectedIndex(0);
+      if (input === "2") setSelectedIndex(1);
+
+      if (key.return || input === " ") {
+        const recommend = VAULT_OFFER_OPTIONS[selectedIndex].value;
+        writeConfig({ vaultInitRecommended: recommend });
+        pushStep("agents");
+      }
+      return;
+    }
+
+    // ── auth mode ──
+    if (step === "mode") {
+      if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
+      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, MODE_OPTIONS.length - 1));
+      if (input === "1") setSelectedIndex(0);
+      if (input === "2") setSelectedIndex(1);
+
+      if (key.return || input === " ") {
+        const chosen = MODE_OPTIONS[selectedIndex].value;
+        setAuthMode(chosen);
+        if (chosen === "login") {
+          writeConfig({ baseUrl });
+          process.env.INFINITECONTEXT_BASE_URL = baseUrl;
+          if (hosting === "hosted") {
+            pushStep("vaultOffer");
+          } else {
+            pushStep("agents");
+          }
+          setError("");
+          return;
+        }
+        pushStep("key");
       }
       return;
     }
@@ -380,7 +436,42 @@ function Onboarding({ onDone }) {
       { flexDirection: "column" },
       React.createElement(Text, { color: "white", bold: true }, "Welcome to InfiniteContext"),
       React.createElement(Box, { height: 1 }),
-      React.createElement(Text, { color: "white" }, "Press Enter to begin setup...")
+      React.createElement(Text, { color: "white" }, "Press Enter to begin setup..."),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "enter to continue")
+    );
+  }
+
+  if (step === "vaultOffer") {
+    content = React.createElement(
+      Box,
+      { flexDirection: "column" },
+      React.createElement(Text, { color: "white", bold: true }, "Initialize vault after you sign in?"),
+      React.createElement(Text, { color: "gray" }, "Zero-knowledge when vault is enabled (`infinitecontext vault init`)."),
+      React.createElement(Box, { height: 1 }),
+      ...VAULT_OFFER_OPTIONS.map((opt, i) => ListRow({
+        keyProp: `v${i}`,
+        focused: i === selectedIndex,
+        label: opt.label,
+      })),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "\u2191\u2193 navigate \u00B7 enter select")
+    );
+  }
+
+  if (step === "hosting") {
+    content = React.createElement(
+      Box,
+      { flexDirection: "column" },
+      React.createElement(Text, { color: "white", bold: true }, "Where should InfiniteContext connect?"),
+      React.createElement(Box, { height: 1 }),
+      ...HOSTING_OPTIONS.map((opt, i) => ListRow({
+        keyProp: `h${i}`,
+        focused: i === selectedIndex,
+        label: opt.label,
+      })),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "\u2191\u2193 navigate \u00B7 enter select")
     );
   }
 
@@ -388,7 +479,8 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
-      React.createElement(Text, { color: "white", bold: true }, "How do you want to connect?"),
+      React.createElement(Text, { color: "white", bold: true }, "How do you want to authenticate?"),
+      React.createElement(Text, { color: "gray" }, `Server: ${baseUrl}`),
       React.createElement(Box, { height: 1 }),
       ...MODE_OPTIONS.map((opt, i) => ListRow({
         keyProp: `m${i}`,
@@ -404,7 +496,8 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
-      React.createElement(Text, { color: "white", bold: true }, "Enter your API base URL:"),
+      React.createElement(Text, { color: "white", bold: true }, "Enter your Context API base URL:"),
+      React.createElement(Text, { color: "gray" }, "Use your self-hosted Context API URL."),
       React.createElement(Box, { height: 1 }),
       React.createElement(Text, { color: "white", bold: true }, `> ${urlInput}_`),
       error ? React.createElement(Text, { color: "red" }, error) : null,
@@ -414,9 +507,7 @@ function Onboarding({ onDone }) {
   }
 
   if (step === "key") {
-    const keyPrompt = hosting === "cloud"
-      ? "Paste your API key from infinitecontext.ai:"
-      : "Enter your API key:";
+    const keyPrompt = "Enter your API key:";
 
     content = React.createElement(
       Box,
@@ -506,6 +597,15 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
+      authMode === "login"
+        ? React.createElement(
+            Text,
+            { color: "yellow" },
+            hosting === "hosted"
+              ? "Run `infinitecontext login` — you will be prompted to initialize vault if recommended."
+              : "Run `infinitecontext login` after setup to sign in.",
+          )
+        : null,
       React.createElement(Text, { color: "white", bold: true }, "Launch the TUI dashboard?"),
       React.createElement(Box, { height: 1 }),
       ...LAUNCH_OPTIONS.map((opt, i) => ListRow({

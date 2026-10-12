@@ -6,6 +6,9 @@ venv/
 # build
 dist/
 build/
+apps/js-sdk/vendor/
+apps/sync/src/parsers-bundle/
+apps/sync/.package.prepack.json
 *.egg-info/
 *.tsbuildinfo
 
@@ -43,3 +46,4 @@ __pycache__/
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+*.tgz

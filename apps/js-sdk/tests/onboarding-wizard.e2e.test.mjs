@@ -82,7 +82,7 @@ function spawnWizard() {
   proc.onExit(({ exitCode: code, signal }) => { exitCode = code; exitSignal = signal; });
 
   // wait until `re` appears in the output since the last mark
-  async function waitFor(re, { timeoutMs = 4000 } = {}) {
+  async function waitFor(re, { timeoutMs = 10000 } = {}) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (re.test(buffer)) return true;
@@ -127,6 +127,76 @@ function readConfig() {
 // type a string char-by-char
 function chars(str) { return [...str]; }
 
+const DEFAULT_URL = "http://127.0.0.1:8787";
+
+const AFTER_WELCOME =
+  /Where should InfiniteContext connect|How do you want to authenticate|Context API base URL/;
+
+async function goWelcome(w) {
+  await w.waitFor(/Welcome to InfiniteContext/);
+  await w.waitFor(/enter to continue/);
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    if (AFTER_WELCOME.test(w.buffer())) return;
+    await w.send(KEY.enter);
+    try {
+      await w.waitFor(AFTER_WELCOME, { timeoutMs: 400 });
+      return;
+    } catch {
+      // Ink may not have attached input yet — retry Enter
+    }
+  }
+  throw new Error(`failed to leave welcome — buffer tail:\n${w.buffer().slice(-500)}`);
+}
+
+async function goHostingHosted(w) {
+  await w.waitFor(/Where should InfiniteContext connect/);
+  await w.send(KEY.enter);
+}
+
+async function goHostingSelfHost(w) {
+  await w.waitFor(/Where should InfiniteContext connect/);
+  await w.send(KEY.down, KEY.enter);
+}
+
+async function goUrlDefault(w) {
+  await w.waitFor(/Context API base URL/);
+  await w.send(KEY.enter);
+}
+
+async function goUrlReplace(w, nextUrl) {
+  await w.waitFor(/Context API base URL/);
+  await w.send(...Array(DEFAULT_URL.length).fill(KEY.backspace));
+  await w.send(...chars(nextUrl), KEY.enter);
+}
+
+async function goApiKeyMode(w) {
+  await w.waitFor(/How do you want to authenticate/);
+  await w.send(KEY.enter);
+}
+
+async function goLoginMode(w) {
+  await w.waitFor(/How do you want to authenticate/);
+  await w.send(KEY.down, KEY.enter);
+}
+
+async function enterApiKey(w, key) {
+  await w.waitFor(/Enter your API key:/);
+  await w.send(...chars(key), KEY.enter);
+}
+
+async function finishWizardDefaults(w) {
+  await w.waitFor(/Which agents should InfiniteContext watch\?/);
+  await w.send(KEY.enter);
+  await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
+  await w.send(KEY.enter);
+  await w.waitFor(/Auto-capture mode:/);
+  await w.send(KEY.enter);
+  await w.waitFor(/Launch the TUI dashboard\?/);
+  await w.send(KEY.down, KEY.enter);
+  await w.waitForExit();
+}
+
 // ── tests ────────────────────────────────────────────────────────
 
 describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
@@ -134,39 +204,12 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      // welcome
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
-      // mode — pick self-host (index 1)
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      // url — field is pre-filled with "https://" so append the rest
-      await w.waitFor(/Enter your API base URL:/);
-      await w.send(...chars("api.example.com"), KEY.enter);
-
-      // key
-      await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("ic_test_abcdef123456"), KEY.enter);
-
-      // agents — default "all"
-      await w.waitFor(/Which agents should InfiniteContext watch\?/);
-      await w.send(KEY.enter);
-
-      // projects — default "all"
-      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
-      await w.send(KEY.enter);
-
-      // capture mode — default "all"
-      await w.waitFor(/Auto-capture mode:/);
-      await w.send(KEY.enter);
-
-      // launch prompt — pick "No" to avoid spawning the TUI
-      await w.waitFor(/Launch the TUI dashboard\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      await w.waitForExit();
+      await goWelcome(w);
+      await goHostingSelfHost(w);
+      await goUrlReplace(w, "https://api.example.com");
+      await goApiKeyMode(w);
+      await enterApiKey(w, "ic_test_abcdef123456");
+      await finishWizardDefaults(w);
     } finally {
       w.kill();
     }
@@ -179,7 +222,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     assert.equal(cfg.bootstrapMode, "all");
   });
 
-  it("cloud + codex-only + one specific project + future-only", async () => {
+  it("custom server + codex-only + one specific project + future-only", async () => {
     // seed an inferred project so the picker has something real to select
     const realProject = path.join(HOME_DIR, "Code", "demo-cloud");
     fs.mkdirSync(realProject, { recursive: true });
@@ -192,13 +235,11 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
 
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_live_cloudkey99"), KEY.enter);
 
       // agents — untoggle Claude and Cursor, leave only Codex
@@ -230,19 +271,35 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     assert.equal(cfg.bootstrapMode, "new_only");
   });
 
+  it("hosted + account login shows vault init offer", async () => {
+    const w = spawnWizard();
+
+    try {
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goLoginMode(w);
+      await w.waitFor(/Initialize vault after you sign in/);
+      await w.send(KEY.enter);
+      await finishWizardDefaults(w);
+    } finally {
+      w.kill();
+    }
+
+    const cfg = readConfig();
+    assert.equal(cfg.vaultInitRecommended, true);
+    assert.equal(cfg.baseUrl, "https://api.infinitecontext.ai");
+  });
+
   it("rejects malformed api key then accepts a valid one", async () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
-      // mode — cloud
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
 
       // key — bad input
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("nope-bad-key"), KEY.enter);
 
       // wizard shows error text and stays on key step
@@ -275,38 +332,18 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
-      // pick self-host, type a wrong URL, advance to key step
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      await w.waitFor(/Enter your API base URL:/);
-      await w.send(...chars("wrong.example"), KEY.enter);
-
+      await goWelcome(w);
+      await goHostingSelfHost(w);
+      await goUrlReplace(w, "http://wrong.example");
+      await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
-      // change our mind — esc back to URL step and rewrite it
-      await w.send(KEY.esc);
-      await w.waitFor(/Enter your API base URL:/);
-      // wipe previous "https://wrong.example" (22 chars) and type the correct URL
-      await w.send(...Array(22).fill(KEY.backspace));
+      await w.send(KEY.esc, KEY.esc);
+      await w.waitFor(/Context API base URL/);
+      await w.send(...Array("http://wrong.example".length).fill(KEY.backspace));
       await w.send(...chars("https://api.corrected.com"), KEY.enter);
-
-      await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("ic_test_backnav"), KEY.enter);
-
-      // default everything else
-      await w.waitFor(/Which agents should InfiniteContext watch\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Auto-capture mode:/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Launch the TUI dashboard\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      await w.waitForExit();
+      await goApiKeyMode(w);
+      await enterApiKey(w, "ic_test_backnav");
+      await finishWizardDefaults(w);
     } finally {
       w.kill();
     }
@@ -320,13 +357,11 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
 
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_multi"), KEY.enter);
 
       // default is all three checked — move focus to Cursor (row 4) and untoggle
@@ -353,11 +388,10 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_zero"), KEY.enter);
 
       // focus starts on "All" — space toggles everything off, then try to advance → error
@@ -387,32 +421,19 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
-      // mode → key, then left-arrow back to mode
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
-      await w.send(KEY.left);
-      await w.waitFor(/How do you want to connect\?/);
-
-      // pick self-host now, finish normally
-      await w.send(KEY.down, KEY.enter);
-      await w.waitFor(/Enter your API base URL:/);
-      await w.send(...chars("api.left.test"), KEY.enter);
+      await goWelcome(w);
+      await goHostingSelfHost(w);
+      await goUrlReplace(w, "https://api.left.test");
+      await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("ic_test_left"), KEY.enter);
-      await w.waitFor(/Which agents should InfiniteContext watch\?/);
+      await w.send(KEY.left);
+      await w.waitFor(/How do you want to authenticate/);
+      await w.send(KEY.left);
+      await w.waitFor(/Context API base URL/);
       await w.send(KEY.enter);
-      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Auto-capture mode:/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Launch the TUI dashboard\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      await w.waitForExit();
+      await goApiKeyMode(w);
+      await enterApiKey(w, "ic_test_left");
+      await finishWizardDefaults(w);
     } finally {
       w.kill();
     }
@@ -426,11 +447,10 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_all"), KEY.enter);
 
       // focus on "All" row. space clears all, space again re-checks all. enter confirms.
@@ -457,32 +477,17 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter); // cloud
-
-      // type partial key, then go back to mode, then forward — key must still be there
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_pers"));
-      await w.send(KEY.left);                      // back → mode
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);                     // forward → key (same cloud mode)
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
-      // append the rest of the key to prove what we typed earlier still exists
+      await w.send(KEY.left);
+      await w.waitFor(/How do you want to authenticate/);
+      await w.send(KEY.enter);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("isted"), KEY.enter);
-
-      await w.waitFor(/Which agents should InfiniteContext watch\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Auto-capture mode:/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Launch the TUI dashboard\?/);
-      await w.send(KEY.down, KEY.enter);
-
-      await w.waitForExit();
+      await finishWizardDefaults(w);
     } finally {
       w.kill();
     }
@@ -495,11 +500,10 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_arrows"), KEY.enter);
 
       // move cursor around with arrow keys — should NOT change any selection
@@ -542,11 +546,10 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_pick"), KEY.enter);
       await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
@@ -577,11 +580,10 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
   it("accepts 'All projects' even when nothing could be inferred", async () => {
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-      await w.waitFor(/How do you want to connect\?/);
-      await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goApiKeyMode(w);
+      await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_all"), KEY.enter);
       await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);

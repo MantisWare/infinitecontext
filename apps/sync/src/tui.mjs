@@ -7,7 +7,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
+import { resolveBaseUrl } from "./base-url.mjs";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 
 import {
@@ -15,7 +15,7 @@ import {
   hasLocalCodexSession,
   writeClaudeSession,
   writeCodexSession,
-} from "@infinitecontext/parsers";
+} from "#parsers";
 import { MENU_TABS, createInkUiController } from "./ui.mjs";
 import { boolFromEnv, expandHome, toInt } from "./utils.mjs";
 
@@ -54,7 +54,14 @@ function writeConfigKey(key, value) {
 export async function tuiBoot({
   assetsRoot,
   onFatalError,
+  createInfiniteContextClient,
+  assertSyncAuth,
 } = {}) {
+  if (typeof createInfiniteContextClient !== "function" || typeof assertSyncAuth !== "function") {
+    throw new Error(
+      "tuiBoot requires createInfiniteContextClient and assertSyncAuth from the host CLI package",
+    );
+  }
 
 const APP_ROOT = assetsRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OFFLINE_NOTICE = "Daemon offline — status.json stale or missing.";
@@ -115,7 +122,7 @@ function normalizeBootstrapModeWithPrompt(raw) {
 
 const cfg = {
   apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
-  baseUrl: (process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai").trim(),
+  baseUrl: resolveBaseUrl(),
   userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
   host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
   uiRefreshMs: toInt(process.env.TUI_REFRESH_MS, 1200),
@@ -185,6 +192,8 @@ function isNewerVersion(latest, current) {
 }
 
 async function checkForUpdateSilent() {
+  const { isUpdateCheckDisabled } = await import("./update-check.mjs");
+  if (isUpdateCheckDisabled()) return;
   if (process.env.INFINITECONTEXT_DEV) return;
   const current = readTuiVersion();
   if (current === "unknown") return;

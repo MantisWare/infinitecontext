@@ -5,7 +5,7 @@ description: 'Configure InfiniteContext via config file and environment variable
 
 InfiniteContext uses `~/.infinitecontext/config.json` as the runtime single source of truth. The daemon, TUI, and MCP Server read from it during normal operation.
 
-<Info>Run `infinitecontext config` to create this file interactively.</Info>
+<Info>Run `infinitecontext config` to create this file interactively, or use `infinitecontext config show|set|doctor`.</Info>
 
 ## Config file
 
@@ -18,7 +18,7 @@ Created automatically by the setup wizard (`infinitecontext config`) or on first
 ```json JSON
 {
     "apiKey": "ic_live_...",
-    "baseUrl": "https://api.infinitecontext.ai",
+    "baseUrl": "https://your-api.example.com",
     "bootstrapMode": "new_only",
     "claudeIncludeSubagents": false,
     "captureAgents": ["claude", "codex", "cursor"],
@@ -61,7 +61,7 @@ Environment variables override values from `~/.infinitecontext/config.json`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `INFINITECONTEXT_API_KEY` | -- | **Required.** Your InfiniteContext API key (`ic_live_...` or `ic_test_...`) |
-| `INFINITECONTEXT_BASE_URL` | `https://api.infinitecontext.ai` | API base URL. Change for self-hosted deployments |
+| `INFINITECONTEXT_BASE_URL` | `https://api.infinitecontext.ai` | Context API URL (hosted free tier by default; override for self-host) |
 | `INFINITECONTEXT_CONFIG_FILE` | `~/.infinitecontext/config.json` | Path to the runtime config file |
 
 ### Daemon

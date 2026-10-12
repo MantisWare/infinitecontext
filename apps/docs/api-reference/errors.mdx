@@ -48,7 +48,7 @@ try {
 } catch (error) {
   if (error instanceof InfiniteContextHttpError) {
     console.log('Status:', error.status)      // 404
-    console.log('URL:', error.url)            // https://api.infinitecontext.ai/contexts/ctx_invalid
+    console.log('URL:', error.url)            // https://your-api.example.com/contexts/ctx_invalid
     console.log('Body:', error.bodyText)      // {"error":"Context not found"}
   }
 }

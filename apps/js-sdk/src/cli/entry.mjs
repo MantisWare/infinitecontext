@@ -38,7 +38,7 @@ Commands:
   sync start    Start daemon in background (no TUI)
   sync stop     Stop a running daemon
   sync status   Show daemon status
-  config        Run the setup wizard
+  config        Config wizard and settings (show, set, doctor, …)
   login         Sign in with email/password or Google OAuth
   logout        Sign out and clear local session tokens
   whoami        Show the signed-in account
@@ -50,7 +50,8 @@ Commands:
 
 Environment:
   INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
-  INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
+  INFINITECONTEXT_BASE_URL  API base URL (default: hosted free tier at api.infinitecontext.ai)
+  INFINITECONTEXT_NO_UPDATE_CHECK  Set to 1, true, or yes to skip optional npm version check
 
 Vault: Losing both your vault passphrase and recovery key means permanent data loss.
 Run \`infinitecontext vault help\` for init/unlock/recover commands.
@@ -375,6 +376,8 @@ function printUpdateNotice(current, latest) {
 
 // check on every invocation, no cache — like Claude Code
 async function checkForUpdate() {
+  const { isUpdateCheckDisabled } = await import("../../lib/update-check.mjs");
+  if (isUpdateCheckDisabled()) return;
   const current = readVersion();
   if (current === "unknown") return;
 
@@ -387,7 +390,8 @@ async function checkForUpdate() {
 // ── launch helpers ──────────────────────────────────────────────
 
 async function launchSyncDaemon() {
-  const { launchDaemon } = await import("@infinitecontext/sync/launcher");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { launchDaemon } = await importSync("launcher");
   await launchDaemon({
     entryPath: fileURLToPath(new URL("./sdk-sync.mjs", import.meta.url)),
     diagnosticsHint: "DAEMON_VERBOSE=1 infinitecontext sync",
@@ -395,14 +399,18 @@ async function launchSyncDaemon() {
 }
 
 async function runCtlSDK() {
-  const { runCtl } = await import("@infinitecontext/sync/ctl");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { runCtl } = await importSync("ctl");
   await runCtl();
 }
 
 async function launchTui() {
-  const { tuiBoot } = await import("@infinitecontext/sync/tui");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { syncHostAuth } = await import("./sync-host.mjs");
+  const { tuiBoot } = await importSync("tui");
   await tuiBoot({
     assetsRoot: path.resolve(__dirname, "..", ".."),
+    ...syncHostAuth,
   });
 }
 
@@ -460,7 +468,8 @@ async function run() {
       break;
 
     case "config": {
-      const configResult = await runOnboarding();
+      const { runConfigCli } = await import("./config-cli.mjs");
+      const configResult = await runConfigCli(process.argv.slice(3));
       if (configResult?.launchTui) {
         if (!isDaemonRunning()) await launchSyncDaemon();
         await launchTui();

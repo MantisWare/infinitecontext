@@ -1,0 +1,8 @@
+{
+  "name": "infinitecontext-python-sdk",
+  "private": true,
+  "scripts": {
+    "test": "node scripts/run-pytest.mjs",
+    "check": "node scripts/run-pytest.mjs"
+  }
+}

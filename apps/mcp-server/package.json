@@ -11,17 +11,24 @@
   "bin": {
     "infinitecontext-mcp": "./dist/stdio.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsx src/stdio.ts --help || true",
-    "dev": "tsx src/stdio.ts"
+    "build": "tsdown && node -e \"const fs=require('node:fs'); fs.copyFileSync('dist/stdio.mjs','dist/stdio.js');\"",
+    "prepack": "pnpm --filter infinitecontext run build && pnpm run build",
+    "check": "pnpm run build",
+    "dev": "tsx src/stdio.ts",
+    "test": "node --import tsx --test src/**/*.test.ts tests/**/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "infinitecontext": "workspace:*",
     "zod": "^3.25.67"
   },
   "devDependencies": {
+    "infinitecontext": "workspace:*",
     "@types/node": "^22.18.6",
+    "tsdown": "^0.20.3",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3"
   }

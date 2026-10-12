@@ -1,20 +1,27 @@
 import { createServer } from "node:http";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { InfiniteContext } from "infinitecontext";
 
 import { createMcpServer } from "./server.js";
 import { sdkReader } from "./reader-sdk.js";
+import { ClientAuthError, loadClientAuth } from "./load-client-auth.js";
 
-// -- resolve config from env --------------------------------------------------
+// -- resolve config from env / config file --------------------------------------
 
-const apiKey = process.env.INFINITECONTEXT_API_KEY;
-if (!apiKey) {
-  console.error("INFINITECONTEXT_API_KEY is required");
+let auth;
+try {
+  auth = loadClientAuth();
+} catch (error) {
+  const message =
+    error instanceof ClientAuthError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  console.error(message);
   process.exit(1);
 }
 
-const baseUrl = process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai";
 const port = Number(process.env.MCP_PORT ?? 3100);
 
 // -- start HTTP transport (stateless) -----------------------------------------
@@ -35,7 +42,20 @@ const server = createServer(async (req, res) => {
   }
 
   // stateless: one MCP server + transport per request
-  const uc = new InfiniteContext({ apiKey, baseUrl });
+  let uc;
+  try {
+    uc = await Promise.resolve(auth.createClient());
+  } catch (error) {
+    const message =
+      error instanceof ClientAuthError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end(message);
+    return;
+  }
   const mcp = createMcpServer(sdkReader(uc));
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcp.connect(transport);

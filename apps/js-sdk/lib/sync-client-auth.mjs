@@ -1,5 +1,5 @@
 import { InfiniteContext } from "infinitecontext";
-import { getValidAccessToken, hasSessionCredentials } from "infinitecontext/credentials";
+import { getValidAccessToken, hasSessionCredentials } from "./credentials.mjs";
 
 export async function assertSyncAuth(cfg) {
   if (cfg.apiKey) return;
@@ -10,7 +10,7 @@ export async function assertSyncAuth(cfg) {
   if (!session?.accessToken) {
     throw new Error("Session expired or invalid. Run `infinitecontext login`.");
   }
-  const { assertVaultReadyForSync } = await import("infinitecontext/lib/vault-require.mjs");
+  const { assertVaultReadyForSync } = await import("./vault-require.mjs");
   await assertVaultReadyForSync({ baseUrl: cfg.baseUrl });
 }
 
@@ -36,8 +36,8 @@ export function createInfiniteContextClient(cfg) {
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== "function") return value;
       return async (...args) => {
-        const { getUnlockedDek } = await import("infinitecontext/lib/vault-session.mjs");
-        const { wrapInfiniteContextWithVault } = await import("infinitecontext/lib/encrypted-client.mjs");
+        const { getUnlockedDek } = await import("./vault-session.mjs");
+        const { wrapInfiniteContextWithVault } = await import("./encrypted-client.mjs");
         const unlocked = cfg.apiKey ? null : await getUnlockedDek({ baseUrl: cfg.baseUrl });
         const client = unlocked ? wrapInfiniteContextWithVault(target, unlocked) : target;
         const fn = client[prop];
