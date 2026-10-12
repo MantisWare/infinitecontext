@@ -10,20 +10,47 @@ export async function assertSyncAuth(cfg) {
   if (!session?.accessToken) {
     throw new Error("Session expired or invalid. Run `infinitecontext login`.");
   }
+  const { fetchCryptoState } = await import("infinitecontext/lib/vault-api.mjs");
+  const crypto = await fetchCryptoState({ baseUrl: cfg.baseUrl });
+  if (crypto?.initialized) {
+    const { getUnlockedDek } = await import("infinitecontext/lib/vault-session.mjs");
+    const unlocked = await getUnlockedDek({ baseUrl: cfg.baseUrl });
+    if (!unlocked) {
+      throw new Error("Vault is locked. Run `infinitecontext vault unlock` (or `vault recover`).");
+    }
+  }
 }
 
 export function createInfiniteContextClient(cfg) {
+  let baseClient;
   if (cfg.apiKey) {
-    return new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+    baseClient = new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+  } else {
+    baseClient = new InfiniteContext({
+      baseUrl: cfg.baseUrl,
+      getAccessToken: async () => {
+        const session = await getValidAccessToken({ baseUrl: cfg.baseUrl });
+        if (!session?.accessToken) {
+          throw new Error("Session expired or invalid. Run `infinitecontext login`.");
+        }
+        return session.accessToken;
+      },
+    });
   }
-  return new InfiniteContext({
-    baseUrl: cfg.baseUrl,
-    getAccessToken: async () => {
-      const session = await getValidAccessToken({ baseUrl: cfg.baseUrl });
-      if (!session?.accessToken) {
-        throw new Error("Session expired or invalid. Run `infinitecontext login`.");
-      }
-      return session.accessToken;
+
+  return new Proxy(baseClient, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") return value;
+      return async (...args) => {
+        const { getUnlockedDek } = await import("infinitecontext/lib/vault-session.mjs");
+        const { wrapInfiniteContextWithVault } = await import("infinitecontext/lib/encrypted-client.mjs");
+        const unlocked = cfg.apiKey ? null : await getUnlockedDek({ baseUrl: cfg.baseUrl });
+        const client = unlocked ? wrapInfiniteContextWithVault(target, unlocked) : target;
+        const fn = client[prop];
+        if (typeof fn !== "function") return fn;
+        return fn.apply(client, args);
+      };
     },
   });
 }

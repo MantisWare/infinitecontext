@@ -6,6 +6,7 @@ import type {
     IdentityRow,
     OAuthDeviceFlowRow,
     SessionRow,
+    UserCryptoRow,
     UserRow,
 } from '@infinitecontext/auth';
 
@@ -14,6 +15,7 @@ import {
     identities,
     oauth_device_flows,
     sessions,
+    user_crypto,
     user_projects,
     users,
     type ApiDb,
@@ -273,6 +275,87 @@ export class DrizzleAuthRepository implements AuthRepository {
             .set({ tokens_delivered_at: deliveredAt })
             .where(and(eq(oauth_device_flows.id, id), isNull(oauth_device_flows.tokens_delivered_at)))
             .returning({ id: oauth_device_flows.id });
+        return rows.length > 0;
+    }
+
+    async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
+        const rows = await this.db.select().from(user_crypto).where(eq(user_crypto.user_id, userId)).limit(1);
+        const row = rows[0];
+        if (!row) return null;
+        return row as unknown as UserCryptoRow;
+    }
+
+    async upsertUserCrypto(input: {
+        userId: number;
+        kdfSalt: Buffer;
+        kdfParams: Record<string, unknown>;
+        wrappedDek: Buffer;
+        wrappedDekRecovery: Buffer;
+        dekVersion: number;
+        cryptoInitializedAt: string;
+        vaultPassphraseRequired: boolean;
+    }): Promise<UserCryptoRow> {
+        const rows = await this.db
+            .insert(user_crypto)
+            .values({
+                user_id: input.userId,
+                kdf_salt: input.kdfSalt,
+                kdf_params: input.kdfParams,
+                wrapped_dek: input.wrappedDek,
+                wrapped_dek_recovery: input.wrappedDekRecovery,
+                dek_version: input.dekVersion,
+                crypto_initialized_at: input.cryptoInitializedAt,
+                vault_passphrase_required: input.vaultPassphraseRequired,
+                updated_at: input.cryptoInitializedAt,
+            })
+            .onConflictDoUpdate({
+                target: user_crypto.user_id,
+                set: {
+                    kdf_salt: input.kdfSalt,
+                    kdf_params: input.kdfParams,
+                    wrapped_dek: input.wrappedDek,
+                    wrapped_dek_recovery: input.wrappedDekRecovery,
+                    dek_version: input.dekVersion,
+                    crypto_initialized_at: input.cryptoInitializedAt,
+                    vault_passphrase_required: input.vaultPassphraseRequired,
+                    updated_at: input.cryptoInitializedAt,
+                },
+            })
+            .returning();
+        return rows[0] as unknown as UserCryptoRow;
+    }
+
+    async updateUserCryptoWraps(input: {
+        userId: number;
+        wrappedDek?: Buffer;
+        wrappedDekRecovery?: Buffer;
+        dekVersion?: number;
+        updatedAt: string;
+    }): Promise<UserCryptoRow | null> {
+        const patch: Record<string, unknown> = { updated_at: input.updatedAt };
+        if (input.wrappedDek) patch.wrapped_dek = input.wrappedDek;
+        if (input.wrappedDekRecovery) patch.wrapped_dek_recovery = input.wrappedDekRecovery;
+        if (input.dekVersion !== undefined) patch.dek_version = input.dekVersion;
+
+        const rows = await this.db
+            .update(user_crypto)
+            .set(patch)
+            .where(eq(user_crypto.user_id, input.userId))
+            .returning();
+        return (rows[0] as unknown as UserCryptoRow) ?? null;
+    }
+
+    async listSessionsForUser(userId: number): Promise<SessionRow[]> {
+        const rows = await this.db.select().from(sessions).where(eq(sessions.user_id, userId));
+        return rows as SessionRow[];
+    }
+
+    async revokeSessionByPublicId(userId: number, sessionPublicId: string, revokedAt: string): Promise<boolean> {
+        const rows = await this.db
+            .update(sessions)
+            .set({ revoked_at: revokedAt })
+            .where(and(eq(sessions.user_id, userId), eq(sessions.public_id, sessionPublicId)))
+            .returning({ id: sessions.id });
         return rows.length > 0;
     }
 }

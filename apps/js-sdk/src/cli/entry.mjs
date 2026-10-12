@@ -42,6 +42,7 @@ Commands:
   login         Sign in with email/password or Google OAuth
   logout        Sign out and clear local session tokens
   whoami        Show the signed-in account
+  vault         Zero-knowledge vault (init, unlock, recovery, devices)
   switch        Switch session to another agent (codex, claude)
   update        Update CLI globally via npm/pnpm/bun
   version       Print version
@@ -50,6 +51,9 @@ Commands:
 Environment:
   INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
   INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
+
+Vault: Losing both your vault passphrase and recovery key means permanent data loss.
+Run \`infinitecontext vault help\` for init/unlock/recover commands.
 `);
 }
 
@@ -495,6 +499,12 @@ async function run() {
     case "whoami": {
       const { runWhoami } = await import("./login.mjs");
       await runWhoami();
+      break;
+    }
+
+    case "vault": {
+      const { runVaultCli } = await import("./vault.mjs");
+      await runVaultCli(process.argv.slice(3));
       break;
     }
 

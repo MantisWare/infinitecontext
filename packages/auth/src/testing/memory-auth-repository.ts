@@ -4,6 +4,7 @@ import type {
     IdentityRow,
     OAuthDeviceFlowRow,
     SessionRow,
+    UserCryptoRow,
     UserRow,
 } from '../types';
 
@@ -14,6 +15,7 @@ export class MemoryAuthRepository implements AuthRepository {
     private authTokens: AuthTokenRow[] = [];
     private deviceFlows: OAuthDeviceFlowRow[] = [];
     private userProjects = new Map<number, number>();
+    private userCrypto = new Map<number, UserCryptoRow>();
 
     private userSeq = 0;
     private identitySeq = 0;
@@ -243,6 +245,69 @@ export class MemoryAuthRepository implements AuthRepository {
         const row = this.deviceFlows.find((f) => f.id === id);
         if (!row || row.tokens_delivered_at) return false;
         row.tokens_delivered_at = deliveredAt;
+        return true;
+    }
+
+    async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
+        return this.userCrypto.get(userId) ?? null;
+    }
+
+    async upsertUserCrypto(input: {
+        userId: number;
+        kdfSalt: Buffer;
+        kdfParams: Record<string, unknown>;
+        wrappedDek: Buffer;
+        wrappedDekRecovery: Buffer;
+        dekVersion: number;
+        cryptoInitializedAt: string;
+        vaultPassphraseRequired: boolean;
+    }): Promise<UserCryptoRow> {
+        const now = input.cryptoInitializedAt;
+        const row: UserCryptoRow = {
+            user_id: input.userId,
+            kdf_salt: input.kdfSalt,
+            kdf_params: input.kdfParams,
+            wrapped_dek: input.wrappedDek,
+            wrapped_dek_recovery: input.wrappedDekRecovery,
+            recovery_kdf_salt: null,
+            dek_version: input.dekVersion,
+            crypto_initialized_at: input.cryptoInitializedAt,
+            vault_passphrase_required: input.vaultPassphraseRequired,
+            created_at: this.userCrypto.get(input.userId)?.created_at ?? now,
+            updated_at: now,
+        };
+        this.userCrypto.set(input.userId, row);
+        return row;
+    }
+
+    async updateUserCryptoWraps(input: {
+        userId: number;
+        wrappedDek?: Buffer;
+        wrappedDekRecovery?: Buffer;
+        dekVersion?: number;
+        updatedAt: string;
+    }): Promise<UserCryptoRow | null> {
+        const existing = this.userCrypto.get(input.userId);
+        if (!existing) return null;
+        const next: UserCryptoRow = {
+            ...existing,
+            wrapped_dek: input.wrappedDek ?? existing.wrapped_dek,
+            wrapped_dek_recovery: input.wrappedDekRecovery ?? existing.wrapped_dek_recovery,
+            dek_version: input.dekVersion ?? existing.dek_version,
+            updated_at: input.updatedAt,
+        };
+        this.userCrypto.set(input.userId, next);
+        return next;
+    }
+
+    async listSessionsForUser(userId: number): Promise<SessionRow[]> {
+        return this.sessions.filter((s) => s.user_id === userId);
+    }
+
+    async revokeSessionByPublicId(userId: number, sessionPublicId: string, revokedAt: string): Promise<boolean> {
+        const row = this.sessions.find((s) => s.user_id === userId && s.public_id === sessionPublicId);
+        if (!row) return false;
+        row.revoked_at = revokedAt;
         return true;
     }
 }

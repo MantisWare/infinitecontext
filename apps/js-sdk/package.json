@@ -12,7 +12,7 @@
     "scripts": {
         "build": "tsdown",
         "dev": "tsdown --watch",
-        "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check lib/credentials.mjs && pnpm run build",
+        "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/vault.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && pnpm run build",
         "prepack": "pnpm run build",
         "postinstall": "node postinstall.mjs",
         "test": "node --test tests/**/*.test.mjs"
@@ -55,7 +55,10 @@
             "import": "./dist/index.mjs",
             "default": "./dist/index.mjs"
         },
-        "./credentials": "./lib/credentials.mjs"
+        "./credentials": "./lib/credentials.mjs",
+        "./lib/vault-api.mjs": "./lib/vault-api.mjs",
+        "./lib/vault-session.mjs": "./lib/vault-session.mjs",
+        "./lib/encrypted-client.mjs": "./lib/encrypted-client.mjs"
     },
     "files": [
         "dist/",
@@ -65,7 +68,11 @@
         "assets/",
         "plugin/"
     ],
+    "optionalDependencies": {
+        "keytar": "^7.9.0"
+    },
     "dependencies": {
+        "@infinitecontext/crypto": "workspace:*",
         "@mishieck/ink-titled-box": "^0.4.2",
         "fast-glob": "^3.3.3",
         "figlet": "^1.10.0",

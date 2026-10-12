@@ -21,6 +21,7 @@ export type HttpApp = {
     use(path: string, ...handlers: HttpMiddleware[]): unknown;
     get(path: string, handler: HttpRouteHandler): unknown;
     post(path: string, handler: HttpRouteHandler): unknown;
+    put(path: string, handler: HttpRouteHandler): unknown;
     patch(path: string, handler: HttpRouteHandler): unknown;
     delete(path: string, handler: HttpRouteHandler): unknown;
 };

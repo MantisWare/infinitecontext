@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { bigint, bigserial, integer, jsonb, pgTable, text, timestamp, customType } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, integer, jsonb, pgTable, text, timestamp, customType } from 'drizzle-orm/pg-core';
 import postgres, { type Sql } from 'postgres';
 
 const GLOBAL_DB_REGISTRY_KEY = '__infinitecontextPgRegistry';
@@ -97,7 +97,11 @@ export const user_crypto = pgTable('user_crypto', {
     kdf_salt: bytea('kdf_salt'),
     kdf_params: jsonb('kdf_params').$type<Record<string, unknown>>(),
     wrapped_dek: bytea('wrapped_dek'),
+    wrapped_dek_recovery: bytea('wrapped_dek_recovery'),
+    recovery_kdf_salt: bytea('recovery_kdf_salt'),
     dek_version: integer('dek_version').notNull().default(1),
+    crypto_initialized_at: timestamp('crypto_initialized_at', { withTimezone: true, mode: 'string' }),
+    vault_passphrase_required: boolean('vault_passphrase_required').notNull().default(false),
     created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
