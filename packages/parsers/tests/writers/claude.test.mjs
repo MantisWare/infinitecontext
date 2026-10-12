@@ -94,6 +94,7 @@ describe("writeClaudeSession — claude@1.0.x format", () => {
         const content = fs.readFileSync(result.filePath, "utf8").trim().split("\n");
         const entry = JSON.parse(content[0]);
         assert.equal(entry.type, "assistant");
-        assert.ok(entry.message.content.includes("[system]"));
+        const text = entry.message.content?.[0]?.text ?? "";
+        assert.ok(text.includes("[system]"));
     });
 });

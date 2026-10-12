@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-import { UC_BLUE_LIGHT, UC_BRAND_BLUE } from "../constants.mjs";
+import { IC_BLUE_LIGHT, IC_BRAND_BLUE } from "../constants.mjs";
 import { fitToWidth } from "../format.mjs";
 import { selectedTabTitle } from "../state.mjs";
 import { ClientsPanel, MenuPanel, Section } from "../components/index.mjs";
@@ -16,9 +16,9 @@ function renderFocusedViewTop(width, title) {
 
   return React.createElement(
     Text,
-    { color: UC_BRAND_BLUE, wrap: "truncate-end" },
+    { color: IC_BRAND_BLUE, wrap: "truncate-end" },
     "╔",
-    React.createElement(Text, { color: UC_BLUE_LIGHT, bold: true }, shownTitle),
+    React.createElement(Text, { color: IC_BLUE_LIGHT, bold: true }, shownTitle),
     "═".repeat(fillWidth),
     "╗"
   );
@@ -38,7 +38,7 @@ function ViewSection({ snapshot, focusMode, width, grow, height, maxRows, maxCol
         {
           borderStyle: "double",
           borderTop: false,
-          borderColor: UC_BRAND_BLUE,
+          borderColor: IC_BRAND_BLUE,
           flexDirection: "column",
           paddingX: 2,
           paddingY: 1,

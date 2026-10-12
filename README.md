@@ -122,10 +122,10 @@ npm install infinitecontext
 ```typescript
 import { InfiniteContext } from 'infinitecontext';
 
-const uc = new InfiniteContext({ apiKey: 'ic_live_...' });
+const ic = new InfiniteContext({ apiKey: 'ic_live_...' });
 
-const ctx = await uc.create();
-await uc.append(ctx.id, { role: 'user', content: 'Hello!' });
+const ctx = await ic.create();
+await ic.append(ctx.id, { role: 'user', content: 'Hello!' });
 
 // use with any LLM framework
 const response = await generateText({ model, messages: ctx.data });
@@ -140,13 +140,13 @@ pip install infinitecontext
 ```python
 from infinitecontext import InfiniteContext
 
-uc = InfiniteContext(api_key="ic_live_...")
+ic = InfiniteContext(api_key="ic_live_...")
 
-ctx = uc.create()
-uc.append(ctx["id"], {"role": "user", "content": "Hello!"})
+ctx = ic.create()
+ic.append(ctx["id"], {"role": "user", "content": "Hello!"})
 
 # use with any LLM framework
-response = generate_text(model=model, messages=uc.get(ctx["id"])["data"])
+response = generate_text(model=model, messages=ic.get(ctx["id"])["data"])
 ```
 
 <p align="center">📚 Context API Guides</p>

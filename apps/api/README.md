@@ -21,7 +21,7 @@ Fill `.env.local`:
 
 - `DATABASE_PROVIDER` (`postgres` or `supabase`)
 - `INFINITECONTEXT_ADMIN_KEY`
-- `UC_TEST_API_KEY` (optional for manual tests)
+- `INFINITECONTEXT_TEST_API_KEY` (optional for manual tests)
 
 Provider-specific vars:
 

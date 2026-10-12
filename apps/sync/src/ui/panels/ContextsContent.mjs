@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-import { UC_BLUE_LIGHT, UC_CLAUDE_ORANGE, UC_CODEX_BLUE, UC_OPENCLAW_RED } from "../constants.mjs";
+import { IC_BLUE_LIGHT, IC_CLAUDE_ORANGE, IC_CODEX_BLUE, IC_OPENCLAW_RED } from "../constants.mjs";
 import { compact, contextBadge, formatContextDate, padElements } from "../format.mjs";
 import { ContextDetailContent } from "./ContextDetailContent.mjs";
 
@@ -9,9 +9,9 @@ import { ContextDetailContent } from "./ContextDetailContent.mjs";
 function renderFilterBar(activeFilter) {
   const filters = [
     { id: "all", label: "All", color: "white" },
-    { id: "claude", label: "Claude", color: UC_CLAUDE_ORANGE },
-    { id: "codex", label: "Codex", color: UC_CODEX_BLUE },
-    { id: "openclaw", label: "OpenClaw", color: UC_OPENCLAW_RED },
+    { id: "claude", label: "Claude", color: IC_CLAUDE_ORANGE },
+    { id: "codex", label: "Codex", color: IC_CODEX_BLUE },
+    { id: "openclaw", label: "OpenClaw", color: IC_OPENCLAW_RED },
     { id: "cursor", label: "Cursor", color: "cyan" },
     { id: "gemini", label: "Gemini", color: "blue" },
   ];
@@ -92,7 +92,7 @@ export function ContextsContent({ snapshot, viewFocused, maxRows, maxCols }) {
       const md = ctx?.metadata ?? {};
       const rowSelected = i === selected;
       const marker = rowSelected ? "[•]" : "[ ]";
-      const rowColor = viewFocused && rowSelected ? UC_BLUE_LIGHT : "white";
+      const rowColor = viewFocused && rowSelected ? IC_BLUE_LIGHT : "white";
       const sourceInfo = contextBadge(md.source || "unknown");
       const createdAt = formatContextDate(ctx?.created_at);
       const user = compact(md.user_id ?? "-", 12);

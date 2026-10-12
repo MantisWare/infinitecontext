@@ -1,7 +1,7 @@
 import React from "react";
 import { Text } from "ink";
 
-import { MENU_TABS, UC_BRAND_BLUE, UC_BLUE_LIGHT } from "../constants.mjs";
+import { MENU_TABS, IC_BRAND_BLUE, IC_BLUE_LIGHT } from "../constants.mjs";
 import { fitToWidth } from "../format.mjs";
 import { Section } from "./Section.mjs";
 
@@ -48,8 +48,8 @@ export function MenuPanel({ focusMode, menuIndex, selectedTab, height, width }) 
       const isActiveInView = focusMode !== "menu" && index === activeIndex;
       const isHighlighted = isFocusedInMenu || isActiveInView;
       const marker = isHighlighted ? "[•]" : "[ ]";
-      const markerColor = isHighlighted ? UC_BRAND_BLUE : "white";
-      const labelColor = isHighlighted ? UC_BLUE_LIGHT : "white";
+      const markerColor = isHighlighted ? IC_BRAND_BLUE : "white";
+      const labelColor = isHighlighted ? IC_BLUE_LIGHT : "white";
       const labelMax = Math.max(innerCols - marker.length - 1, 4);
       const label = fitToWidth(tab.label, labelMax);
       const lineLen = marker.length + 1 + label.length;

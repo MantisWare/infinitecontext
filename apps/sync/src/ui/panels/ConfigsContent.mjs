@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-import { UC_BLUE_LIGHT } from "../constants.mjs";
+import { IC_BLUE_LIGHT } from "../constants.mjs";
 import { compact, padElements } from "../format.mjs";
 
 export function ConfigsContent({ snapshot, viewFocused, maxRows }) {
@@ -15,7 +15,7 @@ export function ConfigsContent({ snapshot, viewFocused, maxRows }) {
     const item = configItems[index];
     const selected = index === selectedConfigIndex;
     const marker = selected ? "[•]" : "[ ]";
-    const rowColor = selected && viewFocused ? UC_BLUE_LIGHT : "white";
+    const rowColor = selected && viewFocused ? IC_BLUE_LIGHT : "white";
     const status =
       item.kind === "action"
         ? item.valueLabel ?? "RUN"
