@@ -34,7 +34,15 @@ export function registerSyncRoutes(app: HttpApp, deps: SyncRouteDeps) {
     app.get('/sync/status', async (c) => {
         const auth = requireUserSession(c);
         if (!auth) return c.json({ error: 'Sync API requires account session' }, 403);
-        if (!deps.syncRepo) return c.json({ error: 'Sync API unavailable for this storage backend' }, 503);
+        if (!deps.syncRepo) {
+            return c.json(
+                {
+                    error: 'Centralized sync requires a PostgreSQL-backed API (Node server). This deployment uses Supabase REST / Workers only.',
+                    code: 'sync_api_unavailable',
+                },
+                503,
+            );
+        }
 
         const limited = enforceSyncRateLimit(deps.rateLimiters.pullByUser, auth.userId);
         if (!limited.allowed) {
@@ -50,7 +58,15 @@ export function registerSyncRoutes(app: HttpApp, deps: SyncRouteDeps) {
     app.get('/sync/changes', async (c) => {
         const auth = requireUserSession(c);
         if (!auth) return c.json({ error: 'Sync API requires account session' }, 403);
-        if (!deps.syncRepo) return c.json({ error: 'Sync API unavailable for this storage backend' }, 503);
+        if (!deps.syncRepo) {
+            return c.json(
+                {
+                    error: 'Centralized sync requires a PostgreSQL-backed API (Node server). This deployment uses Supabase REST / Workers only.',
+                    code: 'sync_api_unavailable',
+                },
+                503,
+            );
+        }
 
         const limited = enforceSyncRateLimit(deps.rateLimiters.pullByUser, auth.userId);
         if (!limited.allowed) {
@@ -68,7 +84,15 @@ export function registerSyncRoutes(app: HttpApp, deps: SyncRouteDeps) {
     app.get('/sync/conflicts', async (c) => {
         const auth = requireUserSession(c);
         if (!auth) return c.json({ error: 'Sync API requires account session' }, 403);
-        if (!deps.syncRepo) return c.json({ error: 'Sync API unavailable for this storage backend' }, 503);
+        if (!deps.syncRepo) {
+            return c.json(
+                {
+                    error: 'Centralized sync requires a PostgreSQL-backed API (Node server). This deployment uses Supabase REST / Workers only.',
+                    code: 'sync_api_unavailable',
+                },
+                503,
+            );
+        }
 
         const since = Number(c.req.query('since') ?? 0);
         const limit = c.req.query('limit') ? Number(c.req.query('limit')) : 200;
@@ -80,7 +104,13 @@ export function registerSyncRoutes(app: HttpApp, deps: SyncRouteDeps) {
         const auth = requireUserSession(c);
         if (!auth) return c.json({ error: 'Sync API requires account session' }, 403);
         if (!deps.syncRepo || !deps.authRepo) {
-            return c.json({ error: 'Sync API unavailable for this storage backend' }, 503);
+            return c.json(
+                {
+                    error: 'Centralized sync requires a PostgreSQL-backed API (Node server). This deployment uses Supabase REST / Workers only.',
+                    code: 'sync_api_unavailable',
+                },
+                503,
+            );
         }
 
         const limited = enforceSyncRateLimit(deps.rateLimiters.pushByUser, auth.userId);

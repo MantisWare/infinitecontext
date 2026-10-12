@@ -9,6 +9,7 @@ import { createAuthRepository, createStorageAdapter } from '@infinitecontext/sto
 
 import { createApp } from '../app';
 import type { ApiConfig } from '../types/api';
+import { verifyMigrationChainForDatabase } from './helpers/ensure-live-postgres';
 
 const TEST_AUTH_CONFIG = {
     jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes-long',
@@ -38,15 +39,9 @@ before(async () => {
         );
         return;
     }
-    const script = path.resolve(process.cwd(), '../postgres/scripts/verify-migration-chain.sh');
-    const res = spawnSync('bash', [script], {
-        encoding: 'utf8',
-        timeout: 180_000,
-        env: { ...process.env, POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD },
-    });
-    postgresReady = res.status === 0;
+    postgresReady = verifyMigrationChainForDatabase(DB_URL, process.env.POSTGRES_PASSWORD);
     if (!postgresReady) {
-        console.warn('vault-postgres-live skipped: migration verify failed\n', res.stderr || res.stdout);
+        console.warn('vault-postgres-live skipped: migration verify failed');
         return;
     }
     const sdkRoot = path.resolve(process.cwd(), '../js-sdk');

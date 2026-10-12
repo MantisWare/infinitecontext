@@ -22,7 +22,7 @@ import { registerMcpRoutes } from './routes/mcp';
 import { registerHealthRoutes } from './routes/health';
 import { registerSyncRoutes } from './routes/sync';
 import { registerRootRoutes } from './routes/root';
-import { createSyncRateLimiters } from './sync/rate-limit';
+import { createSyncRateLimiters, type SyncRateLimiters } from './sync/rate-limit';
 import { createSyncRepository, DrizzleAdapter } from '@infinitecontext/storage';
 import type { ApiConfig } from './types/api';
 import type { AppEnv } from './types/http';
@@ -40,6 +40,7 @@ export type AppOptions = {
     clientIpOptions?: ClientIpReaderOptions;
     /** Process env for public /health/config (no secrets in response). */
     runtimeEnv?: Record<string, string | undefined>;
+    syncRateLimiters?: SyncRateLimiters;
 };
 
 export function createApp(options: AppOptions) {
@@ -81,7 +82,7 @@ export function createApp(options: AppOptions) {
         registerSyncRoutes(app, {
             syncRepo,
             authRepo: options.authRepo,
-            rateLimiters: createSyncRateLimiters(),
+            rateLimiters: options.syncRateLimiters ?? createSyncRateLimiters(),
         });
     }
 

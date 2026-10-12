@@ -1,6 +1,15 @@
 export const SYNC_CLIENT_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
 
-export type SyncOp = 'context_create' | 'context_metadata' | 'message_append';
+export type SyncOp =
+    | 'context_create'
+    | 'context_fork'
+    | 'context_metadata'
+    | 'message_append'
+    | 'message_update'
+    | 'message_delete'
+    | 'context_delete'
+    | 'contexts_delete_many'
+    | 'prune_plaintext_versions';
 
 export type SyncMutation = {
     client_id: string;

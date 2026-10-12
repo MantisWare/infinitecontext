@@ -1,5 +1,6 @@
 import { getValidAccessToken } from "./credentials.mjs";
 import { resolveBaseUrl } from "./client-config.mjs";
+import { SyncApiUnavailableError } from "./sync-errors.mjs";
 
 async function authHeaders(baseUrl) {
   const session = await getValidAccessToken({ baseUrl });
@@ -21,9 +22,16 @@ async function syncRequest(baseUrl, path, init = {}) {
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
   if (!res.ok) {
+    if (res.status === 503 && (body.code === "sync_api_unavailable" || String(body.error ?? "").includes("unavailable"))) {
+      throw new SyncApiUnavailableError(
+        String(body.error ?? "Sync API unavailable for this storage backend"),
+        String(body.code ?? "sync_api_unavailable"),
+      );
+    }
     const err = new Error(body.error ?? `Sync request failed (${res.status})`);
     err.status = res.status;
     err.body = body;
+    err.code = body.code;
     throw err;
   }
   return body;

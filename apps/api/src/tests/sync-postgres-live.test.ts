@@ -1,23 +1,9 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import path from 'node:path';
-
-import { createMockGoogleOAuthClient } from '@infinitecontext/auth';
 import { computeDekProof, createVaultCryptoMaterial, generateClientNodeId } from '@infinitecontext/crypto';
-import { createAuthRepository, createStorageAdapter } from '@infinitecontext/storage';
 
-import { createApp } from '../app';
-import type { ApiConfig } from '../types/api';
-
-const TEST_AUTH_CONFIG = {
-    jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes-long',
-    jwtIssuer: 'http://127.0.0.1:8787',
-    jwtAudience: 'infinitecontext-api',
-    accessTokenTtlSec: 900,
-    refreshTokenTtlSec: 60 * 60 * 24 * 7,
-    publicBaseUrl: 'http://127.0.0.1:8787',
-};
+import { createLivePostgresApp } from './helpers/live-postgres-app';
+import { verifyMigrationChainForDatabase } from './helpers/ensure-live-postgres';
 
 const DB_URL = process.env.SYNC_E2E_DATABASE_URL ?? process.env.VAULT_E2E_DATABASE_URL;
 
@@ -29,47 +15,14 @@ before(async () => {
         console.warn('sync-postgres-live skipped: set SYNC_E2E_DATABASE_URL and POSTGRES_PASSWORD.');
         return;
     }
-    const script = path.resolve(process.cwd(), '../postgres/scripts/verify-migration-chain.sh');
-    const res = spawnSync('bash', [script], {
-        encoding: 'utf8',
-        timeout: 180_000,
-        env: { ...process.env, POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD },
-    });
-    postgresReady = res.status === 0;
+    postgresReady = verifyMigrationChainForDatabase(DB_URL, process.env.POSTGRES_PASSWORD);
     if (!postgresReady) {
-        console.warn('sync-postgres-live skipped: migration verify failed\n', res.stderr || res.stdout);
+        console.warn('sync-postgres-live skipped: migration verify failed');
     }
 });
 
 async function setupApp() {
-    const config: ApiConfig = {
-        DATABASE_PROVIDER: 'postgres',
-        DATABASE_URL: DB_URL!,
-        INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
-    };
-    const storage = createStorageAdapter(config);
-    const authRepo = createAuthRepository(config);
-    const app = createApp({
-        config,
-        storage,
-        authConfig: TEST_AUTH_CONFIG,
-        authRepo,
-        googleOAuth: createMockGoogleOAuthClient(),
-        mailer: {
-            async sendVerificationEmail() {},
-            async sendPasswordResetEmail() {},
-        },
-    });
-
-    async function json(method: string, urlPath: string, body?: unknown, token?: string) {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) headers.Authorization = `Bearer ${token}`;
-        const init: RequestInit = { method, headers };
-        if (body !== undefined) init.body = JSON.stringify(body);
-        const res = await app.request(`http://127.0.0.1${urlPath}`, init);
-        const text = await res.text();
-        return { res, body: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
-    }
+    const { json } = createLivePostgresApp();
 
     const email = `sync-live-${Date.now()}@example.com`;
     const register = await json('POST', '/auth/register', {
@@ -173,6 +126,53 @@ describe('sync-postgres-live', () => {
         assert.equal((read.body.data as any[])?.length, 2);
     });
 
+    it('paginates 10k changes with no gaps/duplicates under concurrent push', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const batchSize = 100;
+        const batches = 100;
+        let head = 0;
+
+        const pushWorker = async (start: number) => {
+            for (let b = 0; b < batches / 2; b += 1) {
+                const mutations = [];
+                for (let i = 0; i < batchSize; i += 1) {
+                    const n = start + b * batchSize + i;
+                    mutations.push({
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'bulk10k', n } },
+                    });
+                }
+                const push = await fx.json('POST', '/sync/push', { mutations }, fx.accessA);
+                assert.equal(push.res.status, 200);
+                head = Math.max(head, Number(push.body.head_sequence ?? 0));
+            }
+        };
+
+        await Promise.all([pushWorker(0), pushWorker((batches / 2) * batchSize)]);
+
+        const seen = new Set<number>();
+        let since = 0;
+        let pages = 0;
+        while (pages < 200) {
+            const pull = await fx.json('GET', `/sync/changes?since=${since}&limit=500`, undefined, fx.accessA);
+            const batch = (pull.body.changes as any[]) ?? [];
+            if (batch.length === 0) break;
+            for (const row of batch) {
+                const seq = Number(row.sequence);
+                assert.ok(!seen.has(seq), `duplicate sequence ${seq}`);
+                seen.add(seq);
+                assert.ok(seq > since, 'sequences must increase');
+            }
+            since = Number(pull.body.next_since ?? since);
+            pages += 1;
+            if (!pull.body.has_more) break;
+        }
+        assert.equal(seen.size, batches * batchSize);
+        assert.ok(head >= seen.size);
+    });
+
     it('paginates changes beyond a single page', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();
@@ -217,7 +217,7 @@ describe('sync-postgres-live vault', () => {
     it('round-trips encrypted append via sync push', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();
-        const material = await createVaultCryptoMaterial('vault-sync-pass');
+        const material = await createVaultCryptoMaterial('vault-sync-pass1');
         await fx.json(
             'PUT',
             '/auth/crypto',

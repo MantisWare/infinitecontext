@@ -22,7 +22,7 @@ export async function validateVaultSyncPush(
     mutations: SyncMutationLike[],
 ): Promise<Response | null> {
     for (const mutation of mutations) {
-        if (mutation.op === 'context_create') {
+        if (mutation.op === 'context_create' || mutation.op === 'context_fork') {
             const denied = await validateVaultContextWrite(c, deps, { metadata: (mutation.payload as any)?.metadata }, 'create_root');
             if (denied) return denied;
             continue;

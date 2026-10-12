@@ -1,5 +1,10 @@
 import { appendMessages } from '../ops/append-messages';
 import { createContext } from '../ops/create-context';
+import { deleteContextPermanent } from '../ops/delete-context';
+import { deleteManyContexts } from '../ops/delete-many';
+import { deleteMessages } from '../ops/delete-messages';
+import { prunePlaintextVersionHeads } from '../ops/prune-plaintext-versions';
+import { updateMessages } from '../ops/update-messages';
 import { updateContextMetadataLww } from '../ops/update-context-metadata';
 import type { StorageAdapter } from '../storage';
 import { generateSyncConflictPublicId } from './public-ids';
@@ -27,7 +32,17 @@ function validateMutation(raw: unknown): SyncMutation | { error: string } {
         return { error: 'client_id must be icn_ followed by 24 lowercase hex digits' };
     }
     const op = String(raw.op ?? '');
-    if (op !== 'context_create' && op !== 'context_metadata' && op !== 'message_append') {
+    if (
+        op !== 'context_create' &&
+        op !== 'context_fork' &&
+        op !== 'context_metadata' &&
+        op !== 'message_append' &&
+        op !== 'message_update' &&
+        op !== 'message_delete' &&
+        op !== 'context_delete' &&
+        op !== 'contexts_delete_many' &&
+        op !== 'prune_plaintext_versions'
+    ) {
         return { error: 'Unsupported sync op' };
     }
     const payload = raw.payload;
@@ -178,9 +193,16 @@ export class SyncService {
               logPayload?: Record<string, unknown>;
           }
     > {
-        if (mutation.op === 'context_create') {
-            const metadata = isPlainObject(mutation.payload.metadata) ? mutation.payload.metadata : {};
-            const result = await createContext(this.storage, ctx.projectId, { metadata });
+        if (mutation.op === 'context_create' || mutation.op === 'context_fork') {
+            const payload = mutation.payload;
+            const metadata = isPlainObject(payload.metadata) ? payload.metadata : {};
+            const result = await createContext(this.storage, ctx.projectId, {
+                from: typeof payload.from === 'string' ? payload.from : undefined,
+                version: payload.version,
+                at: payload.at,
+                before: typeof payload.before === 'string' ? payload.before : undefined,
+                metadata,
+            });
             if (!result.ok) throw new SyncApplyError(result.message, result.code);
             return {
                 kind: 'ok',
@@ -252,6 +274,57 @@ export class SyncService {
                     data: result.data.data,
                     version: result.data.version,
                 },
+            };
+        }
+
+        if (mutation.op === 'message_update') {
+            const result = await updateMessages(this.storage, ctx.projectId, contextId, mutation.payload);
+            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            return {
+                kind: 'ok',
+                contextId,
+                changePayload: { context_id: contextId, version: result.data.version, data: result.data.data },
+            };
+        }
+
+        if (mutation.op === 'message_delete') {
+            const result = await deleteMessages(this.storage, ctx.projectId, contextId, mutation.payload as any);
+            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            return {
+                kind: 'ok',
+                contextId,
+                changePayload: { context_id: contextId, version: result.data.version, data: result.data.data },
+            };
+        }
+
+        if (mutation.op === 'context_delete') {
+            const result = await deleteContextPermanent(this.storage, ctx.projectId, contextId, {});
+            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            return {
+                kind: 'ok',
+                contextId,
+                changePayload: { context_id: contextId, deleted: true },
+            };
+        }
+
+        if (mutation.op === 'contexts_delete_many') {
+            const ids = (mutation.payload.ids as string[]) ?? [];
+            const result = await deleteManyContexts(this.storage, ctx.projectId, ids);
+            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            return {
+                kind: 'ok',
+                contextId: null,
+                changePayload: { results: result.data.results, deleted_count: result.data.deleted_count },
+            };
+        }
+
+        if (mutation.op === 'prune_plaintext_versions') {
+            const result = await prunePlaintextVersionHeads(this.storage, ctx.projectId, contextId);
+            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            return {
+                kind: 'ok',
+                contextId,
+                changePayload: { context_id: contextId, ...result.data },
             };
         }
 

@@ -10,6 +10,7 @@ import {
 import { flushSyncOutbox, getSyncCursor, pullAndApplySync } from "../../lib/sync-engine.mjs";
 import { resolveBaseUrl } from "../../lib/client-config.mjs";
 import { getValidAccessToken } from "../../lib/credentials.mjs";
+import { formatSyncCliError } from "../../lib/sync-errors.mjs";
 
 function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
@@ -25,6 +26,20 @@ async function requireSession(baseUrl) {
 export async function runSyncCli(subcommand, args) {
   const baseUrl = resolveBaseUrl();
   const cmd = String(subcommand ?? "help").toLowerCase();
+
+  const run = async (fn) => {
+    try {
+      return await fn();
+    } catch (error) {
+      const msg = formatSyncCliError(error);
+      if (msg !== error?.message) {
+        console.error(msg);
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
+  };
 
   if (cmd === "help" || cmd === "-h" || cmd === "--help") {
     console.log(`Usage: infinitecontext sync <command>
@@ -45,23 +60,26 @@ Environment:
   await requireSession(baseUrl);
 
   if (cmd === "status") {
-    const localCursor = getSyncCursor();
-    const remote = await fetchSyncStatus({ baseUrl });
-    printJson({ local_cursor: localCursor, ...remote });
-    return;
+    return run(async () => {
+      const localCursor = getSyncCursor();
+      const remote = await fetchSyncStatus({ baseUrl });
+      printJson({ local_cursor: localCursor, ...remote });
+    });
   }
 
   if (cmd === "pull") {
-    const result = await pullAndApplySync({ baseUrl });
-    const conflicts = await fetchSyncConflicts({ since: 0, baseUrl });
-    printJson({ ...result, conflicts: conflicts.data ?? [] });
-    return;
+    return run(async () => {
+      const result = await pullAndApplySync({ baseUrl });
+      const conflicts = await fetchSyncConflicts({ since: 0, baseUrl });
+      printJson({ ...result, conflicts: conflicts.data ?? [] });
+    });
   }
 
   if (cmd === "push") {
-    const flushed = await flushSyncOutbox({ baseUrl });
-    printJson(flushed.result ?? { pushed: flushed.pushed });
-    return;
+    return run(async () => {
+      const flushed = await flushSyncOutbox({ baseUrl });
+      printJson(flushed.result ?? { pushed: flushed.pushed });
+    });
   }
 
   if (cmd === "devices") {

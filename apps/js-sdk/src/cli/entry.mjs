@@ -454,8 +454,12 @@ async function run() {
       }
 
       if (subcommand === "status") {
-        process.argv[2] = "status";
-        await runCtlSDK();
+        const { hasSessionCredentials } = await import("../../lib/credentials.mjs");
+        const accountSession = await hasSessionCredentials();
+        if (!accountSession) {
+          process.argv[2] = "status";
+          await runCtlSDK();
+        }
         const { runSyncCli } = await import("./sync-cli.mjs");
         await runSyncCli("status", []);
         break;
