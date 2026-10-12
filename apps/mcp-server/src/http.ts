@@ -1,20 +1,20 @@
 import { createServer } from "node:http";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { UltraContext } from "ultracontext";
+import { InfiniteContext } from "infinitecontext";
 
 import { createMcpServer } from "./server.js";
 import { sdkReader } from "./reader-sdk.js";
 
 // -- resolve config from env --------------------------------------------------
 
-const apiKey = process.env.ULTRACONTEXT_API_KEY;
+const apiKey = process.env.INFINITECONTEXT_API_KEY;
 if (!apiKey) {
-  console.error("ULTRACONTEXT_API_KEY is required");
+  console.error("INFINITECONTEXT_API_KEY is required");
   process.exit(1);
 }
 
-const baseUrl = process.env.ULTRACONTEXT_BASE_URL ?? "https://api.ultracontext.ai";
+const baseUrl = process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai";
 const port = Number(process.env.MCP_PORT ?? 3100);
 
 // -- start HTTP transport (stateless) -----------------------------------------
@@ -35,7 +35,7 @@ const server = createServer(async (req, res) => {
   }
 
   // stateless: one MCP server + transport per request
-  const uc = new UltraContext({ apiKey, baseUrl });
+  const uc = new InfiniteContext({ apiKey, baseUrl });
   const mcp = createMcpServer(sdkReader(uc));
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcp.connect(transport);
@@ -54,5 +54,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`UltraContext MCP server listening on http://127.0.0.1:${port}/mcp`);
+  console.log(`InfiniteContext MCP server listening on http://127.0.0.1:${port}/mcp`);
 });

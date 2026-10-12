@@ -1,6 +1,6 @@
 {
-  "name": "ultracontext",
-  "description": "Cross-agent session portability. Powered by UltraContext.",
-  "author": { "name": "UltraContext", "url": "https://ultracontext.ai" },
+  "name": "infinitecontext",
+  "description": "Cross-agent session portability. Powered by InfiniteContext.",
+  "author": { "name": "InfiniteContext", "url": "https://infinitecontext.ai" },
   "skills": "./skills/"
 }

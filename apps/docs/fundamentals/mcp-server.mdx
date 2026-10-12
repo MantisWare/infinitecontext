@@ -10,7 +10,7 @@ Ask Claude Code what Codex did last, filter sessions by project, machine, or tim
 ## Prerequisites
 
 - **Node.js >= 22**
-- **A Context API key** configured in `~/.ultracontext/config.json` (set up by `ultracontext config`)
+- **A Context API key** configured in `~/.infinitecontext/config.json` (set up by `infinitecontext config`)
 - **CLI** running to ingest sessions (see [CLI](/fundamentals/cli))
 
 ## Setup
@@ -18,7 +18,7 @@ Ask Claude Code what Codex did last, filter sessions by project, machine, or tim
 ### Claude Code
 
 ```bash bash
-claude mcp add ultracontext -- npx tsx /path/to/ultracontext/apps/mcp-server/src/stdio.ts
+claude mcp add infinitecontext -- npx tsx /path/to/infinitecontext/apps/mcp-server/src/stdio.ts
 ```
 
 ### Codex
@@ -26,12 +26,12 @@ claude mcp add ultracontext -- npx tsx /path/to/ultracontext/apps/mcp-server/src
 Add to `~/.codex/config.toml`:
 
 ```toml TOML
-[mcp_servers.ultracontext]
+[mcp_servers.infinitecontext]
 command = "npx"
-args = ["tsx", "/path/to/ultracontext/apps/mcp-server/src/stdio.ts"]
+args = ["tsx", "/path/to/infinitecontext/apps/mcp-server/src/stdio.ts"]
 ```
 
-<Info>The MCP server reads your API key from `~/.ultracontext/config.json` automatically -- the same config file used by the CLI.</Info>
+<Info>The MCP server reads your API key from `~/.infinitecontext/config.json` automatically -- the same config file used by the CLI.</Info>
 
 ## Tools
 
@@ -83,8 +83,8 @@ Once set up, you can ask your agent natural language questions:
 The Context API has a built-in MCP endpoint at `/mcp`. Any MCP-compatible client that supports Streamable HTTP can connect directly -- no separate server needed.
 
 ```bash bash
-curl -X POST https://api.ultracontext.ai/mcp \
-  -H "Authorization: Bearer uc_live_..." \
+curl -X POST https://api.infinitecontext.ai/mcp \
+  -H "Authorization: Bearer ic_live_..." \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
@@ -96,7 +96,7 @@ Self-hosted APIs include the MCP endpoint automatically. The same Bearer token u
 For cases where you need a dedicated MCP server (e.g. running on a different port or machine), you can run the standalone HTTP transport:
 
 ```bash bash
-ULTRACONTEXT_API_KEY=uc_live_... npx tsx apps/mcp-server/src/http.ts
+INFINITECONTEXT_API_KEY=ic_live_... npx tsx apps/mcp-server/src/http.ts
 ```
 
 This starts an HTTP server on port 3100 (configurable via `MCP_PORT`) with the MCP endpoint at `/mcp` and a health check at `/health`.

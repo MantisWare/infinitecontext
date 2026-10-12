@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="https://ultracontext.ai">
-    <img src="https://ultracontext.ai/gh-cover.png" alt="UltraContext" />
+  <a href="https://infinitecontext.ai">
+    <img src="https://infinitecontext.ai/gh-cover.png" alt="InfiniteContext" />
   </a>
 </p>
 
@@ -12,28 +12,28 @@
 </p>
 
 <p align="center">
-  <a href="https://ultracontext.ai/docs">Documentation</a> ·
-  <a href="https://ultracontext.ai/docs/api-reference/introduction">API Reference</a> ·
-  <a href="https://ultracontext.ai/docs/changelog">Changelog</a>
+  <a href="https://infinitecontext.ai/docs">Documentation</a> ·
+  <a href="https://infinitecontext.ai/docs/api-reference/introduction">API Reference</a> ·
+  <a href="https://infinitecontext.ai/docs/changelog">Changelog</a>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/ultracontext">
-    <img src="https://img.shields.io/npm/v/ultracontext" alt="npm version" />
+  <a href="https://www.npmjs.com/package/infinitecontext">
+    <img src="https://img.shields.io/npm/v/infinitecontext" alt="npm version" />
   </a>
-  <a href="https://pypi.org/project/ultracontext/">
-    <img src="https://img.shields.io/pypi/v/ultracontext" alt="PyPI version" />
+  <a href="https://pypi.org/project/infinitecontext/">
+    <img src="https://img.shields.io/pypi/v/infinitecontext" alt="PyPI version" />
   </a>
-  <a href="https://github.com/ultracontext/ultracontext/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/ultracontext/ultracontext" alt="license" />
+  <a href="https://github.com/MantisWare/infinitecontext/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/MantisWare/infinitecontext" alt="license" />
   </a>
-  <a href="https://ultracontext.ai">
-    <img src="https://img.shields.io/badge/Visit-ultracontext.ai-4B6EF5" alt="Visit ultracontext.ai" />
+  <a href="https://infinitecontext.ai">
+    <img src="https://img.shields.io/badge/Visit-infinitecontext.ai-4B6EF5" alt="Visit infinitecontext.ai" />
   </a>
 </p>
 
 <div align="center">
-  <a href="https://twitter.com/ultracontext">
+  <a href="https://twitter.com/infinitecontext">
     <img src="https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X" />
   </a>
   <a href="https://discord.com/invite/4HjcS6KwhW">
@@ -43,11 +43,11 @@
 
 ---
 
-![ultracontext-gif](https://github.com/user-attachments/assets/be73afe5-161d-4fa3-8f4d-c4987fe63cb4)
+![infinitecontext-gif](https://github.com/user-attachments/assets/be73afe5-161d-4fa3-8f4d-c4987fe63cb4)
 
 What Claude Code knows, Codex doesn't. What your teammate is shipping right now? Your agent has no idea.
 
-UltraContext captures every agent's context in realtime and makes it available to all of them. It's like having a personal context engineer everywhere. Continue a session in a different agent, or just ask what's happeming.
+InfiniteContext captures every agent's context in realtime and makes it available to all of them. It's like having a personal context engineer everywhere. Continue a session in a different agent, or just ask what's happeming.
 
 For example:
 
@@ -79,22 +79,22 @@ Open source. Framework-agnostic. Customizable via the git-like Context API.
 Requires Node >= 22.
 
 ```bash
-npm install -g ultracontext
+npm install -g infinitecontext
 ```
 
 ## Quick Start
 
 ```bash
-ultracontext          # start sync (daemon + dashboard)
+infinitecontext          # start sync (daemon + dashboard)
 ```
 
-That's it. UltraContext watches your agents, ingests context in realtime, and the dashboard shows everything.
+That's it. InfiniteContext watches your agents, ingests context in realtime, and the dashboard shows everything.
 
 ```bash
-ultracontext sync     # start sync (daemon + dashboard)
-ultracontext stop     # stop daemon
-ultracontext config   # run setup wizard
-ultracontext update   # update CLI globally
+infinitecontext sync     # start sync (daemon + dashboard)
+infinitecontext stop     # stop daemon
+infinitecontext config   # run setup wizard
+infinitecontext update   # update CLI globally
 ```
 
 ## Context API
@@ -106,26 +106,26 @@ For builders who want to go deeper. Git-like primitives for context engineering.
 - **Time-travel** — Jump to any point in your context history.
 - **Framework-agnostic** — Works with any LLM framework. No vendor lock-in.
 
-Use the API standalone to build your own agents, or extend existing ones in UltraContext.
+Use the API standalone to build your own agents, or extend existing ones in InfiniteContext.
 
 | SDK                   | Install                    | Source                               |
 | --------------------- | -------------------------- | ------------------------------------ |
-| JavaScript/TypeScript | `npm install ultracontext` | [apps/js-sdk](./apps/js-sdk)         |
-| Python                | `pip install ultracontext` | [apps/python-sdk](./apps/python-sdk) |
+| JavaScript/TypeScript | `npm install infinitecontext` | [apps/js-sdk](./apps/js-sdk)         |
+| Python                | `pip install infinitecontext` | [apps/python-sdk](./apps/python-sdk) |
 
 ### JavaScript/TypeScript
 
 ```bash
-npm install ultracontext
+npm install infinitecontext
 ```
 
 ```typescript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: 'uc_live_...' });
+const ic = new InfiniteContext({ apiKey: 'ic_live_...' });
 
-const ctx = await uc.create();
-await uc.append(ctx.id, { role: 'user', content: 'Hello!' });
+const ctx = await ic.create();
+await ic.append(ctx.id, { role: 'user', content: 'Hello!' });
 
 // use with any LLM framework
 const response = await generateText({ model, messages: ctx.data });
@@ -134,38 +134,38 @@ const response = await generateText({ model, messages: ctx.data });
 ### Python
 
 ```bash
-pip install ultracontext
+pip install infinitecontext
 ```
 
 ```python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 
-uc = UltraContext(api_key="uc_live_...")
+ic = InfiniteContext(api_key="ic_live_...")
 
-ctx = uc.create()
-uc.append(ctx["id"], {"role": "user", "content": "Hello!"})
+ctx = ic.create()
+ic.append(ctx["id"], {"role": "user", "content": "Hello!"})
 
 # use with any LLM framework
-response = generate_text(model=model, messages=uc.get(ctx["id"])["data"])
+response = generate_text(model=model, messages=ic.get(ctx["id"])["data"])
 ```
 
 <p align="center">📚 Context API Guides</p>
 <p align="center">
-  <a href="https://ultracontext.ai/docs/guides/store-retrieve-contexts">Store & Retrieve</a>
+  <a href="https://infinitecontext.ai/docs/guides/store-retrieve-contexts">Store & Retrieve</a>
   ·
-  <a href="https://ultracontext.ai/docs/guides/edit-contexts">Edit Contexts</a>
+  <a href="https://infinitecontext.ai/docs/guides/edit-contexts">Edit Contexts</a>
   ·
-  <a href="https://ultracontext.ai/docs/guides/fork-clone-contexts">Fork & Clone</a>
+  <a href="https://infinitecontext.ai/docs/guides/fork-clone-contexts">Fork & Clone</a>
   ·
-  <a href="https://ultracontext.ai/docs/guides/view-context-history">View History</a>
+  <a href="https://infinitecontext.ai/docs/guides/view-context-history">View History</a>
 </p>
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ultracontext/ultracontext-node&type=date&legend=top-left)](https://www.star-history.com/#ultracontext/ultracontext-node&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=infinitecontext/infinitecontext-node&type=date&legend=top-left)](https://www.star-history.com/#infinitecontext/infinitecontext-node&type=date&legend=top-left)
 
 ## Documentation
 
-- [Quickstart](https://ultracontext.ai/docs/quickstart) — Get running in 2 minutes
-- [Guides](https://ultracontext.ai/docs/guides/store-retrieve-contexts) — Practical patterns for common use cases
-- [API Reference](https://ultracontext.ai/docs/api-reference/introduction) — Full endpoint documentation
+- [Quickstart](https://infinitecontext.ai/docs/quickstart) — Get running in 2 minutes
+- [Guides](https://infinitecontext.ai/docs/guides/store-retrieve-contexts) — Practical patterns for common use cases
+- [API Reference](https://infinitecontext.ai/docs/api-reference/introduction) — Full endpoint documentation

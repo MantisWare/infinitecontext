@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 
-import { UC_BLUE_LIGHT, UC_BRAND_BLUE } from "./constants.mjs";
+import { IC_BLUE_LIGHT, IC_BRAND_BLUE } from "./constants.mjs";
 import { computeTuiLayout } from "./layout.mjs";
 import { buildMoveMenuIndex, createInputHandler } from "./input.mjs";
 import { fitToWidth } from "./format.mjs";
@@ -19,9 +19,9 @@ function renderMainFrameTop(width, title) {
 
   return React.createElement(
     Text,
-    { color: UC_BRAND_BLUE, wrap: "truncate-end" },
+    { color: IC_BRAND_BLUE, wrap: "truncate-end" },
     "┌",
-    React.createElement(Text, { color: UC_BLUE_LIGHT, bold: true }, shownTitle),
+    React.createElement(Text, { color: IC_BLUE_LIGHT, bold: true }, shownTitle),
     "─".repeat(fillWidth),
     "┐"
   );
@@ -133,18 +133,18 @@ export function DaemonTui({ snapshot, actions }) {
     { flexDirection: "column" },
     React.createElement(Box, { width: layout.containerWidth }, renderMainFrameTop(
       layout.containerWidth,
-      process.env.ULTRACONTEXT_DEV
-        ? `UltraContext v${snapshot.currentVersion} [dev]`
+      process.env.INFINITECONTEXT_DEV
+        ? `InfiniteContext v${snapshot.currentVersion} [dev]`
         : snapshot.updateAvailable
-          ? `UltraContext v${snapshot.currentVersion} ↑`
-          : `UltraContext v${snapshot.currentVersion}`
+          ? `InfiniteContext v${snapshot.currentVersion} ↑`
+          : `InfiniteContext v${snapshot.currentVersion}`
     )),
     React.createElement(
       Box,
       {
         borderStyle: "single",
         borderTop: false,
-        borderColor: UC_BRAND_BLUE,
+        borderColor: IC_BRAND_BLUE,
         flexDirection: "column",
         paddingX: 0,
         paddingY: 0,

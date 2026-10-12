@@ -6,7 +6,7 @@ description: 'Update and delete messages with full audit trail'
 <img
     className='block'
     src='/images/guides/covers/edit-context-guide-cover.svg'
-    alt='UltraContext - Edit context guide cover'
+    alt='InfiniteContext - Edit context guide cover'
 />
 
 ## Guide Overview
@@ -23,7 +23,7 @@ You want to tweak the system prompt. But first, the ritual. Copy it somewhere. J
 
 What if you could skip the ritual? **Edit anything. Never lose the original.** Every change tracked. Rewind anytime. Effortlessly.
 
-UltraContext gives you that out of the box.
+InfiniteContext gives you that out of the box.
 
 Update or delete any message with a single API call. Every change creates a new version. The original is preserved. Add metadata to track why. Full audit trail, full control. Zero complexity.
 
@@ -35,9 +35,9 @@ Updates and deletes automatically create new versions. This means you can always
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // create context and append messages (v0)
 const ctx = await uc.create();
@@ -69,10 +69,10 @@ await uc.update(
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # create context and append messages (v0)
 ctx = uc.create()
@@ -306,9 +306,9 @@ result = uc.get(context_id, history=True)
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // create context with system prompt
 const ctx = await uc.create();
@@ -323,10 +323,10 @@ const previous = await uc.get(ctx.id, { version: 0 });
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # create context with system prompt
 ctx = uc.create()
@@ -351,9 +351,9 @@ Remove the last message from the conversation.
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // create a new context
 const { id: contextId } = await uc.create();
@@ -384,10 +384,10 @@ await uc.delete(contextId, -1);
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # create a new context
 ctx = uc.create()
@@ -429,9 +429,9 @@ Permanently delete a context and all its versions.
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // permanent delete — irreversible
 await uc.delete('ctx_abc123', { permanent: true });
@@ -445,10 +445,10 @@ await uc.delete('ctx_abc123', {
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # permanent delete — irreversible
 result = uc.delete("ctx_abc123", permanent=True)
@@ -469,9 +469,9 @@ Permanently delete up to 100 contexts in one call.
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 const { results, deleted_count } = await uc.deleteMany(['ctx_abc123', 'ctx_def456']);
 
@@ -482,10 +482,10 @@ for (const r of results) {
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 result = uc.delete_many(["ctx_abc123", "ctx_def456"])
 

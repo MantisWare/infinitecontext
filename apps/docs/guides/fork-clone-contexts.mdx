@@ -6,7 +6,7 @@ description: 'Create copies from any point in history'
 <img
     className='block'
     src='/images/guides/covers/fork-clone-contexts-guide-cover.svg'
-    alt='UltraContext - Fork & Clone contexts guide cover'
+    alt='InfiniteContext - Fork & Clone contexts guide cover'
 />
 
 ## Guide Overview
@@ -25,12 +25,12 @@ We've all been there. You had a great conversation with Claude. It finally gets 
 
 What if you could capture that perfect moment? Fork right when the LLM still has all the context. Branch in new directions while keeping the original intact. **Freedom to explore. Always being able to come back.**
 
-Here is where UltraContext comes in.
+Here is where InfiniteContext comes in.
 
 <img
     className='block'
     src='/images/guides/fork-clone-contexts-diagram.svg'
-    alt='Fork & Clone contexts diagram using UltraContext'
+    alt='Fork & Clone contexts diagram using InfiniteContext'
 />
 
 Wanna rollback to a previous version? Test a different conversation flow? Different system prompt? Different model? Different tools? You name it.
@@ -325,9 +325,9 @@ Automatically revert when something goes wrong.
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 async function safeAgentStep(contextId: string, action: () => Promise<string>) {
     // get current state before attempting action
@@ -354,10 +354,10 @@ async function safeAgentStep(contextId: string, action: () => Promise<string>) {
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 def safe_agent_step(context_id: str, action):
     # get current state before attempting action
@@ -392,9 +392,9 @@ Let users explore "what if" scenarios.
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // fork up to (but not including) the message to change
 async function branchFromMessage(contextId: string, atIndex: number) {
@@ -414,10 +414,10 @@ async function getBranches(originalContextId: string) {
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # fork up to (but not including) the message to change
 def branch_from_message(context_id: str, at_index: int):

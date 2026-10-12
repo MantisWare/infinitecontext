@@ -6,7 +6,7 @@ description: 'Persist conversation history across sessions'
 <img
     className='block'
     src='/images/guides/covers/store-retrieve-contexts-guide-cover.svg'
-    alt='UltraContext - Store & retrieve contexts guide cover'
+    alt='InfiniteContext - Store & retrieve contexts guide cover'
 />
 
 ## Guide Overview
@@ -22,7 +22,7 @@ Picture this: You build a simple AI agent. Works like a charm. As it gets more u
 
 So you start storing them somewhere. You didn't notice it yet, but complexity quietly added up in your system. You're now dealing with timestamps, ordering, metadata and sessions. At some point, while implementing a tiny custom feature, you realize you've been _wasting more time on infrastructure rather than on the agent itself_. You feel frustrated. The initial excitement fades away. Welcome to the club.
 
-What if infrastructure wasn't the bottleneck? **Everything would be way simpler.** With UltraContext, storing and retrieving contexts is trivial. From now on, we'll do the heavy lifting for you. It's time to build.
+What if infrastructure wasn't the bottleneck? **Everything would be way simpler.** With InfiniteContext, storing and retrieving contexts is trivial. From now on, we'll do the heavy lifting for you. It's time to build.
 
 ## Storing Contexts
 
@@ -30,9 +30,9 @@ Create a context and append messages:
 
 <CodeGroup>
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // create a new context
 const ctx = await uc.create();
@@ -61,10 +61,10 @@ await uc.append(ctx.id, [
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # create a new context
 ctx = uc.create()
@@ -102,7 +102,7 @@ Appends don't generate new versions—only updates and deletes do. This means yo
 
 <Tip>
 
-UltraContext is schema-free. Store any fields you need. Only `id` and `index` are reserved keys.
+InfiniteContext is schema-free. Store any fields you need. Only `id` and `index` are reserved keys.
 
 </Tip>
 
@@ -397,9 +397,9 @@ Resuming chats is simple. Just retrieve the associated context and continue the 
 <CodeGroup>
 
 ```typescript TypeScript
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // on first visit: create context, store ID in your session/database
 const ctx = await uc.create();
@@ -414,10 +414,10 @@ const { data: messages } = await uc.get(ctx.id);
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # on first visit: create context, store ID in your session/database
 ctx = uc.create()
@@ -578,14 +578,14 @@ Start a new context with a summary of the previous one.
 
 ### Switch Frameworks
 
-UltraContext is framework-agnostic. Switch between LLM frameworks without changing your stored data. 
+InfiniteContext is framework-agnostic. Switch between LLM frameworks without changing your stored data. 
 
 <CodeGroup>
 ```typescript OpenAI SDK
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 import OpenAI from 'openai';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 const openai = new OpenAI();
 
 // retrieve context
@@ -601,10 +601,10 @@ const response = await openai.chat.completions.create({
 ```
 
 ```typescript Anthropic SDK
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 import Anthropic from '@anthropic-ai/sdk';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 const anthropic = new Anthropic();
 
 // retrieve context
@@ -621,10 +621,10 @@ const response = await anthropic.messages.create({
 ```
 
 ```typescript Google
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 const model = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY).getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 // retrieve context
@@ -639,11 +639,11 @@ const response = await model.generateContent({
 ```
 
 ```typescript Vercel AI SDK
-import { UltraContext } from 'ultracontext';
+import { InfiniteContext } from 'infinitecontext';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // retrieve context
 const { data: messages } = await uc.get(contextId);
@@ -658,11 +658,11 @@ const response = await generateText({
 ```
 
 ```python LangChain
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 from langchain_openai import ChatOpenAI
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 model = ChatOpenAI(model="gpt-4o")
 
 # retrieve context
@@ -675,11 +675,11 @@ response = model.invoke(parsed)
 ```
 
 ```python CrewAI
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 from crewai import Agent, Task, Crew
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 crew = Crew(agents=[...], tasks=[...])
 
 # retrieve context

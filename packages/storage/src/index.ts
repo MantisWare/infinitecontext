@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@ultracontext/core';
+import type { StorageAdapter } from '@infinitecontext/core';
 import { createDbClient } from './db';
 import { DrizzleAdapter } from './drizzle';
 import { SupabaseAdapter } from './supabase';
@@ -22,6 +22,6 @@ export function createStorageAdapter(config: StorageConfig): StorageAdapter {
 
 // -- re-exports ---------------------------------------------------------------
 
-export type { StorageAdapter } from '@ultracontext/core';
+export type { StorageAdapter } from '@infinitecontext/core';
 export { DrizzleAdapter } from './drizzle';
 export { SupabaseAdapter } from './supabase';

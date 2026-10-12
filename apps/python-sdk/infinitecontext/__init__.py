@@ -1,7 +1,7 @@
-"""UltraContext - The context API for AI agents."""
+"""InfiniteContext - The context API for AI agents."""
 
-from .client import AsyncUltraContext, UltraContext
-from .exceptions import UltraContextError, UltraContextHttpError
+from .client import AsyncInfiniteContext, InfiniteContext
+from .exceptions import InfiniteContextError, InfiniteContextHttpError
 from .types import (
     AppendResponse,
     Context,
@@ -20,11 +20,11 @@ from .types import (
 __version__ = "1.0.1"
 __all__ = [
     # clients
-    "UltraContext",
-    "AsyncUltraContext",
+    "InfiniteContext",
+    "AsyncInfiniteContext",
     # exceptions
-    "UltraContextError",
-    "UltraContextHttpError",
+    "InfiniteContextError",
+    "InfiniteContextHttpError",
     # types
     "Context",
     "Message",

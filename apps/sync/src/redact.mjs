@@ -5,7 +5,7 @@ const REDACTED = "***REDACTED***";
 const SENSITIVE_KEY_REGEX = /(token|secret|password|api[-_]?key|authorization|cookie|session[-_]?key)/i;
 
 const SECRET_PATTERNS = [
-  { regex: /\buc_(live|test)_[A-Za-z0-9_-]+\b/g, replacement: "uc_$1_***" },
+  { regex: /\bic_(live|test)_[A-Za-z0-9_-]+\b/g, replacement: "ic_$1_***" },
   { regex: /\bsk-[A-Za-z0-9_-]{12,}\b/g, replacement: "sk-***" },
   { regex: /\bBearer\s+[A-Za-z0-9._-]{8,}\b/gi, replacement: "Bearer ***" },
   {

@@ -18,13 +18,13 @@ function resolveProvider(env: Record<string, string | undefined>): DatabaseProvi
 
 export function buildApiConfig(env: Record<string, string | undefined>): ApiConfig {
     const provider = resolveProvider(env);
-    const adminKey = requireFrom(env, 'ULTRACONTEXT_ADMIN_KEY');
+    const adminKey = requireFrom(env, 'INFINITECONTEXT_ADMIN_KEY');
 
     if (provider === 'postgres') {
         return {
             DATABASE_PROVIDER: 'postgres',
             DATABASE_URL: requireFrom(env, 'DATABASE_URL'),
-            ULTRACONTEXT_ADMIN_KEY: adminKey,
+            INFINITECONTEXT_ADMIN_KEY: adminKey,
         };
     }
 
@@ -32,6 +32,6 @@ export function buildApiConfig(env: Record<string, string | undefined>): ApiConf
         DATABASE_PROVIDER: 'supabase',
         SUPABASE_URL: requireFrom(env, 'SUPABASE_URL'),
         SUPABASE_SERVICE_ROLE_KEY: requireFrom(env, 'SUPABASE_SERVICE_ROLE_KEY'),
-        ULTRACONTEXT_ADMIN_KEY: adminKey,
+        INFINITECONTEXT_ADMIN_KEY: adminKey,
     };
 }

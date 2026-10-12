@@ -5,7 +5,7 @@ import type { ContextReader } from "./types.js";
 // -- MCP server factory -------------------------------------------------------
 
 export function createMcpServer(reader: ContextReader) {
-  const mcp = new McpServer({ name: "ultracontext", version: "0.1.0" });
+  const mcp = new McpServer({ name: "infinitecontext", version: "0.1.0" });
 
   // list contexts with optional filters
   mcp.registerTool(

@@ -13,22 +13,22 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.6
         version: 1.19.9(hono@4.12.0)
+      '@infinitecontext/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@infinitecontext/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@modelcontextprotocol/sdk':
         specifier: ^1.27.1
         version: 1.27.1(zod@3.25.76)
-      '@ultracontext/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@ultracontext/storage':
-        specifier: workspace:*
-        version: link:../../packages/storage
       dotenv:
         specifier: ^17.2.3
         version: 17.3.1
       hono:
         specifier: ^4.10.7
         version: 4.12.0
-      ultracontext-mcp-server:
+      infinitecontext-mcp-server:
         specifier: workspace:*
         version: link:../mcp-server
       zod:
@@ -69,10 +69,10 @@ importers:
         specifier: ^19.2.4
         version: 19.2.4
     devDependencies:
-      '@ultracontext/parsers':
+      '@infinitecontext/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
-      '@ultracontext/sync':
+      '@infinitecontext/sync':
         specifier: workspace:*
         version: link:../sync
       node-pty:
@@ -90,7 +90,7 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.27.1
         version: 1.27.1(zod@3.25.76)
-      ultracontext:
+      infinitecontext:
         specifier: workspace:*
         version: link:../js-sdk
       zod:
@@ -109,12 +109,12 @@ importers:
 
   apps/sync:
     dependencies:
+      '@infinitecontext/parsers':
+        specifier: workspace:*
+        version: link:../../packages/parsers
       '@mishieck/ink-titled-box':
         specifier: ^0.4.2
         version: 0.4.2(ink@6.7.0(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
-      '@ultracontext/parsers':
-        specifier: workspace:*
-        version: link:../../packages/parsers
       dotenv:
         specifier: ^17.2.3
         version: 17.3.1
@@ -124,15 +124,15 @@ importers:
       figlet:
         specifier: ^1.10.0
         version: 1.10.0
+      infinitecontext:
+        specifier: workspace:*
+        version: link:../js-sdk
       ink:
         specifier: ^6.7.0
         version: 6.7.0(react@19.2.4)
       react:
         specifier: ^19.2.4
         version: 19.2.4
-      ultracontext:
-        specifier: ^1.0.1
-        version: 1.0.2
 
   packages/core:
     devDependencies:
@@ -154,15 +154,15 @@ importers:
 
   packages/storage:
     dependencies:
+      '@infinitecontext/core':
+        specifier: workspace:*
+        version: link:../core
       '@libsql/client':
         specifier: ^0.17.3
         version: 0.17.3
       '@supabase/supabase-js':
         specifier: ^2.49.4
         version: 2.98.0
-      '@ultracontext/core':
-        specifier: workspace:*
-        version: link:../core
       drizzle-orm:
         specifier: ^0.44.5
         version: 0.44.7(@cloudflare/workers-types@4.20260307.1)(@libsql/client@0.17.3)(better-sqlite3@11.10.0)(postgres@3.4.8)
@@ -1832,10 +1832,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  ultracontext@1.0.2:
-    resolution: {integrity: sha512-TuEzz1o85Qbt8Qt5VWR/59Z/16+PWl5lNgK4pCC4Zhy/QvphKEPWW4rpvxGifvvRRyl22TeLBM8Injt7hjA5QA==}
-    engines: {node: '>=18'}
-
   unconfig-core@7.5.0:
     resolution: {integrity: sha512-Su3FauozOGP44ZmKdHy2oE6LPjk51M/TRRjHv2HNCWiDvfvCoxC2lno6jevMA91MYAdCdwP05QnWdWpSbncX/w==}
 
@@ -3457,8 +3453,6 @@ snapshots:
       mime-types: 3.0.2
 
   typescript@5.9.3: {}
-
-  ultracontext@1.0.2: {}
 
   unconfig-core@7.5.0:
     dependencies:

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-UltraContext — version control for AI agent context. pnpm monorepo (`pnpm-workspace.yaml`: `apps/*`, `packages/*`).
+InfiniteContext — version control for AI agent context. pnpm monorepo (`pnpm-workspace.yaml`: `apps/*`, `packages/*`).
 
 ### Context API (`apps/api`)
 
@@ -33,11 +33,11 @@ Single package for local ingestion + TUI dashboard. Two processes, JSON file IPC
 
 ### MCP Server (`apps/mcp-server`)
 
-Stdio-based MCP server for Claude/Cursor integration. Reads config from `~/.ultracontext/config.json` or env vars. Exposes tools: `list_contexts`, `get_context_messages`, `get_recent_activity`.
+Stdio-based MCP server for Claude/Cursor integration. Reads config from `~/.infinitecontext/config.json` or env vars. Exposes tools: `list_contexts`, `get_context_messages`, `get_recent_activity`.
 
 ### JS SDK (`apps/js-sdk`)
 
-Published as `ultracontext` on npm. Bundles SDK + CLI (`ultracontext` command) via `tsdown`. CLI dispatches to sync/daemon/TUI/onboarding.
+Published as `infinitecontext` on npm. Bundles SDK + CLI (`infinitecontext` command) via `tsdown`. CLI dispatches to sync/daemon/TUI/onboarding.
 
 ### Python SDK (`apps/python-sdk`)
 
@@ -47,15 +47,15 @@ httpx client, published on PyPI via Hatchling. Tests: `pytest`.
 
 ```bash
 pnpm install                                    # deps
-pnpm ultracontext:db:up                         # start local Postgres (5433)
-pnpm ultracontext:db:down                       # stop
-pnpm ultracontext:db:reset                      # reset with volumes
-pnpm ultracontext:db:migrate                    # apply schema
-pnpm ultracontext:api                           # run API (port 8787)
+pnpm infinitecontext:db:up                         # start local Postgres (5433)
+pnpm infinitecontext:db:down                       # stop
+pnpm infinitecontext:db:reset                      # reset with volumes
+pnpm infinitecontext:db:migrate                    # apply schema
+pnpm infinitecontext:api                           # run API (port 8787)
 pnpm dev:sync                                   # sync watch mode (daemon + TUI)
-pnpm --filter ultracontext run build            # build JS SDK (tsdown)
-pnpm --filter ultracontext-api run test         # API tests (node --test)
-pnpm --filter ultracontext-api run test:watch   # API tests watch
+pnpm --filter infinitecontext run build            # build JS SDK (tsdown)
+pnpm --filter infinitecontext-api run test         # API tests (node --test)
+pnpm --filter infinitecontext-api run test:watch   # API tests watch
 pnpm check                                      # all package checks
 
 # single test file
@@ -65,7 +65,7 @@ cd apps/api && node --test --env-file=.env.local src/routes/contexts.test.ts
 cd apps/python-sdk && pytest
 
 # generate local dev API key
-pnpm ultracontext:key:local
+pnpm infinitecontext:key:local
 ```
 
 ## Style

@@ -7,7 +7,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { UltraContext } from "ultracontext";
+import { InfiniteContext } from "infinitecontext";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 
 import {
@@ -15,15 +15,15 @@ import {
   hasLocalCodexSession,
   writeClaudeSession,
   writeCodexSession,
-} from "@ultracontext/parsers";
+} from "@infinitecontext/parsers";
 import { MENU_TABS, createInkUiController } from "./ui.mjs";
 import { boolFromEnv, expandHome, toInt } from "./utils.mjs";
 
-const DEFAULT_RUNTIME_CONFIG_FILE = "~/.ultracontext/config.json";
+const DEFAULT_RUNTIME_CONFIG_FILE = "~/.infinitecontext/config.json";
 
 // ── status.json polling path ───────────────────────────────────
 
-const STATUS_FILE = path.join(os.homedir(), ".ultracontext", "status.json");
+const STATUS_FILE = path.join(os.homedir(), ".infinitecontext", "status.json");
 
 async function readStatusJson() {
   try {
@@ -36,7 +36,7 @@ async function readStatusJson() {
 
 function writeConfigKey(key, value) {
   try {
-    const configPath = path.join(os.homedir(), ".ultracontext", "config.json");
+    const configPath = path.join(os.homedir(), ".infinitecontext", "config.json");
     let data = {};
     try { data = JSON.parse(fsSync.readFileSync(configPath, "utf8")); } catch { /* empty */ }
     data[key] = value;
@@ -106,7 +106,7 @@ function normalizeResumeTerminal(raw) {
 }
 
 function resolveRuntimeConfigPath() {
-  return expandHome(process.env.ULTRACONTEXT_CONFIG_FILE ?? DEFAULT_RUNTIME_CONFIG_FILE);
+  return expandHome(process.env.INFINITECONTEXT_CONFIG_FILE ?? DEFAULT_RUNTIME_CONFIG_FILE);
 }
 
 function normalizeBootstrapModeWithPrompt(raw) {
@@ -114,8 +114,8 @@ function normalizeBootstrapModeWithPrompt(raw) {
 }
 
 const cfg = {
-  apiKey: normalizeApiKey(process.env.ULTRACONTEXT_API_KEY),
-  baseUrl: (process.env.ULTRACONTEXT_BASE_URL ?? "https://api.ultracontext.ai").trim(),
+  apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
+  baseUrl: (process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai").trim(),
   userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
   host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
   uiRefreshMs: toInt(process.env.TUI_REFRESH_MS, 1200),
@@ -152,7 +152,7 @@ const stats = {
 function readTuiVersion() {
   try {
     // in dev, read from js-sdk (the published package)
-    const candidates = process.env.ULTRACONTEXT_DEV
+    const candidates = process.env.INFINITECONTEXT_DEV
       ? [path.resolve(APP_ROOT, "..", "js-sdk", "package.json"), path.resolve(APP_ROOT, "package.json")]
       : [path.resolve(APP_ROOT, "package.json")];
     for (const p of candidates) {
@@ -167,7 +167,7 @@ async function fetchLatestVersion() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const res = await fetch("https://registry.npmjs.org/ultracontext/latest", { signal: controller.signal });
+    const res = await fetch("https://registry.npmjs.org/infinitecontext/latest", { signal: controller.signal });
     const data = await res.json();
     return data.version ?? null;
   } catch { return null; }
@@ -185,7 +185,7 @@ function isNewerVersion(latest, current) {
 }
 
 async function checkForUpdateSilent() {
-  if (process.env.ULTRACONTEXT_DEV) return;
+  if (process.env.INFINITECONTEXT_DEV) return;
   const current = readTuiVersion();
   if (current === "unknown") return;
 
@@ -507,7 +507,7 @@ function warpLaunchConfigYaml({ name, cwd, command }) {
     `name: ${JSON.stringify(name)}`,
     "windows:",
     "  - tabs:",
-    "      - title: UltraContext Resume",
+    "      - title: InfiniteContext Resume",
     "        layout:",
     `          cwd: ${JSON.stringify(cwd)}`,
     "          commands:",
@@ -529,7 +529,7 @@ function runOpenUri(uri) {
 
 function resumeWarpPasteAndRun(command, { openNewTab = false } = {}) {
   const scriptLines = [
-    "set _uc_prev_clipboard to the clipboard",
+    "set _ic_prev_clipboard to the clipboard",
     `set the clipboard to ${resumeAppleScriptString(command)}`,
     "tell application \"Warp\" to activate",
     "delay 0.85",
@@ -546,7 +546,7 @@ function resumeWarpPasteAndRun(command, { openNewTab = false } = {}) {
     "key code 36",
     "end tell",
     "delay 0.05",
-    "set the clipboard to _uc_prev_clipboard"
+    "set the clipboard to _ic_prev_clipboard"
   );
   return runAppleScriptLines(scriptLines);
 }
@@ -566,9 +566,9 @@ function resumeOpenWarpNewWindowAndRun(command) {
 function resumeOpenWarpViaUri(command) {
   try {
     const timestamp = Date.now();
-    const launchName = `ultracontext_resume_${timestamp}_${process.pid}`;
+    const launchName = `infinitecontext_resume_${timestamp}_${process.pid}`;
     const yaml = warpLaunchConfigYaml({
-      name: `UltraContext Resume ${timestamp}`,
+      name: `InfiniteContext Resume ${timestamp}`,
       cwd: process.cwd(),
       command,
     });
@@ -644,7 +644,7 @@ function resumeOpenWarpTab(command) {
 // ghostty — activate app, open new tab, paste command, press enter
 function resumeOpenGhosttyTab(command) {
   const scriptLines = [
-    "set _uc_prev_clipboard to the clipboard",
+    "set _ic_prev_clipboard to the clipboard",
     `set the clipboard to ${resumeAppleScriptString(command)}`,
     "tell application \"Ghostty\" to activate",
     "delay 0.4",
@@ -656,7 +656,7 @@ function resumeOpenGhosttyTab(command) {
     "key code 36",
     "end tell",
     "delay 0.05",
-    "set the clipboard to _uc_prev_clipboard",
+    "set the clipboard to _ic_prev_clipboard",
   ];
   const out = runAppleScriptLines(scriptLines);
   return { ...out, method: "ghostty_applescript" };
@@ -665,7 +665,7 @@ function resumeOpenGhosttyTab(command) {
 // cmux — Ghostty-based terminal, same AppleScript approach
 function resumeOpenCmuxTab(command) {
   const scriptLines = [
-    "set _uc_prev_clipboard to the clipboard",
+    "set _ic_prev_clipboard to the clipboard",
     `set the clipboard to ${resumeAppleScriptString(command)}`,
     "tell application \"cmux\" to activate",
     "delay 0.4",
@@ -677,7 +677,7 @@ function resumeOpenCmuxTab(command) {
     "key code 36",
     "end tell",
     "delay 0.05",
-    "set the clipboard to _uc_prev_clipboard",
+    "set the clipboard to _ic_prev_clipboard",
   ];
   const out = runAppleScriptLines(scriptLines);
   return { ...out, method: "cmux_applescript" };
@@ -864,7 +864,7 @@ function resumeSummaryMarkdown({ context, messages }) {
   for (const msg of messages) counts[resumeNormalizeRole(msg)] += 1;
   const recent = messages.slice(-Math.max(cfg.resumeSummaryTail, 4));
   const lines = [
-    "# UltraContext Resume",
+    "# InfiniteContext Resume",
     "",
     `Generated at: ${new Date().toISOString()}`,
     `Context ID: ${context.id}`,
@@ -933,7 +933,7 @@ async function loadResumeContexts({ silent = false } = {}) {
   ui.resume.loading = true;
   if (!silent) {
     ui.resume.error = "";
-    ui.resume.notice = "Loading contexts from UltraContext...";
+    ui.resume.notice = "Loading contexts from InfiniteContext...";
     renderDashboard();
   }
 
@@ -1467,14 +1467,14 @@ function chooseUpdatePrompt(index) {
     });
 
     if (result.status === 0) {
-      // re-exec ultracontext to restart with the new version
+      // re-exec infinitecontext to restart with the new version
       const restart = spawnSync(process.execPath, [process.argv[1]], {
         stdio: "inherit",
         env: process.env,
       });
       process.exit(restart.status ?? 0);
     } else {
-      console.error("Update failed. Run manually: ultracontext update");
+      console.error("Update failed. Run manually: infinitecontext update");
       process.exit(result.status ?? 1);
     }
   }
@@ -1656,7 +1656,7 @@ function buildUiSnapshot() {
 
 function validateConfig() {
   if (!cfg.apiKey) {
-    throw new Error("Missing ULTRACONTEXT_API_KEY");
+    throw new Error("Missing INFINITECONTEXT_API_KEY");
   }
 }
 
@@ -1678,7 +1678,7 @@ async function tuiMain() {
     // ignore config persistence startup issues
   }
 
-  const uc = new UltraContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+  const uc = new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
   runtime.uc = uc;
 
   await uc.get({ limit: 1 });
@@ -1828,7 +1828,7 @@ tuiMain().catch(async (error) => {
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`[error] UltraContext TUI failed: ${message}`);
+  console.error(`[error] InfiniteContext TUI failed: ${message}`);
   process.exit(1);
 });
 

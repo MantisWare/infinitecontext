@@ -11,7 +11,7 @@ import {
     updateMessages,
     type ContextFilters,
     type ErrorCode,
-} from '@ultracontext/core';
+} from '@infinitecontext/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { HttpApp } from '../types/http';
 

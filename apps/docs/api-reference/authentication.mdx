@@ -8,20 +8,20 @@ All API requests require authentication via Bearer token.
 ## API Key Format
 
 ```
-uc_live_xxxxxxxxxxxxxxxxxxxxxxxxxx
-uc_test_xxxxxxxxxxxxxxxxxxxxxxxxxx
+ic_live_xxxxxxxxxxxxxxxxxxxxxxxxxx
+ic_test_xxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-- `uc_live_` prefix for production
-- `uc_test_` prefix for development/testing
+- `ic_live_` prefix for production
+- `ic_test_` prefix for development/testing
 
 ## Using with SDK
 
 ```typescript
-import { UltraContext } from 'ultracontext'
+import { InfiniteContext } from 'infinitecontext'
 
-const uc = new UltraContext({
-  apiKey: process.env.ULTRACONTEXT_API_KEY
+const uc = new InfiniteContext({
+  apiKey: process.env.INFINITECONTEXT_API_KEY
 })
 ```
 
@@ -30,8 +30,8 @@ const uc = new UltraContext({
 Include the API key in the `Authorization` header:
 
 ```bash
-curl https://api.ultracontext.ai/contexts \
-  -H "Authorization: Bearer uc_live_xxxxx"
+curl https://api.infinitecontext.ai/contexts \
+  -H "Authorization: Bearer ic_live_xxxxx"
 ```
 
 ## Security Best Practices
@@ -47,7 +47,7 @@ curl https://api.ultracontext.ai/contexts \
     If a key is compromised, regenerate it immediately in the dashboard.
   </Card>
   <Card title="Use test keys for dev" icon="flask">
-    Use `uc_test_` keys during development to avoid polluting production data.
+    Use `ic_test_` keys during development to avoid polluting production data.
   </Card>
 </CardGroup>
 
@@ -55,16 +55,16 @@ curl https://api.ultracontext.ai/contexts \
 
 ```bash
 # .env
-ULTRACONTEXT_API_KEY=uc_live_xxxxx
+INFINITECONTEXT_API_KEY=ic_live_xxxxx
 
 # .env.example (commit this)
-ULTRACONTEXT_API_KEY=uc_live_your_key_here
+INFINITECONTEXT_API_KEY=ic_live_your_key_here
 ```
 
 ```typescript
 // Load from environment
-const uc = new UltraContext({
-  apiKey: process.env.ULTRACONTEXT_API_KEY!
+const uc = new InfiniteContext({
+  apiKey: process.env.INFINITECONTEXT_API_KEY!
 })
 ```
 
@@ -74,4 +74,4 @@ const uc = new UltraContext({
 API keys should only be used server-side. Never expose them in client-side code or browser JavaScript.
 </Warning>
 
-For client-side applications, create a backend API route that proxies requests to UltraContext.
+For client-side applications, create a backend API route that proxies requests to InfiniteContext.

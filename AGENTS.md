@@ -5,7 +5,7 @@ This repository is a `pnpm` monorepo (`pnpm-workspace.yaml`) with apps in `apps/
 - `apps/api`: Context API (Hono + Drizzle, TypeScript)
 - `apps/daemon`: background ingestion service (Node ESM)
 - `apps/tui`: terminal dashboard (Ink/React)
-- `apps/js-sdk`: JavaScript/TypeScript SDK + CLI (`ultracontext`)
+- `apps/js-sdk`: JavaScript/TypeScript SDK + CLI (`infinitecontext`)
 - `apps/python-sdk`: Python SDK
 - `apps/postgres`: local PostgreSQL + schema (`init.sql`)
 - `apps/docs`: Mintlify docs
@@ -13,11 +13,11 @@ This repository is a `pnpm` monorepo (`pnpm-workspace.yaml`) with apps in `apps/
 
 ## Build, Test, and Development Commands
 - `pnpm install`: install workspace dependencies.
-- `pnpm ultracontext:db:up` / `pnpm ultracontext:db:down`: start/stop local Postgres.
-- `pnpm ultracontext:db:migrate`: apply DB schema from `apps/postgres/init.sql`.
-- `pnpm ultracontext:api`: run API locally (`apps/api`).
+- `pnpm infinitecontext:db:up` / `pnpm infinitecontext:db:down`: start/stop local Postgres.
+- `pnpm infinitecontext:db:migrate`: apply DB schema from `apps/postgres/init.sql`.
+- `pnpm infinitecontext:api`: run API locally (`apps/api`).
 - `pnpm dev:daemon` and `pnpm dev:tui`: run Hub components in watch mode.
-- `pnpm --filter ultracontext run build`: build JS SDK package.
+- `pnpm --filter infinitecontext run build`: build JS SDK package.
 - `pnpm check`: run package-level checks where defined.
 
 ## Coding Style & Naming Conventions
@@ -27,7 +27,7 @@ No single repo-wide formatter config is checked in, so match the local style of 
 - Keep naming consistent with surrounding code: API modules are mostly kebab-case (for example `context-chain.ts`), while TUI React components use PascalCase (for example `DaemonTui.mjs`).
 
 ## Testing Guidelines
-- API tests use Node’s built-in runner: `pnpm --filter ultracontext-api run test` (or `test:watch`).
+- API tests use Node’s built-in runner: `pnpm --filter infinitecontext-api run test` (or `test:watch`).
 - Python SDK dev tooling is defined in `apps/python-sdk/pyproject.toml` (`pytest`, `pytest-asyncio`, `mypy`).
 - Add tests with `*.test.*` or `*.spec.*` naming near changed code or in a `tests/` folder.
 - No explicit coverage gate is configured; include meaningful tests for every bug fix/behavior change.
@@ -41,4 +41,4 @@ No single repo-wide formatter config is checked in, so match the local style of 
 ## Security & Configuration Tips
 - Copy `.env.example` to `.env` (root), plus app-specific env examples as needed.
 - Do not commit secrets; `.env*` files are ignored except documented examples.
-- If local Postgres state drifts across versions, use `pnpm ultracontext:db:reset`.
+- If local Postgres state drifts across versions, use `pnpm infinitecontext:db:reset`.

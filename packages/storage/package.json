@@ -1,5 +1,5 @@
 {
-    "name": "@ultracontext/storage",
+    "name": "@infinitecontext/storage",
     "version": "0.1.0",
     "private": true,
     "type": "module",
@@ -16,7 +16,7 @@
     "dependencies": {
         "@libsql/client": "^0.17.3",
         "@supabase/supabase-js": "^2.49.4",
-        "@ultracontext/core": "workspace:*",
+        "@infinitecontext/core": "workspace:*",
         "drizzle-orm": "^0.44.5",
         "postgres": "^3.4.7"
     },

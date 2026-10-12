@@ -1,4 +1,4 @@
-import { hashToken, verifyKeyHash } from '@ultracontext/core';
+import { hashToken, verifyKeyHash } from '@infinitecontext/core';
 import type { KeyCache } from '../cache/types';
 import type { HttpApp, HttpContext, HttpMiddleware } from '../types/http';
 
@@ -79,7 +79,7 @@ function createTokenVerifier(keyCache?: KeyCache) {
 }
 
 async function verifyAdminToken(token: string, c: HttpContext) {
-    const expected = c.get('config').ULTRACONTEXT_ADMIN_KEY;
+    const expected = c.get('config').INFINITECONTEXT_ADMIN_KEY;
     if (!expected) return false;
     return token === expected;
 }

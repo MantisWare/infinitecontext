@@ -26,6 +26,6 @@ for (const candidate of candidates) {
 }
 
 if (!loaded) {
-  console.error("ultracontext: could not locate CLI entry. Run `pnpm run build` first.");
+  console.error("infinitecontext: could not locate CLI entry. Run `pnpm run build` first.");
   process.exit(1);
 }

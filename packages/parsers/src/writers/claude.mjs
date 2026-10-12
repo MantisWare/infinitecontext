@@ -57,7 +57,7 @@ function isNativeClaudeEntry(raw) {
     return raw && typeof raw === "object" && ("type" in raw) && ("sessionId" in raw || "uuid" in raw);
 }
 
-// write a Claude Code-native JSONL session file from UltraContext messages
+// write a Claude Code-native JSONL session file from InfiniteContext messages
 export async function writeClaudeSession({ sessionId, cwd, messages, baseDir }) {
     const runCwd = String(cwd || process.cwd());
     const resolvedSessionId = normalizeSessionUuid(sessionId);
@@ -136,7 +136,7 @@ export async function writeClaudeSession({ sessionId, cwd, messages, baseDir }) 
                 type: "assistant",
                 message: {
                     role: "assistant",
-                    content: [{ type: "text", text: "[system] Session restored from UltraContext with no user/assistant messages." }],
+                    content: [{ type: "text", text: "[system] Session restored from InfiniteContext with no user/assistant messages." }],
                 },
                 timestamp: new Date().toISOString(),
                 uuid: randomUUID(),

@@ -1,7 +1,7 @@
 import React from "react";
 import { Text } from "ink";
 
-import { UC_CLAUDE_ORANGE, UC_CODEX_BLUE, UC_OPENCLAW_RED } from "./constants.mjs";
+import { IC_CLAUDE_ORANGE, IC_CODEX_BLUE, IC_OPENCLAW_RED } from "./constants.mjs";
 
 export function compact(value, max = 80) {
   const raw = String(value ?? "").replace(/[\r\n\t\v\f\x00-\x1f]+/g, " ");
@@ -35,9 +35,9 @@ export function levelColor(level) {
 
 export function sourceColor(source) {
   const normalized = String(source ?? "").trim().toLowerCase();
-  if (normalized === "claude" || normalized === "claude code") return UC_CLAUDE_ORANGE;
-  if (normalized === "codex") return UC_CODEX_BLUE;
-  if (normalized === "openclaw") return UC_OPENCLAW_RED;
+  if (normalized === "claude" || normalized === "claude code") return IC_CLAUDE_ORANGE;
+  if (normalized === "codex") return IC_CODEX_BLUE;
+  if (normalized === "openclaw") return IC_OPENCLAW_RED;
   return "gray";
 }
 

@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { TitledBox } from "@mishieck/ink-titled-box";
 
-import { UC_BLUE_LIGHT, UC_BRAND_BLUE } from "../constants.mjs";
+import { IC_BLUE_LIGHT, IC_BRAND_BLUE } from "../constants.mjs";
 
 export function BootstrapPanel({ snapshot, width }) {
   const options = snapshot.bootstrap?.options ?? [];
@@ -19,7 +19,7 @@ export function BootstrapPanel({ snapshot, width }) {
       borderStyle: "single",
       titles: ["First Sync Setup"],
       titleJustify: "flex-start",
-      borderColor: UC_BRAND_BLUE,
+      borderColor: IC_BRAND_BLUE,
       flexDirection: "column",
       paddingX: 2,
       paddingY: 1,
@@ -34,7 +34,7 @@ export function BootstrapPanel({ snapshot, width }) {
         { key: `bootstrap-option-${option.id}`, flexDirection: "column" },
         React.createElement(
           Text,
-          { color: selected ? UC_BLUE_LIGHT : "white" },
+          { color: selected ? IC_BLUE_LIGHT : "white" },
           selected ? "[•]" : "[ ]",
           ` ${index + 1}. ${option.label}`
         ),

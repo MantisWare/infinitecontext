@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 const VERSION = "v1";
-const DEFAULT_DAEMON_INFO_FILE = "~/.ultracontext/daemon.info";
+const DEFAULT_DAEMON_INFO_FILE = "~/.infinitecontext/daemon.info";
 
 // ── helpers ────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ function expandHome(inputPath) {
 
 export function resolveDaemonInfoFile(env = process.env) {
   return expandHome(
-    env.ULTRACONTEXT_DAEMON_INFO_FILE ??
+    env.INFINITECONTEXT_DAEMON_INFO_FILE ??
       DEFAULT_DAEMON_INFO_FILE
   );
 }

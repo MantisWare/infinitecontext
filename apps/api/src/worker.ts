@@ -1,7 +1,7 @@
 import { KvKeyCache } from './cache/kv';
 import { buildApiConfig } from './config';
 import { createApp } from './app';
-import { SupabaseAdapter } from '@ultracontext/storage/supabase';
+import { SupabaseAdapter } from '@infinitecontext/storage/supabase';
 
 // =============================================================================
 // CF WORKERS ENTRYPOINT
@@ -11,8 +11,8 @@ type Env = {
     DATABASE_PROVIDER: string;
     SUPABASE_URL: string;
     SUPABASE_SERVICE_ROLE_KEY: string;
-    ULTRACONTEXT_ADMIN_KEY: string;
-    ULTRACONTEXT_API_KEYS_CACHE?: KVNamespace;
+    INFINITECONTEXT_ADMIN_KEY: string;
+    INFINITECONTEXT_API_KEYS_CACHE?: KVNamespace;
 };
 
 // cached per worker instance
@@ -27,8 +27,8 @@ export default {
             }
             const storage = new SupabaseAdapter(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY);
 
-            const keyCache = env.ULTRACONTEXT_API_KEYS_CACHE
-                ? new KvKeyCache(env.ULTRACONTEXT_API_KEYS_CACHE)
+            const keyCache = env.INFINITECONTEXT_API_KEYS_CACHE
+                ? new KvKeyCache(env.INFINITECONTEXT_API_KEYS_CACHE)
                 : undefined;
 
             app = createApp({ config, storage, keyCache });

@@ -61,7 +61,7 @@ async function status({ lockPath, infoPath }) {
   const pid = pickPid(lock, info);
 
   console.log("");
-  console.log(`  ${blue}${b}UltraContext${r} ${d}Daemon${r}`);
+  console.log(`  ${blue}${b}InfiniteContext${r} ${d}Daemon${r}`);
   console.log("");
 
   if (!isPidAlive(pid)) {
@@ -85,7 +85,7 @@ async function stop({ lockPath, infoPath }) {
   const pid = pickPid(lock, info);
 
   console.log("");
-  console.log(`  ${blue}${b}UltraContext${r} ${d}Daemon${r}`);
+  console.log(`  ${blue}${b}InfiniteContext${r} ${d}Daemon${r}`);
   console.log("");
 
   if (!isPidAlive(pid)) {
@@ -128,7 +128,7 @@ export async function runCtl() {
   if (cmd === "stop") return stop({ lockPath, infoPath });
 
   console.error(`Invalid command: ${cmd}`);
-  console.error("Use: ultracontext [status|stop]");
+  console.error("Use: infinitecontext [status|stop]");
   return 1;
 }
 

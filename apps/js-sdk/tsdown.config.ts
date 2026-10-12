@@ -28,7 +28,7 @@ export default defineConfig([
       "@mishieck/ink-titled-box",
       "figlet",
       "fast-glob",
-      "ultracontext",
+      "infinitecontext",
     ],
   },
 ]);

@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { TitledBox } from "@mishieck/ink-titled-box";
 
-import { UC_BRAND_BLUE } from "../constants.mjs";
+import { IC_BRAND_BLUE } from "../constants.mjs";
 import { fitToWidth } from "../format.mjs";
 
 export function NarrowWidthPanel({ minWideCols, narrowWidth, stdoutColumns }) {
@@ -13,9 +13,9 @@ export function NarrowWidthPanel({ minWideCols, narrowWidth, stdoutColumns }) {
       TitledBox,
       {
         borderStyle: "single",
-        titles: ["UltraContext v1.1"],
+        titles: ["InfiniteContext v1.1"],
         titleJustify: "flex-start",
-        borderColor: UC_BRAND_BLUE,
+        borderColor: IC_BRAND_BLUE,
         flexDirection: "column",
         paddingX: 2,
         paddingY: 1,

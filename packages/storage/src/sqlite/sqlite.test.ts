@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { createContext, appendMessages, getContext } from '@ultracontext/core';
+import { createContext, appendMessages, getContext } from '@infinitecontext/core';
 import { createSqliteAdapter } from './index';
 
 // =============================================================================
-// KEYSTONE PROOF — @ultracontext/core ops run against local SQLite, in-process,
+// KEYSTONE PROOF — @infinitecontext/core ops run against local SQLite, in-process,
 // with NO HTTP server. This is the whole Full-TS-local-first thesis.
 // =============================================================================
 

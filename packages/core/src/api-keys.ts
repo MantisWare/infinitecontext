@@ -11,7 +11,7 @@ export function toBase62(bytes: Uint8Array): string {
 export function generateKey(env: 'live' | 'test' = 'live') {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
-    return `uc_${env}_${toBase62(bytes)}`;
+    return `ic_${env}_${toBase62(bytes)}`;
 }
 
 export async function hashKey(key: string): Promise<string> {

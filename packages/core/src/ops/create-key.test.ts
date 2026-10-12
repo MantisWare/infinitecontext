@@ -184,11 +184,11 @@ describe('createKey — success', () => {
     it('returns a live-environment key from generateKey', async () => {
         const storage = new MemoryStorage();
 
-        // generated keys carry the uc_ prefix from core's generateKey
+        // generated keys carry the ic_ prefix from core's generateKey
         const result = await createKey(storage, 'my-project');
 
         assert.equal(result.ok, true);
-        assert.ok(result.data.key.startsWith('uc_'));
+        assert.ok(result.data.key.startsWith('ic_'));
     });
 
     it('uses the id of the newly inserted project', async () => {

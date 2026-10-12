@@ -1,4 +1,4 @@
-// e2e test — spawns the real CLI (`ultracontext config`) in a pseudo-tty,
+// e2e test — spawns the real CLI (`infinitecontext config`) in a pseudo-tty,
 // drives it with real keystrokes, waits for each wizard step to render,
 // then asserts the final config.json matches expectations.
 
@@ -44,7 +44,7 @@ after(() => {
 afterEach(() => {
   // reset config AND any seeded agent session dirs between scenarios so
   // project inference starts fresh each run
-  for (const sub of [".ultracontext", ".claude", ".cursor"]) {
+  for (const sub of [".infinitecontext", ".claude", ".cursor"]) {
     try { fs.rmSync(path.join(HOME_DIR, sub), { recursive: true, force: true }); } catch {}
   }
 });
@@ -111,7 +111,7 @@ function spawnWizard() {
 // ── helpers ──────────────────────────────────────────────────────
 
 function readConfig() {
-  return JSON.parse(fs.readFileSync(path.join(HOME_DIR, ".ultracontext", "config.json"), "utf8"));
+  return JSON.parse(fs.readFileSync(path.join(HOME_DIR, ".infinitecontext", "config.json"), "utf8"));
 }
 
 // type a string char-by-char
@@ -125,7 +125,7 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       // welcome
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       // mode — pick self-host (index 1)
@@ -138,14 +138,14 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
       // key
       await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("uc_test_abcdef123456"), KEY.enter);
+      await w.send(...chars("ic_test_abcdef123456"), KEY.enter);
 
       // agents — default "all"
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
 
       // projects — default "all"
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
 
       // capture mode — default "all"
@@ -162,7 +162,7 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     }
 
     const cfg = readConfig();
-    assert.equal(cfg.apiKey, "uc_test_abcdef123456");
+    assert.equal(cfg.apiKey, "ic_test_abcdef123456");
     assert.equal(cfg.baseUrl, "https://api.example.com");
     assert.deepEqual(cfg.captureAgents, ["claude", "codex", "cursor"]);
     assert.deepEqual(cfg.projectPaths, []);
@@ -182,23 +182,23 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
 
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_live_cloudkey99"), KEY.enter);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_live_cloudkey99"), KEY.enter);
 
       // agents — untoggle Claude and Cursor, leave only Codex
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.down, " ");
       await w.send(KEY.down, KEY.down, " ", KEY.enter);
 
       // projects — focus starts on "All projects". Move down to the specific one,
       // space toggles it (and auto-unchecks "All"), enter confirms.
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.down, " ", KEY.enter);
 
       // capture mode — future_only (row 2)
@@ -213,8 +213,8 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     }
 
     const cfg = readConfig();
-    assert.equal(cfg.apiKey, "uc_live_cloudkey99");
-    assert.equal(cfg.baseUrl, "https://api.ultracontext.ai");
+    assert.equal(cfg.apiKey, "ic_live_cloudkey99");
+    assert.equal(cfg.baseUrl, "https://api.infinitecontext.ai");
     assert.deepEqual(cfg.captureAgents, ["codex"]);
     assert.deepEqual(cfg.projectPaths, [realProject]);
     assert.equal(cfg.bootstrapMode, "new_only");
@@ -224,7 +224,7 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       // mode — cloud
@@ -232,20 +232,20 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
       await w.send(KEY.enter);
 
       // key — bad input
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
       await w.send(...chars("nope-bad-key"), KEY.enter);
 
       // wizard shows error text and stays on key step
-      await w.waitFor(/Key must start with uc_live_ or uc_test_/);
+      await w.waitFor(/Key must start with ic_live_ or ic_test_/);
 
       // clear the bad input and type a valid one
       await w.send(...Array(12).fill(KEY.backspace));
-      await w.send(...chars("uc_test_ok"), KEY.enter);
+      await w.send(...chars("ic_test_ok"), KEY.enter);
 
       // advance through remaining steps using defaults
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -258,14 +258,14 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     }
 
     const cfg = readConfig();
-    assert.equal(cfg.apiKey, "uc_test_ok");
+    assert.equal(cfg.apiKey, "ic_test_ok");
   });
 
   it("Esc walks back and lets user change the URL before finishing", async () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       // pick self-host, type a wrong URL, advance to key step
@@ -284,12 +284,12 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
       await w.send(...chars("https://api.corrected.com"), KEY.enter);
 
       await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("uc_test_backnav"), KEY.enter);
+      await w.send(...chars("ic_test_backnav"), KEY.enter);
 
       // default everything else
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -303,27 +303,27 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const cfg = readConfig();
     assert.equal(cfg.baseUrl, "https://api.corrected.com");
-    assert.equal(cfg.apiKey, "uc_test_backnav");
+    assert.equal(cfg.apiKey, "ic_test_backnav");
   });
 
   it("agents multi-select — untoggle one, keep the other two", async () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
 
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_multi"), KEY.enter);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_multi"), KEY.enter);
 
       // default is all three checked — move focus to Cursor (row 4) and untoggle
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.down, KEY.down, KEY.down, " ", KEY.enter);
 
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -343,21 +343,21 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_zero"), KEY.enter);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_zero"), KEY.enter);
 
       // focus starts on "All" — space toggles everything off, then try to advance → error
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(" ", KEY.enter);
       await w.waitFor(/Select at least one agent/);
 
       // move focus to Codex (row 3), toggle on, confirm
       await w.send(KEY.down, KEY.down, " ", KEY.enter);
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -377,13 +377,13 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       // mode → key, then left-arrow back to mode
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
       await w.send(KEY.left);
       await w.waitFor(/How do you want to connect\?/);
 
@@ -392,10 +392,10 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
       await w.waitFor(/Enter your API base URL:/);
       await w.send(...chars("api.left.test"), KEY.enter);
       await w.waitFor(/Enter your API key:/);
-      await w.send(...chars("uc_test_left"), KEY.enter);
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.send(...chars("ic_test_left"), KEY.enter);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -409,25 +409,25 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const cfg = readConfig();
     assert.equal(cfg.baseUrl, "https://api.left.test");
-    assert.equal(cfg.apiKey, "uc_test_left");
+    assert.equal(cfg.apiKey, "ic_test_left");
   });
 
   it("'All' shortcut (row 1) toggles every agent at once", async () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_all"), KEY.enter);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_all"), KEY.enter);
 
       // focus on "All" row. space clears all, space again re-checks all. enter confirms.
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(" ", " ", KEY.enter);
 
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -447,25 +447,25 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter); // cloud
 
       // type partial key, then go back to mode, then forward — key must still be there
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_pers"));
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_pers"));
       await w.send(KEY.left);                      // back → mode
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);                     // forward → key (same cloud mode)
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
       // append the rest of the key to prove what we typed earlier still exists
       await w.send(...chars("isted"), KEY.enter);
 
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -478,25 +478,25 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
     }
 
     const cfg = readConfig();
-    assert.equal(cfg.apiKey, "uc_test_persisted");
+    assert.equal(cfg.apiKey, "ic_test_persisted");
   });
 
   it("arrow keys in the agents step don't silently untoggle rows", async () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_arrows"), KEY.enter);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_arrows"), KEY.enter);
 
       // move cursor around with arrow keys — should NOT change any selection
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.down, KEY.down, KEY.down, KEY.up, KEY.up, KEY.up, KEY.enter);
 
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.send(KEY.enter);
       await w.waitFor(/Auto-capture mode:/);
       await w.send(KEY.enter);
@@ -532,16 +532,16 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_pick"), KEY.enter);
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_pick"), KEY.enter);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
 
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       // both inferred rows rendered — match just a trailing chunk since long paths
       // may get truncated by ink when the 60-col TitledBox runs out of room
       await w.waitFor(/Code\/alpha|Code\/beta/);
@@ -567,17 +567,17 @@ describe("onboarding wizard e2e (real CLI, real pty)", () => {
   it("accepts 'All projects' even when nothing could be inferred", async () => {
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to UltraContext/);
+      await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
       await w.waitFor(/How do you want to connect\?/);
       await w.send(KEY.enter);
-      await w.waitFor(/Paste your API key from ultracontext\.ai:/);
-      await w.send(...chars("uc_test_all"), KEY.enter);
-      await w.waitFor(/Which agents should UltraContext watch\?/);
+      await w.waitFor(/Paste your API key from infinitecontext\.ai:/);
+      await w.send(...chars("ic_test_all"), KEY.enter);
+      await w.waitFor(/Which agents should InfiniteContext watch\?/);
       await w.send(KEY.enter);
 
       // no .claude/projects seeded → picker only shows "All projects" row
-      await w.waitFor(/Which projects should UltraContext auto-capture\?/);
+      await w.waitFor(/Which projects should InfiniteContext auto-capture\?/);
       await w.waitFor(/no recent Claude\/Cursor projects found/);
       await w.send(KEY.enter);
 

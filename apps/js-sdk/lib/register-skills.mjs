@@ -6,7 +6,7 @@
 // - For each agent dir, for each skill:
 //   - If target SKILL.md is a symlink → skip (don't follow, could escape into user files).
 //   - If target exists as regular file:
-//     - If sidecar .ultracontext-version present with matching version → no-op (already up-to-date).
+//     - If sidecar .infinitecontext-version present with matching version → no-op (already up-to-date).
 //     - If sidecar present but version differs → upgrade (replace + bump sidecar).
 //     - If sidecar missing → preserve (assume user customization).
 //   - If target missing → create with COPYFILE_EXCL + write sidecar.
@@ -18,7 +18,7 @@ import { join } from "node:path";
 // skill dir name must be a single path segment — defend against escape via crafted tarball
 const SAFE_SKILL_NAME = /^[A-Za-z0-9._-]+$/;
 
-const VERSION_MARKER = ".ultracontext-version";
+const VERSION_MARKER = ".infinitecontext-version";
 
 // read version marker or return null if absent / unreadable
 function readMarker(markerFile) {

@@ -4,7 +4,7 @@ import process from "node:process";
 
 import { expandHome } from "./utils.mjs";
 
-const DEFAULT_LOCK_PATH = "~/.ultracontext/daemon.lock";
+const DEFAULT_LOCK_PATH = "~/.infinitecontext/daemon.lock";
 
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
@@ -29,7 +29,7 @@ async function readExistingLock(lockPath) {
 }
 
 export function resolveLockPath(env = process.env) {
-  return expandHome(env.ULTRACONTEXT_LOCK_FILE ?? DEFAULT_LOCK_PATH);
+  return expandHome(env.INFINITECONTEXT_LOCK_FILE ?? DEFAULT_LOCK_PATH);
 }
 
 export async function acquireFileLock({
@@ -57,8 +57,8 @@ export async function acquireFileLock({
       handle = await fs.open(resolved, "wx");
     } else {
       const reason = existingPid
-        ? `UltraContext daemon already running (PID: ${existingPid})`
-        : "UltraContext daemon already running";
+        ? `InfiniteContext daemon already running (PID: ${existingPid})`
+        : "InfiniteContext daemon already running";
       const lockError = new Error(reason);
       lockError.code = "ELOCKED";
       lockError.pid = existingPid;

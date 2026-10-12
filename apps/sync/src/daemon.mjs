@@ -8,7 +8,7 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
-import { UltraContext } from "ultracontext";
+import { InfiniteContext } from "infinitecontext";
 import {
   createBootstrapStateKey,
   normalizeBootstrapMode,
@@ -20,7 +20,7 @@ import { redact } from "./redact.mjs";
 import {
   parseClaudeCodeLine, parseCodexLine, parseGstackLine, parseOpenClawLine,
   parseCursorLine, parseGeminiFile,
-} from "@ultracontext/parsers";
+} from "@infinitecontext/parsers";
 import { boolFromEnv, expandHome, extractProjectPathFromFile, sha256, toInt } from "./utils.mjs";
 import {
   isPrimaryAgentSourceEnabled,
@@ -30,7 +30,7 @@ import {
 } from "./onboarding-preferences.mjs";
 
 const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
-const DEFAULT_RUNTIME_CONFIG_FILE = "~/.ultracontext/config.json";
+const DEFAULT_RUNTIME_CONFIG_FILE = "~/.infinitecontext/config.json";
 const BOOTSTRAP_OPTIONS = [
   { id: "new_only", label: "New only (recommended)" },
   { id: "last_24h", label: "Last 24h" },
@@ -40,8 +40,8 @@ const BOOTSTRAP_OPTIONS = [
 const cliArgs = new Set(process.argv.slice(2));
 
 // file-based IPC paths
-const STATUS_FILE = path.join(os.homedir(), ".ultracontext", "status.json");
-const CONFIG_FILE = path.join(os.homedir(), ".ultracontext", "config.json");
+const STATUS_FILE = path.join(os.homedir(), ".infinitecontext", "status.json");
+const CONFIG_FILE = path.join(os.homedir(), ".infinitecontext", "config.json");
 
 const ANSI = {
   reset: "\x1b[0m",
@@ -74,7 +74,7 @@ function normalizeApiKey(raw) {
 }
 
 function resolveRuntimeConfigPath() {
-  return expandHome(process.env.ULTRACONTEXT_CONFIG_FILE ?? DEFAULT_RUNTIME_CONFIG_FILE);
+  return expandHome(process.env.INFINITECONTEXT_CONFIG_FILE ?? DEFAULT_RUNTIME_CONFIG_FILE);
 }
 
 function normalizeBootstrapModeWithPrompt(raw) {
@@ -160,8 +160,8 @@ function deleteBootstrapState(key) {
 
 export async function daemonBoot({ createStore, resolveDbPath }) {
   const cfg = {
-    apiKey: normalizeApiKey(process.env.ULTRACONTEXT_API_KEY),
-    baseUrl: (process.env.ULTRACONTEXT_BASE_URL ?? "https://api.ultracontext.ai").trim(),
+    apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
+    baseUrl: (process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai").trim(),
     userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
     host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
     pollMs: toInt(process.env.DAEMON_POLL_MS, 1500),
@@ -297,8 +297,8 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
     if (line.startsWith("Appended event to session context")) line = "context append";
     if (line.startsWith("Context created")) line = "Context created";
     if (line.startsWith("Context created without metadata fallback")) line = "Context created (fallback)";
-    if (line.startsWith("UltraContext daemon started")) line = "Daemon started";
-    if (line.startsWith("UltraContext daemon stopped")) line = "Daemon stopped";
+    if (line.startsWith("InfiniteContext daemon started")) line = "Daemon started";
+    if (line.startsWith("InfiniteContext daemon stopped")) line = "Daemon stopped";
     if (line.startsWith("Failed to process file")) line = "File processing warning";
     if (line.startsWith("Failed to create context with metadata")) line = "Context create warning";
 
@@ -360,7 +360,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
     if (!cfg.verboseLogs) return;
     for (const row of [
       "+------------------------------------------+",
-      "|        UltraContext Daemon (Verbose)     |",
+      "|        InfiniteContext Daemon (Verbose)     |",
       "+------------------------------------------+",
     ]) console.log(colorize(row, ANSI.cyan));
   }
@@ -694,9 +694,9 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
   // ── validation ──
 
   function validateConfig() {
-    if (!cfg.apiKey) throw new Error("Missing ULTRACONTEXT_API_KEY. Run `ultracontext config` to set up your API key.");
-    if (!cfg.apiKey.startsWith("uc_live_") && !cfg.apiKey.startsWith("uc_test_")) {
-      log("warn", "ULTRACONTEXT_API_KEY format looks unusual", { key_prefix: cfg.apiKey.slice(0, 8), key_len: cfg.apiKey.length });
+    if (!cfg.apiKey) throw new Error("Missing INFINITECONTEXT_API_KEY. Run `infinitecontext config` to set up your API key.");
+    if (!cfg.apiKey.startsWith("ic_live_") && !cfg.apiKey.startsWith("ic_test_")) {
+      log("warn", "INFINITECONTEXT_API_KEY format looks unusual", { key_prefix: cfg.apiKey.slice(0, 8), key_len: cfg.apiKey.length });
     }
   }
 
@@ -792,7 +792,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
     return pending;
   }
 
-  async function appendToUltraContext({ store, uc, sourceName, normalized, eventId, filePath, lineOffset, projectPath = "" }) {
+  async function appendToInfiniteContext({ store, uc, sourceName, normalized, eventId, filePath, lineOffset, projectPath = "" }) {
 
     // enrich context metadata with project path + first event timestamp
     const contextMeta = {
@@ -846,7 +846,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
     return results;
   }
 
-  async function appendBulkToUltraContext({ store, uc, sourceName, events, filePath, projectPath = "" }) {
+  async function appendBulkToInfiniteContext({ store, uc, sourceName, events, filePath, projectPath = "" }) {
 
     // group events by session id
     const bySession = new Map();
@@ -1012,7 +1012,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
         }
 
         if (pendingEvents.length > 0) {
-          await appendBulkToUltraContext({
+          await appendBulkToInfiniteContext({
             store,
             uc,
             sourceName: source.name,
@@ -1056,7 +1056,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
       // bulk append all collected events
       if (pendingEvents.length > 0) {
-        await appendBulkToUltraContext({
+        await appendBulkToInfiniteContext({
           store,
           uc,
           sourceName: source.name,
@@ -1141,16 +1141,16 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
     runtime.lockHandle = await acquireFileLock({ lockPath: cfg.lockFile, userId: cfg.userId, host: cfg.host });
 
-    const uc = new UltraContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+    const uc = new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
     runtime.uc = uc;
 
     // connectivity check
     try { await uc.get({ limit: 1 }); } catch (error) {
       const details = errorDetails(error);
-      throw new Error(`UltraContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). Check your API key at https://ultracontext.ai`);
+      throw new Error(`InfiniteContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). Check your API key at https://infinitecontext.ai`);
     }
 
-    log("info", "UltraContext daemon started", {
+    log("info", "InfiniteContext daemon started", {
       user_id: cfg.userId, host: cfg.host, poll_ms: cfg.pollMs, mode: "headless",
       db_file: cfg.dbFile,
       sources: sources.map((s) => ({ name: s.name, globs: s.globs })),
@@ -1220,22 +1220,22 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
     emitStatusLine();
     await stopRuntimeResources();
-    log("info", "UltraContext daemon stopped");
+    log("info", "InfiniteContext daemon stopped");
   }
 
   // ── run ──
 
   daemonMain().catch(async (error) => {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const isAlreadyRunning = error?.code === "ELOCKED" || errorMessage.startsWith("UltraContext daemon already running");
+    const isAlreadyRunning = error?.code === "ELOCKED" || errorMessage.startsWith("InfiniteContext daemon already running");
     await stopRuntimeResources();
 
     if (isAlreadyRunning) {
-      log("warn", "UltraContext already running", { error: errorMessage });
+      log("warn", "InfiniteContext already running", { error: errorMessage });
       stopWatchParentProcess();
     } else {
       bumpStat("errors");
-      log("error", "UltraContext failed", { error: errorMessage });
+      log("error", "InfiniteContext failed", { error: errorMessage });
     }
     process.exit(isAlreadyRunning ? 2 : 1);
   });

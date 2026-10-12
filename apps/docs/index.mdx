@@ -5,14 +5,14 @@ description: 'Same context. Everywhere.'
 
 <img
     src='/images/context-api-hero.svg'
-    alt='UltraContext'
+    alt='InfiniteContext'
 />
 
 **Same context. Everywhere. Open source.**
 
 What Claude Code knows, Codex doesn't. What your teammate is shipping right now? Your agent has no idea.
 
-UltraContext captures every agent's context in realtime and makes it available to all of them. Continue a session in a different agent, or just ask what's happening.
+InfiniteContext captures every agent's context in realtime and makes it available to all of them. Continue a session in a different agent, or just ask what's happening.
 
 - *"Codex, grab the last plan Claude Code made and implement it."*
 - *"What's the team building today?"*
@@ -114,8 +114,8 @@ The Context API consists of **Contexts** holding **Messages**. That's it. Simple
 
 <CodeGroup>
 ```typescript Node.js
-import { UltraContext } from 'ultracontext';
-const uc = new UltraContext({ apiKey: 'uc_live_...' });
+import { InfiniteContext } from 'infinitecontext';
+const uc = new InfiniteContext({ apiKey: 'ic_live_...' });
 
 // create a new context
 const ctx = await uc.create();
@@ -140,8 +140,8 @@ const response = await generateText({ model, messages: data });
 ````
 
 ```python Python
-from ultracontext import UltraContext
-uc = UltraContext(api_key="uc_live_...")
+from infinitecontext import InfiniteContext
+uc = InfiniteContext(api_key="ic_live_...")
 
 # create a new context
 ctx = uc.create()
@@ -212,8 +212,8 @@ v0 = uc.get(ctx["id"], version=0)
 
 <CodeGroup>
 ```typescript Node.js
-import { UltraContext } from 'ultracontext';
-const uc = new UltraContext({ apiKey: 'uc_live_...' });
+import { InfiniteContext } from 'infinitecontext';
+const uc = new InfiniteContext({ apiKey: 'ic_live_...' });
 
 // create new contexts
 const ctx = await uc.create();
@@ -237,8 +237,8 @@ const fork = await uc.create({ from: 'ctx_abc123' });
 ````
 
 ```python Python
-from ultracontext import UltraContext
-uc = UltraContext(api_key="uc_live_...")
+from infinitecontext import InfiniteContext
+uc = InfiniteContext(api_key="ic_live_...")
 
 # create new contexts
 ctx = uc.create()
@@ -270,8 +270,8 @@ fork = uc.create(from_="ctx_abc123")
 
 <CodeGroup>
 ```typescript Node.js
-import { UltraContext } from 'ultracontext';
-const uc = new UltraContext({ apiKey: 'uc_live_...' });
+import { InfiniteContext } from 'infinitecontext';
+const uc = new InfiniteContext({ apiKey: 'ic_live_...' });
 const ctx = await uc.create();
 
 // append a single message
@@ -302,8 +302,8 @@ await uc.delete(ctx.id, -1); // delete last message
 ````
 
 ```python Python
-from ultracontext import UltraContext
-uc = UltraContext(api_key="uc_live_...")
+from infinitecontext import InfiniteContext
+uc = InfiniteContext(api_key="ic_live_...")
 ctx = uc.create()
 
 # append a single message

@@ -10,8 +10,8 @@ import os from "node:os";
 
 import { registerSkills } from "./lib/register-skills.mjs";
 
-// skip when triggered by `ultracontext update`
-if (process.env.ULTRACONTEXT_SKIP_POSTINSTALL) process.exit(0);
+// skip when triggered by `infinitecontext update`
+if (process.env.INFINITECONTEXT_SKIP_POSTINSTALL) process.exit(0);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const home = os.homedir();
@@ -28,16 +28,16 @@ function readPackageVersion() {
 }
 
 // ── register plugin skills with AI agents (global installs only) ───
-// skipped for local/transitive installs so adding ultracontext as a dep can't
-// silently mutate ~/.claude. Upgrades replace skills managed by ultracontext
-// (tracked via sidecar .ultracontext-version file); user-customized SKILL.md
+// skipped for local/transitive installs so adding infinitecontext as a dep can't
+// silently mutate ~/.claude. Upgrades replace skills managed by infinitecontext
+// (tracked via sidecar .infinitecontext-version file); user-customized SKILL.md
 // (no sidecar) is preserved untouched.
 if (isGlobal) {
   registerSkills({
     pluginDir: join(__dirname, "plugin", "skills"),
     agentDirs: [join(home, ".claude", "skills"), join(home, ".codex", "skills")],
     packageVersion: readPackageVersion(),
-    logger: (msg) => console.log(`ultracontext: ${msg}`),
+    logger: (msg) => console.log(`infinitecontext: ${msg}`),
   });
 }
 
@@ -45,6 +45,6 @@ if (isGlobal) {
 
 if (isGlobal && isTTY) {
   try {
-    execSync("ultracontext", { stdio: "inherit" });
+    execSync("infinitecontext", { stdio: "inherit" });
   } catch { /* user exited or daemon failed — that's fine */ }
 }

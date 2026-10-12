@@ -1,4 +1,4 @@
-# UltraContext API
+# InfiniteContext API
 
 HTTP API backed by PostgreSQL or Supabase.
 
@@ -20,8 +20,8 @@ cp .env.example .env.local
 Fill `.env.local`:
 
 - `DATABASE_PROVIDER` (`postgres` or `supabase`)
-- `ULTRACONTEXT_ADMIN_KEY`
-- `UC_TEST_API_KEY` (optional for manual tests)
+- `INFINITECONTEXT_ADMIN_KEY`
+- `INFINITECONTEXT_TEST_API_KEY` (optional for manual tests)
 
 Provider-specific vars:
 
