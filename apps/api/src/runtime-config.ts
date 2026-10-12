@@ -67,10 +67,22 @@ export type StartupConfigSummary = {
     public_base_url: string;
 };
 
+function isDevEnvironment(env: Record<string, string | undefined>): boolean {
+    const nodeEnv = String(env.NODE_ENV ?? '').trim().toLowerCase();
+    const icEnv = String(env.INFINITECONTEXT_ENV ?? '').trim().toLowerCase();
+    return nodeEnv === 'development' || nodeEnv === 'test' || icEnv === 'development' || icEnv === 'test';
+}
+
 export function buildStartupConfigSummary(env: Record<string, string | undefined>): StartupConfigSummary {
     const authConfig = buildAuthRuntimeConfig(env);
     const provider = String(env.DATABASE_PROVIDER ?? '').trim().toLowerCase() || 'unknown';
-    const mailProvider = String(env.INFINITECONTEXT_MAIL_PROVIDER ?? 'smtp').trim().toLowerCase();
+    let mailProvider = String(env.INFINITECONTEXT_MAIL_PROVIDER ?? 'smtp').trim().toLowerCase();
+    if (
+        isDevEnvironment(env) &&
+        String(env.INFINITECONTEXT_ALLOW_CONSOLE_MAILER ?? '').trim() === 'true'
+    ) {
+        mailProvider = 'console';
+    }
     const publicBaseUrl = String(
         env.INFINITECONTEXT_AUTH_PUBLIC_BASE_URL ?? env.INFINITECONTEXT_PUBLIC_BASE_URL ?? 'http://127.0.0.1:8787',
     )

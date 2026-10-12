@@ -132,7 +132,7 @@ const DEFAULT_URL = "http://127.0.0.1:8787";
 async function goWelcome(w) {
   await w.waitFor(/Welcome to InfiniteContext/);
   await w.send(KEY.enter);
-  await new Promise((r) => setTimeout(r, 150));
+  await w.waitFor(/Where should InfiniteContext connect|How do you want to authenticate|Context API base URL/);
 }
 
 async function goHostingHosted(w) {
@@ -221,9 +221,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
 
@@ -345,9 +343,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
-
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
 
@@ -378,8 +374,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
@@ -438,8 +433,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
@@ -492,8 +486,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     const w = spawnWizard();
 
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
@@ -539,8 +532,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
@@ -574,8 +566,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
   it("accepts 'All projects' even when nothing could be inferred", async () => {
     const w = spawnWizard();
     try {
-      await w.waitFor(/Welcome to InfiniteContext/);
-      await w.send(KEY.enter);
+      await goWelcome(w);
       await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);

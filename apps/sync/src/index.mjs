@@ -1,6 +1,5 @@
 // entry point — load env, create store, boot daemon
 import "./env.mjs";
-import { createStore, resolveDbPath } from "./store.mjs";
-import { daemonBoot } from "./daemon.mjs";
+import { bootSyncDaemonFromSource } from "./boot-daemon.mjs";
 
-daemonBoot({ createStore, resolveDbPath });
+bootSyncDaemonFromSource();

@@ -15,7 +15,7 @@ import {
   hasLocalCodexSession,
   writeClaudeSession,
   writeCodexSession,
-} from "./parsers-bundle/index.mjs";
+} from "#parsers";
 import { MENU_TABS, createInkUiController } from "./ui.mjs";
 import { boolFromEnv, expandHome, toInt } from "./utils.mjs";
 

@@ -15,7 +15,7 @@
         "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/config-cli.mjs && node --check src/cli/vault.mjs && node --check lib/update-check.mjs && node --check lib/vault-require.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && pnpm run build",
         "prepack": "node scripts/prepack-vendor.mjs && pnpm run build",
         "postinstall": "node postinstall.mjs",
-        "test": "node --test --test-concurrency=1 tests/**/*.test.mjs tests/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs tests/npm-pack-offline.test.mjs && node --test ../../tests/standalone-pack-all.test.mjs"
+        "test": "node --test --test-concurrency=1 tests/**/*.test.mjs tests/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs tests/npm-pack-offline.test.mjs && node --test ../../tests/standalone-pack-all.test.mjs ../../tests/fresh-clone-sync-source.test.mjs"
     },
     "main": "./dist/index.mjs",
     "types": "./dist/index.d.mts",
@@ -62,7 +62,8 @@
         "./lib/vault-session.mjs": "./lib/vault-session.mjs",
         "./lib/encrypted-client.mjs": "./lib/encrypted-client.mjs",
         "./lib/vault-require.mjs": "./lib/vault-require.mjs",
-        "./lib/vault-migrate.mjs": "./lib/vault-migrate.mjs"
+        "./lib/vault-migrate.mjs": "./lib/vault-migrate.mjs",
+        "./lib/sync-client-auth.mjs": "./lib/sync-client-auth.mjs"
     },
     "files": [
         "dist/",

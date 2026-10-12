@@ -46,9 +46,9 @@ copyDir(path.join(repoRoot, "packages/parsers/src"), path.join(vendorRoot, "pars
 
 walkMjs(path.join(vendorRoot, "sync"), (file) => {
   patchFile(file, [
+    ['from "#parsers/utils"', 'from "../parsers/utils.mjs"'],
+    ['from "#parsers"', 'from "../parsers/index.mjs"'],
     ["@infinitecontext/parsers", "../parsers/index.mjs"],
-    ["./parsers-bundle/index.mjs", "../parsers/index.mjs"],
-    ["./parsers-bundle/utils.mjs", "../parsers/utils.mjs"],
   ]);
 });
 

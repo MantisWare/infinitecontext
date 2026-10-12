@@ -45,4 +45,14 @@ describe('runtime-config', () => {
         assert.equal(summary.mail_provider, 'smtp');
         assert.ok(!('jwtSecret' in summary));
     });
+
+    it('buildStartupConfigSummary reports console mailer in development', () => {
+        const summary = buildStartupConfigSummary({
+            NODE_ENV: 'development',
+            INFINITECONTEXT_JWT_SECRET: 'test-jwt-secret-must-be-at-least-32-bytes-long',
+            INFINITECONTEXT_ALLOW_CONSOLE_MAILER: 'true',
+            INFINITECONTEXT_MAIL_PROVIDER: 'smtp',
+        });
+        assert.equal(summary.mail_provider, 'console');
+    });
 });

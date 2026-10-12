@@ -17,10 +17,21 @@ const daemon = spawn("node", ["--watch", path.join(__dirname, "index.mjs")], {
 // suppress daemon output (TUI owns the terminal)
 daemon.unref();
 
-// small delay for daemon to initialize
-await new Promise(r => setTimeout(r, 1500));
+// boot TUI in foreground (wait until daemon lock or status file appears)
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-// boot TUI in foreground
 await import("./env.mjs");
+const statusFile = path.join(os.homedir(), ".infinitecontext", "status.json");
+const lockFile = path.join(os.homedir(), ".infinitecontext", "daemon.lock");
+const deadline = Date.now() + 15_000;
+while (Date.now() < deadline) {
+  if (fs.existsSync(statusFile) || fs.existsSync(lockFile)) break;
+  await new Promise((r) => setTimeout(r, 50));
+}
+
 const { tuiBoot } = await import("./tui.mjs");
-await tuiBoot();
+const { resolveHostAuthHooks } = await import("./host-auth.mjs");
+const auth = await resolveHostAuthHooks();
+await tuiBoot({ ...auth });

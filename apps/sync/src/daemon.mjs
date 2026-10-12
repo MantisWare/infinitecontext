@@ -21,7 +21,7 @@ import { redact } from "./redact.mjs";
 import {
   parseClaudeCodeLine, parseCodexLine, parseGstackLine, parseOpenClawLine,
   parseCursorLine, parseGeminiFile,
-} from "./parsers-bundle/index.mjs";
+} from "#parsers";
 import { boolFromEnv, expandHome, extractProjectPathFromFile, sha256, toInt } from "./utils.mjs";
 import {
   isPrimaryAgentSourceEnabled,
