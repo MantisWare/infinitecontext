@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { resolveLockPath } from "./lock.mjs";
 import { expandHome } from "./utils.mjs";
 
-const DEFAULT_LOG_FILE = "~/.ultracontext/daemon.log";
+const DEFAULT_LOG_FILE = "~/.infinitecontext/daemon.log";
 
 // ── ANSI helpers ────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ async function readLogTail(logPath, lines = 12) {
 }
 
 function resolveDaemonLogFile(env = process.env) {
-  return expandHome(env.ULTRACONTEXT_DAEMON_LOG_FILE ?? DEFAULT_LOG_FILE);
+  return expandHome(env.INFINITECONTEXT_DAEMON_LOG_FILE ?? DEFAULT_LOG_FILE);
 }
 
 async function resolveRunningProcess(lockPath) {
@@ -79,7 +79,7 @@ async function resolveWritableLogPath(preferredPath) {
     fsSync.accessSync(path.dirname(primary), fsSync.constants.W_OK);
     return primary;
   } catch {
-    const fallback = path.resolve(process.cwd(), ".ultracontext-daemon.log");
+    const fallback = path.resolve(process.cwd(), ".infinitecontext-daemon.log");
     await fs.mkdir(path.dirname(fallback), { recursive: true });
     return fallback;
   }
@@ -89,13 +89,13 @@ async function resolveWritableLogPath(preferredPath) {
 
 export async function launchDaemon({ entryPath, diagnosticsHint } = {}) {
   const resolvedEntry = entryPath ?? fileURLToPath(new URL("./index.mjs", import.meta.url));
-  const hint = diagnosticsHint ?? "pnpm --filter @ultracontext/sync run start";
+  const hint = diagnosticsHint ?? "pnpm --filter @infinitecontext/sync run start";
 
   const lockPath = path.resolve(resolveLockPath(process.env));
   const preferredLogPath = resolveDaemonLogFile(process.env);
 
   console.log("");
-  console.log(`  ${blue}${bold}UltraContext${reset} ${dim}Daemon${reset}`);
+  console.log(`  ${blue}${bold}InfiniteContext${reset} ${dim}Daemon${reset}`);
   console.log("");
 
   // already running

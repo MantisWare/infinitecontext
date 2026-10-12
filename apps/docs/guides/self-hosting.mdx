@@ -8,7 +8,7 @@ description: 'Run the Context API on your own infrastructure'
     alt='Self-hosting'
 />
 
-You can self-host the Context API instead of using the managed service at ultracontext.ai.
+You can self-host the Context API instead of using the managed service at infinitecontext.ai.
 
 ## Prerequisites
 
@@ -22,59 +22,59 @@ The monorepo includes a Docker Compose setup for local PostgreSQL:
 
 <CodeGroup>
 ```bash npm
-git clone https://github.com/ultracontext/ultracontext.git
-cd ultracontext
+git clone https://github.com/MantisWare/infinitecontext.git
+cd infinitecontext
 
 # start PostgreSQL
-npm run ultracontext:db:up
+npm run infinitecontext:db:up
 
 # apply schema
-npm run ultracontext:db:migrate
+npm run infinitecontext:db:migrate
 
 # start the API
-npm run ultracontext:api
+npm run infinitecontext:api
 ```
 
 ```bash yarn
-git clone https://github.com/ultracontext/ultracontext.git
-cd ultracontext
+git clone https://github.com/MantisWare/infinitecontext.git
+cd infinitecontext
 
 # start PostgreSQL
-yarn ultracontext:db:up
+yarn infinitecontext:db:up
 
 # apply schema
-yarn ultracontext:db:migrate
+yarn infinitecontext:db:migrate
 
 # start the API
-yarn ultracontext:api
+yarn infinitecontext:api
 ```
 
 ```bash pnpm
-git clone https://github.com/ultracontext/ultracontext.git
-cd ultracontext
+git clone https://github.com/MantisWare/infinitecontext.git
+cd infinitecontext
 
 # start PostgreSQL
-pnpm ultracontext:db:up
+pnpm infinitecontext:db:up
 
 # apply schema
-pnpm ultracontext:db:migrate
+pnpm infinitecontext:db:migrate
 
 # start the API
-pnpm ultracontext:api
+pnpm infinitecontext:api
 ```
 
 ```bash bun
-git clone https://github.com/ultracontext/ultracontext.git
-cd ultracontext
+git clone https://github.com/MantisWare/infinitecontext.git
+cd infinitecontext
 
 # start PostgreSQL
-bun run ultracontext:db:up
+bun run infinitecontext:db:up
 
 # apply schema
-bun run ultracontext:db:migrate
+bun run infinitecontext:db:migrate
 
 # start the API
-bun run ultracontext:api
+bun run infinitecontext:api
 ```
 </CodeGroup>
 
@@ -142,8 +142,8 @@ Both produce identical API behavior.
 
 ```bash .env
 DATABASE_PROVIDER=postgres
-DATABASE_URL=postgresql://user:password@host:5432/ultracontext
-ULTRACONTEXT_ADMIN_KEY=your_admin_key
+DATABASE_URL=postgresql://user:password@host:5432/infinitecontext
+INFINITECONTEXT_ADMIN_KEY=your_admin_key
 ```
 
 Best for self-hosted deployments where you manage your own database. Lower latency via direct TCP connection.
@@ -154,7 +154,7 @@ Best for self-hosted deployments where you manage your own database. Lower laten
 DATABASE_PROVIDER=supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...
-ULTRACONTEXT_ADMIN_KEY=your_admin_key
+INFINITECONTEXT_ADMIN_KEY=your_admin_key
 ```
 
 Best for managed hosting and quick setup. Scaling handled by Supabase.
@@ -188,7 +188,7 @@ Best for managed hosting and quick setup. Scaling handled by Supabase.
 | `DATABASE_URL` | If using PostgreSQL | PostgreSQL connection string |
 | `SUPABASE_URL` | If using Supabase | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | If using Supabase | Supabase service role key |
-| `ULTRACONTEXT_ADMIN_KEY` | Yes | Admin key for key management endpoints |
+| `INFINITECONTEXT_ADMIN_KEY` | Yes | Admin key for key management endpoints |
 | `PORT` | No | API server port (default: 8787) |
 
 ## Deploy to Cloudflare Workers
@@ -206,7 +206,7 @@ Create a `wrangler.jsonc` in `apps/api`:
 
 ```jsonc wrangler.jsonc
 {
-    "name": "ultracontext-api",
+    "name": "infinitecontext-api",
     "main": "src/worker.ts",
     "compatibility_date": "2024-12-01"
 }
@@ -218,21 +218,21 @@ Set your secrets via `wrangler secret put`:
 wrangler secret put DATABASE_PROVIDER        # enter: supabase
 wrangler secret put SUPABASE_URL
 wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-wrangler secret put ULTRACONTEXT_ADMIN_KEY
+wrangler secret put INFINITECONTEXT_ADMIN_KEY
 ```
 
 ### Optional: API key caching with KV
 
 You can cache API key lookups using Workers KV to reduce Supabase calls:
 
-1. Create a KV namespace: `wrangler kv namespace create ULTRACONTEXT_API_KEYS_CACHE`
+1. Create a KV namespace: `wrangler kv namespace create INFINITECONTEXT_API_KEYS_CACHE`
 2. Add the binding to `wrangler.jsonc`:
 
 ```jsonc wrangler.jsonc
 {
     "kv_namespaces": [
         {
-            "binding": "ULTRACONTEXT_API_KEYS_CACHE",
+            "binding": "INFINITECONTEXT_API_KEYS_CACHE",
             "id": "<your-namespace-id>"
         }
     ]

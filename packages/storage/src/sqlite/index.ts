@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-or
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { createClient } from '@libsql/client';
 
-import type { StorageAdapter, NodeRow, NodeInsertRow, ApiKeyRow, ProjectRow, ContextFilters, TransactionOptions } from '@ultracontext/core';
+import type { StorageAdapter, NodeRow, NodeInsertRow, ApiKeyRow, ProjectRow, ContextFilters, TransactionOptions } from '@infinitecontext/core';
 import { schema, nodes, api_keys, projects, SCHEMA_SQL } from './schema';
 
 // =============================================================================

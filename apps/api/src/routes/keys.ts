@@ -1,4 +1,4 @@
-import { createKey, resultStatus, type ErrorCode } from '@ultracontext/core';
+import { createKey, resultStatus, type ErrorCode } from '@infinitecontext/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { HttpApp } from '../types/http';
 

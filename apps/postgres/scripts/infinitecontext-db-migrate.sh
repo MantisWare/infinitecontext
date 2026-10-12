@@ -14,8 +14,8 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-DB_USER="${POSTGRES_USER:-ultracontext}"
-DB_NAME="${POSTGRES_DB:-ultracontext}"
+DB_USER="${POSTGRES_USER:-infinitecontext}"
+DB_NAME="${POSTGRES_DB:-infinitecontext}"
 
 if [[ ! -f "$SCHEMA_FILE" ]]; then
   echo "Schema file not found: $SCHEMA_FILE"

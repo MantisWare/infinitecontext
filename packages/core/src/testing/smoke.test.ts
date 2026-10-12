@@ -6,7 +6,7 @@ import { listContexts } from '../ops/list-contexts';
 
 // -- smoke test — verifies the package wires together end-to-end --------------
 
-describe('@ultracontext/core smoke', () => {
+describe('@infinitecontext/core smoke', () => {
     it('lists empty contexts for a fresh project', async () => {
         const storage = new MemoryStorage();
 

@@ -11,9 +11,9 @@ import { spawnSync } from "node:child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const command = (process.argv[2] ?? "").trim().toLowerCase().replace(/^--?/, "");
 const subcommand = (process.argv[3] ?? "").trim().toLowerCase().replace(/^--?/, "");
-const PACKAGE_NAME = "ultracontext";
+const PACKAGE_NAME = "infinitecontext";
 const packageRoot = path.resolve(__dirname, "..", "..");
-const cliWrapperPath = path.join(packageRoot, "ultracontext.mjs");
+const cliWrapperPath = path.join(packageRoot, "infinitecontext.mjs");
 
 // resolve package version
 function readVersion() {
@@ -28,9 +28,9 @@ function readVersion() {
 
 function printHelp() {
   const version = readVersion();
-  console.log(`ultracontext v${version}
+  console.log(`infinitecontext v${version}
 
-Usage: ultracontext [command] [options]
+Usage: infinitecontext [command] [options]
 
 Commands:
   (none)        Start sync (daemon + TUI)
@@ -45,13 +45,13 @@ Commands:
   help          Show this help message
 
 Environment:
-  ULTRACONTEXT_API_KEY   Required. Your UltraContext API key.
-  ULTRACONTEXT_BASE_URL  API base URL (default: https://api.ultracontext.ai)
+  INFINITECONTEXT_API_KEY   Required. Your InfiniteContext API key.
+  INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
 `);
 }
 
 function printUpdateHelp() {
-  console.log(`Usage: ultracontext update [options]
+  console.log(`Usage: infinitecontext update [options]
 
 Options:
   --tag <dist-tag|version>       Package tag/version (default: latest)
@@ -73,7 +73,7 @@ async function runOnboarding() {
 // check if daemon is already running via lock file
 function isDaemonRunning() {
   try {
-    const lockPath = path.join(process.env.HOME || process.env.USERPROFILE || "~", ".ultracontext", "daemon.lock");
+    const lockPath = path.join(process.env.HOME || process.env.USERPROFILE || "~", ".infinitecontext", "daemon.lock");
     const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
     const pid = Number.parseInt(String(lock?.pid ?? ""), 10);
     if (!Number.isInteger(pid) || pid <= 1) return false;
@@ -86,11 +86,11 @@ function isDaemonRunning() {
 
 // try loading key from config file if env is empty
 function loadApiKeyFromConfig() {
-  if (process.env.ULTRACONTEXT_API_KEY) return;
+  if (process.env.INFINITECONTEXT_API_KEY) return;
   try {
-    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || "~", ".ultracontext", "config.json");
+    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || "~", ".infinitecontext", "config.json");
     const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (cfg.apiKey) process.env.ULTRACONTEXT_API_KEY = String(cfg.apiKey);
+    if (cfg.apiKey) process.env.INFINITECONTEXT_API_KEY = String(cfg.apiKey);
   } catch { /* no config */ }
 }
 
@@ -233,7 +233,7 @@ function runGlobalUpdate(manager, tag) {
 
   // skip postinstall to prevent launching a new instance mid-update
   const result = spawnSync(bin, args, {
-    env: { ...process.env, ULTRACONTEXT_SKIP_POSTINSTALL: "1" },
+    env: { ...process.env, INFINITECONTEXT_SKIP_POSTINSTALL: "1" },
     stdio: "inherit",
   });
   if (result.status !== 0) {
@@ -271,7 +271,7 @@ async function runUpdate(rawArgs) {
   const previousVersion = readVersion();
 
   console.log("");
-  console.log(`  ${blue}${b}UltraContext${r} ${d}Update${r}`);
+  console.log(`  ${blue}${b}InfiniteContext${r} ${d}Update${r}`);
   console.log("");
 
   // stop daemon before update
@@ -302,7 +302,7 @@ async function runUpdate(rawArgs) {
       // spawn daemon directly — detached + stdio to log file (no terminal allocation)
       const { spawn: spawnChild } = await import("node:child_process");
       const syncEntry = fileURLToPath(new URL("./sdk-sync.mjs", import.meta.url));
-      const logDir = path.join(process.env.HOME || "~", ".ultracontext");
+      const logDir = path.join(process.env.HOME || "~", ".infinitecontext");
       const { mkdirSync, openSync, closeSync } = await import("node:fs");
       mkdirSync(logDir, { recursive: true });
       const logFd = openSync(path.join(logDir, "daemon.log"), "a");
@@ -316,7 +316,7 @@ async function runUpdate(rawArgs) {
       await new Promise((r) => setTimeout(r, 500));
       console.log(`  ${green}●${r} ${d}Daemon running (PID ${child.pid}).${r}`);
     } catch {
-      console.log(`  ${gray}○${r} ${d}Auto-restart failed. Run:${r} ${cyan}ultracontext sync${r}`);
+      console.log(`  ${gray}○${r} ${d}Auto-restart failed. Run:${r} ${cyan}infinitecontext sync${r}`);
     }
   }
 
@@ -333,7 +333,7 @@ async function fetchLatestVersion() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch("https://registry.npmjs.org/ultracontext/latest", { signal: controller.signal });
+    const res = await fetch("https://registry.npmjs.org/infinitecontext/latest", { signal: controller.signal });
     const data = await res.json();
     return data.version ?? null;
   } catch { return null; }
@@ -351,9 +351,9 @@ function isNewer(latest, current) {
 }
 
 function printUpdateNotice(current, latest) {
-  console.log(`\n  ${blue}${b}UltraContext${r} ${d}Update available${r}`);
+  console.log(`\n  ${blue}${b}InfiniteContext${r} ${d}Update available${r}`);
   console.log(`  ${gray}${current}${r} → ${green}${b}${latest}${r}`);
-  console.log(`  Run ${cyan}ultracontext update${r} to upgrade.\n`);
+  console.log(`  Run ${cyan}infinitecontext update${r} to upgrade.\n`);
 }
 
 // check on every invocation, no cache — like Claude Code
@@ -370,20 +370,20 @@ async function checkForUpdate() {
 // ── launch helpers ──────────────────────────────────────────────
 
 async function launchSyncDaemon() {
-  const { launchDaemon } = await import("@ultracontext/sync/launcher");
+  const { launchDaemon } = await import("@infinitecontext/sync/launcher");
   await launchDaemon({
     entryPath: fileURLToPath(new URL("./sdk-sync.mjs", import.meta.url)),
-    diagnosticsHint: "DAEMON_VERBOSE=1 ultracontext sync",
+    diagnosticsHint: "DAEMON_VERBOSE=1 infinitecontext sync",
   });
 }
 
 async function runCtlSDK() {
-  const { runCtl } = await import("@ultracontext/sync/ctl");
+  const { runCtl } = await import("@infinitecontext/sync/ctl");
   await runCtl();
 }
 
 async function launchTui() {
-  const { tuiBoot } = await import("@ultracontext/sync/tui");
+  const { tuiBoot } = await import("@infinitecontext/sync/tui");
   await tuiBoot({
     assetsRoot: path.resolve(__dirname, "..", ".."),
   });
@@ -399,7 +399,7 @@ async function run() {
   let onboardResult = null;
   if (NEEDS_KEY.has(command)) {
     loadApiKeyFromConfig();
-    if (!process.env.ULTRACONTEXT_API_KEY) onboardResult = await runOnboarding();
+    if (!process.env.INFINITECONTEXT_API_KEY) onboardResult = await runOnboarding();
   }
 
   switch (command) {
@@ -475,11 +475,11 @@ async function run() {
     default: {
       // migration hints for removed commands
       if (command === "tui") {
-        console.log("The 'tui' command was removed. Use 'ultracontext sync' instead (TUI is now built-in).");
+        console.log("The 'tui' command was removed. Use 'infinitecontext sync' instead (TUI is now built-in).");
         process.exit(0);
       }
       if (command === "status") {
-        console.log("Use 'ultracontext sync status' instead.");
+        console.log("Use 'infinitecontext sync status' instead.");
         process.exit(0);
       }
       console.error(`Unknown command: ${process.argv[2]}`);

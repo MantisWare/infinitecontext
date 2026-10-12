@@ -13,7 +13,7 @@ export function NarrowWidthPanel({ minWideCols, narrowWidth, stdoutColumns }) {
       TitledBox,
       {
         borderStyle: "single",
-        titles: ["UltraContext v1.1"],
+        titles: ["InfiniteContext v1.1"],
         titleJustify: "flex-start",
         borderColor: UC_BRAND_BLUE,
         flexDirection: "column",

@@ -69,7 +69,7 @@ export async function hasLocalCodexSession(sessionId, baseDir) {
     return files.some((filePath) => filePath.includes(id));
 }
 
-// write a Codex-native JSONL session file from UltraContext messages
+// write a Codex-native JSONL session file from InfiniteContext messages
 export async function writeCodexSession({ sessionId, cwd, messages, baseDir }) {
     const id = String(sessionId ?? "").trim();
     if (!id) return { written: false, reason: "missing_session_id", filePath: "", sessionId: "" };
@@ -95,7 +95,7 @@ export async function writeCodexSession({ sessionId, cwd, messages, baseDir }) {
                     id,
                     timestamp: firstTs,
                     cwd: cwd || process.cwd(),
-                    originator: "ultracontext_daemon",
+                    originator: "infinitecontext_daemon",
                     cli_version: "restored",
                     source: "cli",
                     model_provider: "openai",
@@ -121,7 +121,7 @@ export async function writeCodexSession({ sessionId, cwd, messages, baseDir }) {
                     type: "event_msg",
                     payload: {
                         type: "agent_message",
-                        message: "[system] Session restored from UltraContext with no user/assistant messages.",
+                        message: "[system] Session restored from InfiniteContext with no user/assistant messages.",
                     },
                 })
             );

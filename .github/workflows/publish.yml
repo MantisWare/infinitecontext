@@ -28,7 +28,7 @@ jobs:
           npm version $VERSION --no-git-tag-version --allow-same-version
 
       - name: Build
-        run: pnpm --filter ultracontext run build
+        run: pnpm --filter infinitecontext run build
 
       - name: Publish
         run: cd apps/js-sdk && npm publish --access public

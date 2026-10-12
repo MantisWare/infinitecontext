@@ -1,6 +1,6 @@
-import { handleMcpRequest } from 'ultracontext-mcp-server/handler';
-import type { ContextReader } from 'ultracontext-mcp-server/types';
-import { listContexts, getContextMessages } from '@ultracontext/core';
+import { handleMcpRequest } from 'infinitecontext-mcp-server/handler';
+import type { ContextReader } from 'infinitecontext-mcp-server/types';
+import { listContexts, getContextMessages } from '@infinitecontext/core';
 import type { HttpApp, HttpContext } from '../types/http';
 
 // -- storage-backed reader (no HTTP loopback) ---------------------------------

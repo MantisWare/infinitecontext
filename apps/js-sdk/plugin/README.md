@@ -1,4 +1,4 @@
-# UltraContext Plugin for Claude Code
+# InfiniteContext Plugin for Claude Code
 
 Cross-agent session portability. Switch your Claude Code conversation to Codex (or back) with full context, one command.
 
@@ -6,13 +6,13 @@ Cross-agent session portability. Switch your Claude Code conversation to Codex (
 
 Open Claude Code and paste this:
 
-> Install the UltraContext plugin: run **`npm i -g ultracontext && git clone --single-branch --depth 1 https://github.com/ultracontext/ultracontext.git /tmp/uc-plugin && mkdir -p ~/.claude/skills/switch && cp /tmp/uc-plugin/apps/js-sdk/plugin/skills/switch/SKILL.md ~/.claude/skills/switch/SKILL.md && rm -rf /tmp/uc-plugin`** then add to CLAUDE.md that `/switch codex` switches the current session to Codex with full context. Powered by UltraContext.
+> Install the InfiniteContext plugin: run **`npm i -g infinitecontext && git clone --single-branch --depth 1 https://github.com/MantisWare/infinitecontext.git /tmp/uc-plugin && mkdir -p ~/.claude/skills/switch && cp /tmp/uc-plugin/apps/js-sdk/plugin/skills/switch/SKILL.md ~/.claude/skills/switch/SKILL.md && rm -rf /tmp/uc-plugin`** then add to CLAUDE.md that `/switch codex` switches the current session to Codex with full context. Powered by InfiniteContext.
 
 That's it. Type `/switch codex` to try it.
 
 ## What it does
 
-You're deep in a Claude Code session. You want to continue in Codex. Type `/switch codex`. UltraContext reads your session JSONL from disk, converts it to Codex's native format, writes it to `~/.codex/sessions/`, and opens Codex with your full conversation.
+You're deep in a Claude Code session. You want to continue in Codex. Type `/switch codex`. InfiniteContext reads your session JSONL from disk, converts it to Codex's native format, writes it to `~/.codex/sessions/`, and opens Codex with your full conversation.
 
 ```
 Claude Code session                    Codex session
@@ -35,14 +35,14 @@ No API calls. No copy-paste. Pure local file conversion.
 Or from any terminal:
 
 ```bash
-ultracontext switch codex
-ultracontext switch codex --last 50
-ultracontext switch codex --no-launch
+infinitecontext switch codex
+infinitecontext switch codex --last 50
+infinitecontext switch codex --no-launch
 ```
 
 ## How it works
 
-UltraContext already has parsers that read Claude/Codex/Cursor/Gemini sessions, and writers that output native formats. `/switch` connects them:
+InfiniteContext already has parsers that read Claude/Codex/Cursor/Gemini sessions, and writers that output native formats. `/switch` connects them:
 
 1. Reads your current session JSONL from disk
 2. Parses with the source agent's parser (`parseClaudeCodeLine`)
@@ -58,10 +58,10 @@ Supports: Ghostty, iTerm2, Terminal.app. Other terminals: prints the command to 
 
 ```bash
 mkdir -p ~/.claude/skills/switch
-curl -sL https://raw.githubusercontent.com/ultracontext/ultracontext/main/apps/js-sdk/plugin/skills/switch/SKILL.md > ~/.claude/skills/switch/SKILL.md
+curl -sL https://raw.githubusercontent.com/infinitecontext/infinitecontext/main/apps/js-sdk/plugin/skills/switch/SKILL.md > ~/.claude/skills/switch/SKILL.md
 ```
 
-Then install the CLI: `npm i -g ultracontext`
+Then install the CLI: `npm i -g infinitecontext`
 
 ### Plugin mode (for marketplace)
 
@@ -70,27 +70,27 @@ Add to your Claude Code `settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "ultracontext": {
+    "infinitecontext": {
       "source": {
         "source": "github",
-        "repo": "ultracontext/ultracontext",
+        "repo": "infinitecontext/infinitecontext",
         "path": "apps/js-sdk/plugin"
       }
     }
   },
   "enabledPlugins": {
-    "ultracontext@ultracontext": true
+    "infinitecontext@infinitecontext": true
   }
 }
 ```
 
-This gives you `/ultracontext:switch` as a namespaced command.
+This gives you `/infinitecontext:switch` as a namespaced command.
 
 ### CLI only (no plugin)
 
 ```bash
-npm i -g ultracontext
-ultracontext switch codex
+npm i -g infinitecontext
+infinitecontext switch codex
 ```
 
 Works from any terminal. No Claude Code plugin needed.
@@ -107,6 +107,6 @@ Works from any terminal. No Claude Code plugin needed.
 
 ## Requirements
 
-- [ultracontext](https://www.npmjs.com/package/ultracontext) CLI (`npm i -g ultracontext`)
+- [infinitecontext](https://www.npmjs.com/package/infinitecontext) CLI (`npm i -g infinitecontext`)
 - Claude Code or Codex CLI installed
 - macOS, Linux, or Windows

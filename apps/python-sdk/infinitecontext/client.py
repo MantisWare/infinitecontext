@@ -1,11 +1,11 @@
-"""UltraContext API client."""
+"""InfiniteContext API client."""
 
 from typing import Any, Dict, List, Optional, Union, overload
 from urllib.parse import quote
 
 import httpx
 
-from .exceptions import UltraContextHttpError
+from .exceptions import InfiniteContextHttpError
 from .types import (
     AppendResponse,
     CreateContextResponse,
@@ -21,7 +21,7 @@ from .types import (
 class _BaseClient:
     """Base client with shared config."""
 
-    DEFAULT_BASE_URL = "https://api.ultracontext.ai"
+    DEFAULT_BASE_URL = "https://api.infinitecontext.ai"
     DEFAULT_TIMEOUT = 30.0
 
     def __init__(
@@ -46,8 +46,8 @@ class _BaseClient:
         return headers
 
 
-class UltraContext(_BaseClient):
-    """Sync UltraContext API client."""
+class InfiniteContext(_BaseClient):
+    """Sync InfiniteContext API client."""
 
     def _request(
         self,
@@ -80,7 +80,7 @@ class UltraContext(_BaseClient):
         # handle errors — accept_statuses lets callers surface non-2xx bodies (e.g. batch partial-fail)
         accepted = accept_statuses is not None and response.status_code in accept_statuses
         if not response.is_success and not accepted:
-            raise UltraContextHttpError(
+            raise InfiniteContextHttpError(
                 f"HTTP {response.status_code}: {response.text}",
                 status=response.status_code,
                 url=url,
@@ -287,8 +287,8 @@ class UltraContext(_BaseClient):
         return self._request("POST", "/contexts/delete-many", json={"ids": ids}, accept_statuses=[200, 207, 500])
 
 
-class AsyncUltraContext(_BaseClient):
-    """Async UltraContext API client."""
+class AsyncInfiniteContext(_BaseClient):
+    """Async InfiniteContext API client."""
 
     async def _request(
         self,
@@ -321,7 +321,7 @@ class AsyncUltraContext(_BaseClient):
         # handle errors — accept_statuses lets callers surface non-2xx bodies
         accepted = accept_statuses is not None and response.status_code in accept_statuses
         if not response.is_success and not accepted:
-            raise UltraContextHttpError(
+            raise InfiniteContextHttpError(
                 f"HTTP {response.status_code}: {response.text}",
                 status=response.status_code,
                 url=url,

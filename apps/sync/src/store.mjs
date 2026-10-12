@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { expandHome } from "./utils.mjs";
 
-const DEFAULT_DB_PATH = "~/.ultracontext/daemon.db";
+const DEFAULT_DB_PATH = "~/.infinitecontext/daemon.db";
 
 function ensureParentDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -24,7 +24,7 @@ function parseBool(value, fallback = false) {
 }
 
 export function resolveDbPath(env = process.env) {
-  return expandHome(env.ULTRACONTEXT_DB_FILE ?? DEFAULT_DB_PATH);
+  return expandHome(env.INFINITECONTEXT_DB_FILE ?? DEFAULT_DB_PATH);
 }
 
 export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {

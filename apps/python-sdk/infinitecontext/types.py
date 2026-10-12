@@ -1,4 +1,4 @@
-"""UltraContext type definitions."""
+"""InfiniteContext type definitions."""
 
 from typing import Any, Dict, List, Optional, TypedDict
 

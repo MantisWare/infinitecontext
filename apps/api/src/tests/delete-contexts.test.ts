@@ -1,8 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateKey, hashKey, KEY_PREFIX_LEN } from '@ultracontext/core';
-import { MemoryStorage } from '@ultracontext/core/testing';
+import { generateKey, hashKey, KEY_PREFIX_LEN } from '@infinitecontext/core';
+import { MemoryStorage } from '@infinitecontext/core/testing';
 import { createApp } from '../app';
 import type { ApiConfig } from '../types/api';
 
@@ -25,7 +25,7 @@ type TestResponse = Omit<Response, 'json'> & { json(): Promise<JsonBody> };
 const TEST_CONFIG: ApiConfig = {
     DATABASE_PROVIDER: 'postgres',
     DATABASE_URL: 'postgres://test',
-    ULTRACONTEXT_ADMIN_KEY: 'test-admin-key',
+    INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
 };
 
 async function setupTestApp() {

@@ -29,7 +29,7 @@ describe('verifyKey', () => {
     it('resolves { apiKeyId, projectId } for a matching token', async () => {
         const storage = new MemoryStorage();
 
-        const token = 'uc_test_abcdefghijklmnop';
+        const token = 'ic_test_abcdefghijklmnop';
         const projectId = await seedKey(storage, token);
 
         const result = await verifyKey(storage, token);
@@ -43,7 +43,7 @@ describe('verifyKey', () => {
     it('resolves null when no key matches the prefix', async () => {
         const storage = new MemoryStorage();
 
-        const result = await verifyKey(storage, 'uc_test_doesnotexist');
+        const result = await verifyKey(storage, 'ic_test_doesnotexist');
 
         assert.equal(result, null);
     });
@@ -52,7 +52,7 @@ describe('verifyKey', () => {
     it('resolves null against an empty store', async () => {
         const storage = new MemoryStorage();
 
-        const result = await verifyKey(storage, 'uc_test_anytokenvalue');
+        const result = await verifyKey(storage, 'ic_test_anytokenvalue');
 
         assert.equal(result, null);
     });
@@ -62,8 +62,8 @@ describe('verifyKey', () => {
         const storage = new MemoryStorage();
 
         // both tokens share the first KEY_PREFIX_LEN chars but diverge after
-        const stored = 'uc_test_aaaaaaaaaaaa';
-        const attempt = 'uc_test_aaaabbbbbbbb';
+        const stored = 'ic_test_aaaaaaaaaaaa';
+        const attempt = 'ic_test_aaaabbbbbbbb';
         assert.equal(stored.slice(0, KEY_PREFIX_LEN), attempt.slice(0, KEY_PREFIX_LEN));
 
         await seedKey(storage, stored);
@@ -77,7 +77,7 @@ describe('verifyKey', () => {
     it('matches on the first KEY_PREFIX_LEN characters of the token', async () => {
         const storage = new MemoryStorage();
 
-        const token = 'uc_test_prefixmatters_longtail_xyz';
+        const token = 'ic_test_prefixmatters_longtail_xyz';
         const projectId = await seedKey(storage, token);
 
         const result = await verifyKey(storage, token);
@@ -90,8 +90,8 @@ describe('verifyKey', () => {
     it('selects the correct key when several are stored', async () => {
         const storage = new MemoryStorage();
 
-        const tokenA = 'uc_test_AAAAAAAAAAAAtail';
-        const tokenB = 'uc_test_BBBBBBBBBBBBtail';
+        const tokenA = 'ic_test_AAAAAAAAAAAAtail';
+        const tokenB = 'ic_test_BBBBBBBBBBBBtail';
         const projectA = await seedKey(storage, tokenA);
         const projectB = await seedKey(storage, tokenB);
 
@@ -112,7 +112,7 @@ describe('verifyKey', () => {
     it('returns the stored row id and project id', async () => {
         const storage = new MemoryStorage();
 
-        const token = 'uc_test_identitycheck0';
+        const token = 'ic_test_identitycheck0';
         const projectId = await seedKey(storage, token);
 
         // inspect the seeded row to assert against verifyKey's return

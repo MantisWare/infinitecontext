@@ -1,24 +1,24 @@
 ---
 title: 'Configuration'
-description: 'Configure UltraContext via config file and environment variables'
+description: 'Configure InfiniteContext via config file and environment variables'
 ---
 
-UltraContext uses `~/.ultracontext/config.json` as the runtime single source of truth. The daemon, TUI, and MCP Server read from it during normal operation.
+InfiniteContext uses `~/.infinitecontext/config.json` as the runtime single source of truth. The daemon, TUI, and MCP Server read from it during normal operation.
 
-<Info>Run `ultracontext config` to create this file interactively.</Info>
+<Info>Run `infinitecontext config` to create this file interactively.</Info>
 
 ## Config file
 
 ```bash bash
-~/.ultracontext/config.json
+~/.infinitecontext/config.json
 ```
 
-Created automatically by the setup wizard (`ultracontext config`) or on first daemon start. Override the path with `ULTRACONTEXT_CONFIG_FILE`.
+Created automatically by the setup wizard (`infinitecontext config`) or on first daemon start. Override the path with `INFINITECONTEXT_CONFIG_FILE`.
 
 ```json JSON
 {
-    "apiKey": "uc_live_...",
-    "baseUrl": "https://api.ultracontext.ai",
+    "apiKey": "ic_live_...",
+    "baseUrl": "https://api.infinitecontext.ai",
     "bootstrapMode": "new_only",
     "claudeIncludeSubagents": false,
     "captureAgents": ["claude", "codex", "cursor"],
@@ -34,35 +34,35 @@ Created automatically by the setup wizard (`ultracontext config`) or on first da
 | `projectPaths` | `string[]` | `[]` | Limit capture to these absolute paths. Empty array = every project (no restriction). |
 | `bootstrapMode` | `"all" \| "new_only"` | `"all"` | `all` = ingest historical sessions on first run; `new_only` = only capture sessions started after the daemon launches. |
 
-The onboarding wizard (`ultracontext config`) writes these keys. Edit the file directly to adjust them later — the daemon hot-reloads on changes.
+The onboarding wizard (`infinitecontext config`) writes these keys. Edit the file directly to adjust them later — the daemon hot-reloads on changes.
 
 ## Who reads this
 
 | Component | How it reads config | Why |
 |-----------|---------------------|-----|
-| Daemon | Reads `~/.ultracontext/config.json` at boot and runtime | API key, base URL, bootstrap mode, ingestion behavior |
+| Daemon | Reads `~/.infinitecontext/config.json` at boot and runtime | API key, base URL, bootstrap mode, ingestion behavior |
 | TUI | Reads config through daemon WebSocket state | Displays and updates runtime configuration |
 | MCP Server (`apps/mcp-server/src/stdio.ts`) | Reads API key/base URL from the same runtime config | Authenticates and calls the Context API |
 
 ## Setup wizard
 
 ```bash bash
-ultracontext config
+infinitecontext config
 ```
 
 The wizard prompts for API key and bootstrap mode, then writes the config file.
 
 ## Environment variables
 
-Environment variables override values from `~/.ultracontext/config.json`.
+Environment variables override values from `~/.infinitecontext/config.json`.
 
 ### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ULTRACONTEXT_API_KEY` | -- | **Required.** Your UltraContext API key (`uc_live_...` or `uc_test_...`) |
-| `ULTRACONTEXT_BASE_URL` | `https://api.ultracontext.ai` | API base URL. Change for self-hosted deployments |
-| `ULTRACONTEXT_CONFIG_FILE` | `~/.ultracontext/config.json` | Path to the runtime config file |
+| `INFINITECONTEXT_API_KEY` | -- | **Required.** Your InfiniteContext API key (`ic_live_...` or `ic_test_...`) |
+| `INFINITECONTEXT_BASE_URL` | `https://api.infinitecontext.ai` | API base URL. Change for self-hosted deployments |
+| `INFINITECONTEXT_CONFIG_FILE` | `~/.infinitecontext/config.json` | Path to the runtime config file |
 
 ### Daemon
 
@@ -84,17 +84,17 @@ Environment variables override values from `~/.ultracontext/config.json`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ULTRACONTEXT_DB_FILE` | `~/.ultracontext/daemon.db` | Path to local SQLite database (offsets, dedupe, config cache) |
-| `ULTRACONTEXT_LOCK_FILE` | `~/.ultracontext/daemon.lock` | Lock file to prevent duplicate daemon instances |
-| `ULTRACONTEXT_DAEMON_LOG_FILE` | `~/.ultracontext/daemon.log` | Daemon log output file (background mode) |
+| `INFINITECONTEXT_DB_FILE` | `~/.infinitecontext/daemon.db` | Path to local SQLite database (offsets, dedupe, config cache) |
+| `INFINITECONTEXT_LOCK_FILE` | `~/.infinitecontext/daemon.lock` | Lock file to prevent duplicate daemon instances |
+| `INFINITECONTEXT_DAEMON_LOG_FILE` | `~/.infinitecontext/daemon.log` | Daemon log output file (background mode) |
 
 ### WebSocket (daemon-TUI communication)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ULTRACONTEXT_DAEMON_WS_HOST` | `127.0.0.1` | WebSocket server host |
-| `ULTRACONTEXT_DAEMON_WS_PORT` | auto | WebSocket server port |
-| `ULTRACONTEXT_DAEMON_INFO_FILE` | `~/.ultracontext/daemon.info` | File where daemon writes its WS connection info for TUI discovery |
+| `INFINITECONTEXT_DAEMON_WS_HOST` | `127.0.0.1` | WebSocket server host |
+| `INFINITECONTEXT_DAEMON_WS_PORT` | auto | WebSocket server port |
+| `INFINITECONTEXT_DAEMON_INFO_FILE` | `~/.infinitecontext/daemon.info` | File where daemon writes its WS connection info for TUI discovery |
 
 ### Source globs
 
@@ -130,7 +130,7 @@ Environment variables override values from `~/.ultracontext/config.json`.
 Resolution order for runtime values:
 
 1. Environment variables
-2. `~/.ultracontext/config.json`
+2. `~/.infinitecontext/config.json`
 3. Built-in defaults
 
 ## Dotenv
@@ -141,5 +141,5 @@ When running from source, daemon and TUI load environment variables from `.env` 
 2. `apps/daemon/.env` or `apps/tui/.env`
 3. Custom path via `DOTENV_CONFIG_PATH`
 
-<Info>When installed globally via `npm install -g ultracontext`, use `~/.ultracontext/config.json` for API key and bootstrap mode. Environment variables still work for all other settings.</Info>
+<Info>When installed globally via `npm install -g infinitecontext`, use `~/.infinitecontext/config.json` for API key and bootstrap mode. Environment variables still work for all other settings.</Info>
 

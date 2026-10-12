@@ -1,4 +1,4 @@
-export type UltraContextConfig = {
+export type InfiniteContextConfig = {
     apiKey: string;
     baseUrl?: string;
     fetch?: typeof fetch;
@@ -109,29 +109,29 @@ export type DeleteManyResponse = {
     deleted_count: number;
 };
 
-export class UltraContextHttpError extends Error {
+export class InfiniteContextHttpError extends Error {
     readonly status: number;
     readonly url: string;
     readonly bodyText?: string;
 
     constructor(args: { status: number; url: string; bodyText?: string }) {
-        super(`UltraContext request failed: ${args.status} ${args.url}`);
-        this.name = 'UltraContextHttpError';
+        super(`InfiniteContext request failed: ${args.status} ${args.url}`);
+        this.name = 'InfiniteContextHttpError';
         this.status = args.status;
         this.url = args.url;
         this.bodyText = args.bodyText;
     }
 }
 
-export class UltraContext {
+export class InfiniteContext {
     private readonly baseUrl: string;
     private readonly apiKey: string;
     private readonly fetchFn: typeof fetch;
     private readonly headers?: Record<string, string>;
     private readonly timeoutMs?: number;
 
-    constructor(cfg: UltraContextConfig) {
-        this.baseUrl = (cfg.baseUrl ?? 'https://api.ultracontext.ai').replace(/\/+$/, '');
+    constructor(cfg: InfiniteContextConfig) {
+        this.baseUrl = (cfg.baseUrl ?? 'https://api.infinitecontext.ai').replace(/\/+$/, '');
         this.apiKey = cfg.apiKey;
         this.fetchFn = cfg.fetch ?? fetch;
         this.headers = cfg.headers;
@@ -259,7 +259,7 @@ export class UltraContext {
             const accepted = init.acceptStatuses?.includes(res.status) ?? false;
             if (!res.ok && !accepted) {
                 const bodyText = await safeReadText(res);
-                throw new UltraContextHttpError({ status: res.status, url, bodyText });
+                throw new InfiniteContextHttpError({ status: res.status, url, bodyText });
             }
 
             if (res.status === 204) return undefined as unknown as T;

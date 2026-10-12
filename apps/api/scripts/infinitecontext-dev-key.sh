@@ -15,12 +15,12 @@ set -a
 source "$ENV_FILE"
 set +a
 
-BASE_URL="${ULTRACONTEXT_BASE_URL:-http://127.0.0.1:8787}"
-ADMIN_KEY="${ULTRACONTEXT_ADMIN_KEY:-}"
+BASE_URL="${INFINITECONTEXT_BASE_URL:-http://127.0.0.1:8787}"
+ADMIN_KEY="${INFINITECONTEXT_ADMIN_KEY:-}"
 KEY_NAME="${1:-local-dev}"
 
 if [[ -z "$ADMIN_KEY" ]]; then
-  echo "Missing ULTRACONTEXT_ADMIN_KEY in $ENV_FILE"
+  echo "Missing INFINITECONTEXT_ADMIN_KEY in $ENV_FILE"
   exit 1
 fi
 
@@ -39,17 +39,17 @@ api_key="$(printf '%s' "$response" | node -e "let raw=''; process.stdin.setEncod
 tmp_file="$(mktemp)"
 awk -v key="$api_key" '
   BEGIN { replaced = 0 }
-  /^ULTRACONTEXT_API_KEY=/ {
-    print "ULTRACONTEXT_API_KEY=" key
+  /^INFINITECONTEXT_API_KEY=/ {
+    print "INFINITECONTEXT_API_KEY=" key
     replaced = 1
     next
   }
   { print }
   END {
-    if (!replaced) print "ULTRACONTEXT_API_KEY=" key
+    if (!replaced) print "INFINITECONTEXT_API_KEY=" key
   }
 ' "$ENV_FILE" > "$tmp_file"
 mv "$tmp_file" "$ENV_FILE"
 
-echo "Updated ULTRACONTEXT_API_KEY in $ENV_FILE"
+echo "Updated INFINITECONTEXT_API_KEY in $ENV_FILE"
 echo "New key prefix: ${api_key:0:12}"

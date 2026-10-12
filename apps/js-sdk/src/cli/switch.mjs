@@ -1,4 +1,4 @@
-// CLI handler for `ultracontext switch <target>`
+// CLI handler for `infinitecontext switch <target>`
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import os from "node:os";
@@ -59,7 +59,7 @@ function parseArgs() {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  if (!opts.target) throw new Error("Missing target. Usage: ultracontext switch <codex|claude>");
+  if (!opts.target) throw new Error("Missing target. Usage: infinitecontext switch <codex|claude>");
   if (!VALID_TARGETS.includes(opts.target)) {
     throw new Error(`Invalid target: ${opts.target}. Must be: ${VALID_TARGETS.join(", ")}`);
   }
@@ -146,7 +146,7 @@ async function doSwitch(opts) {
   const source = opts.target === "codex" ? "claude" : "codex";
 
   // dynamic import — parsers is a workspace dep
-  const { switchSession } = await import("@ultracontext/parsers");
+  const { switchSession } = await import("@infinitecontext/parsers");
 
   const result = await switchSession({
     source,

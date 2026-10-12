@@ -5,11 +5,11 @@ services:
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ultracontext}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ultracontext}
-      POSTGRES_DB: ${POSTGRES_DB:-ultracontext}
+      POSTGRES_USER: ${POSTGRES_USER:-infinitecontext}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-infinitecontext}
+      POSTGRES_DB: ${POSTGRES_DB:-infinitecontext}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ultracontext} -d ${POSTGRES_DB:-ultracontext}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infinitecontext} -d ${POSTGRES_DB:-infinitecontext}"]
       interval: 5s
       timeout: 5s
       retries: 20

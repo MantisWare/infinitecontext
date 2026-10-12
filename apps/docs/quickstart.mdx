@@ -6,18 +6,18 @@ description: 'Sync and share agent context in 2 minutes'
 ## Prerequisites
 
 - **Node.js >= 22**
-- **A Context API key** -- [Get yours](https://ultracontext.ai) or [self-host](/guides/self-hosting)
+- **A Context API key** -- [Get yours](https://infinitecontext.ai) or [self-host](/guides/self-hosting)
 
 ## 1. Install
 
 ```bash bash
-npm install -g ultracontext
+npm install -g infinitecontext
 ```
 
 ## 2. Run
 
 ```bash bash
-ultracontext
+infinitecontext
 ```
 
 The setup wizard asks for your API key and bootstrap mode. After that, the daemon starts syncing agent sessions in the background and opens the terminal dashboard.
@@ -32,7 +32,7 @@ Give your agents access to context from other agents.
 ### Claude Code
 
 ```bash bash
-claude mcp add ultracontext -- npx tsx /path/to/ultracontext/apps/mcp-server/src/stdio.ts
+claude mcp add infinitecontext -- npx tsx /path/to/infinitecontext/apps/mcp-server/src/stdio.ts
 ```
 
 ### Codex
@@ -40,12 +40,12 @@ claude mcp add ultracontext -- npx tsx /path/to/ultracontext/apps/mcp-server/src
 Add to `~/.codex/config.toml`:
 
 ```toml TOML
-[mcp_servers.ultracontext]
+[mcp_servers.infinitecontext]
 command = "npx"
-args = ["tsx", "/path/to/ultracontext/apps/mcp-server/src/stdio.ts"]
+args = ["tsx", "/path/to/infinitecontext/apps/mcp-server/src/stdio.ts"]
 ```
 
-<Info>The MCP server reads your API key from `~/.ultracontext/config.json` automatically -- the same config file used by the CLI.</Info>
+<Info>The MCP server reads your API key from `~/.infinitecontext/config.json` automatically -- the same config file used by the CLI.</Info>
 
 ## 4. Try it
 

@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@ultracontext/core';
+import type { StorageAdapter } from '@infinitecontext/core';
 import type { ApiConfig } from '../types/api';
 import type { HttpMiddleware } from '../types/http';
 

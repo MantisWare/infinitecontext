@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { heroArtForWidth } from "@ultracontext/sync/ui/hero-art";
+import { heroArtForWidth } from "@infinitecontext/sync/ui/hero-art";
 import {
   buildOnboardingConfigPatch,
   ONBOARDING_AGENT_OPTIONS,
   ONBOARDING_AGENT_ALL_OPTION,
   ONBOARDING_CAPTURE_OPTIONS,
-} from "@ultracontext/sync/onboarding-preferences";
-import { discoverRecentProjects } from "@ultracontext/sync/recent-projects";
+} from "@infinitecontext/sync/onboarding-preferences";
+import { discoverRecentProjects } from "@infinitecontext/sync/recent-projects";
 
 // agents list rendered in the wizard — "All" shortcut first, then each agent
 const AGENT_ROWS = [ONBOARDING_AGENT_ALL_OPTION, ...ONBOARDING_AGENT_OPTIONS];
@@ -34,14 +34,14 @@ function ListRow({ focused, checked, label, multi = false, keyProp }) {
 
 // ── config helpers ──────────────────────────────────────────────
 
-// resolve at call time. ULTRACONTEXT_CONFIG_HOME lets you redirect config.json
+// resolve at call time. INFINITECONTEXT_CONFIG_HOME lets you redirect config.json
 // without touching HOME, so project inference still reads real session dirs.
 function configPaths() {
-  const home = process.env.ULTRACONTEXT_CONFIG_HOME
+  const home = process.env.INFINITECONTEXT_CONFIG_HOME
     || process.env.HOME
     || process.env.USERPROFILE
     || "~";
-  const dir = path.join(home, ".ultracontext");
+  const dir = path.join(home, ".infinitecontext");
   return { dir, path: path.join(dir, "config.json") };
 }
 
@@ -63,7 +63,7 @@ function writeConfig(patch) {
 // ── validation ──────────────────────────────────────────────────
 
 function isValidKey(key) {
-  return /^uc_(live|test)_/.test(key);
+  return /^ic_(live|test)_/.test(key);
 }
 
 // ── step constants ──────────────────────────────────────────────
@@ -71,7 +71,7 @@ function isValidKey(key) {
 const STEPS = ["welcome", "mode", "url", "key", "agents", "projects", "capture", "launch", "done"];
 
 const MODE_OPTIONS = [
-  { label: "Login (ultracontext.ai)", value: "cloud" },
+  { label: "Login (infinitecontext.ai)", value: "cloud" },
   { label: "Self-host", value: "selfhost" },
 ];
 
@@ -105,7 +105,7 @@ function Onboarding({ onDone }) {
   // stack of prior steps — every forward transition pushes, goBack pops
   const [history, setHistory] = React.useState([]);
   const [hosting, setHosting] = React.useState("cloud");
-  const [baseUrl, setBaseUrl] = React.useState("https://api.ultracontext.ai");
+  const [baseUrl, setBaseUrl] = React.useState("https://api.infinitecontext.ai");
   const [apiKey, setApiKey] = React.useState("");
   // multi-select agent list — default: watch them all
   const [captureAgents, setCaptureAgents] = React.useState(
@@ -156,8 +156,8 @@ function Onboarding({ onDone }) {
       baseUrl: finalUrl,
       ...buildOnboardingConfigPatch(preferences),
     });
-    process.env.ULTRACONTEXT_API_KEY = finalKey;
-    process.env.ULTRACONTEXT_BASE_URL = finalUrl;
+    process.env.INFINITECONTEXT_API_KEY = finalKey;
+    process.env.INFINITECONTEXT_BASE_URL = finalUrl;
     pushStep("launch");
   }, [pushStep]);
 
@@ -193,7 +193,7 @@ function Onboarding({ onDone }) {
         if (chosen === "selfhost") {
           pushStep("url");
         } else {
-          setBaseUrl("https://api.ultracontext.ai");
+          setBaseUrl("https://api.infinitecontext.ai");
           pushStep("key");
         }
       }
@@ -233,7 +233,7 @@ function Onboarding({ onDone }) {
           return;
         }
         if (!isValidKey(trimmed)) {
-          setError("Key must start with uc_live_ or uc_test_");
+          setError("Key must start with ic_live_ or ic_test_");
           return;
         }
         setApiKey(trimmed);
@@ -378,7 +378,7 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
-      React.createElement(Text, { color: "white", bold: true }, "Welcome to UltraContext"),
+      React.createElement(Text, { color: "white", bold: true }, "Welcome to InfiniteContext"),
       React.createElement(Box, { height: 1 }),
       React.createElement(Text, { color: "white" }, "Press Enter to begin setup...")
     );
@@ -415,7 +415,7 @@ function Onboarding({ onDone }) {
 
   if (step === "key") {
     const keyPrompt = hosting === "cloud"
-      ? "Paste your API key from ultracontext.ai:"
+      ? "Paste your API key from infinitecontext.ai:"
       : "Enter your API key:";
 
     content = React.createElement(
@@ -426,7 +426,7 @@ function Onboarding({ onDone }) {
       React.createElement(Text, { color: "white", bold: true }, `> ${keyInput}_`),
       error ? React.createElement(Text, { color: "red" }, error) : null,
       React.createElement(Box, { height: 1 }),
-      React.createElement(Text, { color: "gray" }, "Format: uc_live_... or uc_test_... | Enter to confirm")
+      React.createElement(Text, { color: "gray" }, "Format: ic_live_... or ic_test_... | Enter to confirm")
     );
   }
 
@@ -439,7 +439,7 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
-      React.createElement(Text, { color: "white", bold: true }, "Which agents should UltraContext watch?"),
+      React.createElement(Text, { color: "white", bold: true }, "Which agents should InfiniteContext watch?"),
       React.createElement(Text, { color: "gray" }, `${selectedCount} of ${totalCount} selected`),
       React.createElement(Box, { height: 1 }),
       ...AGENT_ROWS.map((opt, i) => ListRow({
@@ -465,7 +465,7 @@ function Onboarding({ onDone }) {
     content = React.createElement(
       Box,
       { flexDirection: "column" },
-      React.createElement(Text, { color: "white", bold: true }, "Which projects should UltraContext auto-capture?"),
+      React.createElement(Text, { color: "white", bold: true }, "Which projects should InfiniteContext auto-capture?"),
       React.createElement(Text, { color: "gray" }, `${summary} \u00B7 their agent sessions will be ingested`),
       React.createElement(Box, { height: 1 }),
       // "All projects" meta row rendered with a friendly label; the sentinel ALL_PROJECTS

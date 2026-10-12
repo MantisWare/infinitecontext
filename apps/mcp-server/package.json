@@ -1,5 +1,5 @@
 {
-  "name": "ultracontext-mcp-server",
+  "name": "infinitecontext-mcp-server",
   "type": "module",
   "version": "0.1.0",
   "exports": {
@@ -9,7 +9,7 @@
     "./reader-sdk": "./src/reader-sdk.ts"
   },
   "bin": {
-    "ultracontext-mcp": "./dist/stdio.js"
+    "infinitecontext-mcp": "./dist/stdio.js"
   },
   "scripts": {
     "build": "tsx src/stdio.ts --help || true",
@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "ultracontext": "workspace:*",
+    "infinitecontext": "workspace:*",
     "zod": "^3.25.67"
   },
   "devDependencies": {

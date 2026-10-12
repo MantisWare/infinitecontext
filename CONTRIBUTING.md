@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for your interest in contributing to UltraContext!
+Thanks for your interest in contributing to InfiniteContext!
 
 ## Setup
 
 ```bash
-git clone https://github.com/ultracontext/ultracontext.git
-cd ultracontext
+git clone https://github.com/MantisWare/infinitecontext.git
+cd infinitecontext
 pnpm install
 ```
 
@@ -14,16 +14,16 @@ pnpm install
 
 ```bash
 # start PostgreSQL
-pnpm ultracontext:db:up
+pnpm infinitecontext:db:up
 
 # apply schema
-pnpm ultracontext:db:migrate
+pnpm infinitecontext:db:migrate
 
 # generate a dev API key
-pnpm ultracontext:key:local
+pnpm infinitecontext:key:local
 
 # start the API
-pnpm ultracontext:api
+pnpm infinitecontext:api
 ```
 
 ### Run the Context Hub locally
@@ -37,7 +37,7 @@ pnpm dev:sync      # start sync (daemon + TUI)
 | Directory | What it is |
 |-----------|-----------|
 | `apps/api` | Context API (Hono + Drizzle) |
-| `apps/js-sdk` | Node.js SDK + CLI (`ultracontext` npm package) |
+| `apps/js-sdk` | Node.js SDK + CLI (`infinitecontext` npm package) |
 | `apps/python-sdk` | Python SDK |
 | `apps/sync` | Sync daemon + TUI (dev mode) |
 | `apps/postgres` | Docker Compose + schema for local PostgreSQL |
@@ -62,4 +62,4 @@ refactor(tui): simplify layout logic
 
 ## Need help?
 
-Open an issue or reach out on [Discord](https://discord.gg/ultracontext).
+Open an issue or reach out on [Discord](https://discord.gg/infinitecontext).

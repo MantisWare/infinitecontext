@@ -16,7 +16,7 @@ export { parseGenericJsonlLine } from "./generic.mjs";
 export { extractModifiedFiles } from "./extract-modified-files.mjs";
 export { extractClaudeTokenUsage } from "./token-usage.mjs";
 
-// writers: UltraContext → agent JSONL
+// writers: InfiniteContext → agent JSONL
 export { writeClaudeSession, hasLocalClaudeSession } from "./writers/claude.mjs";
 export { writeCodexSession, hasLocalCodexSession } from "./writers/codex.mjs";
 

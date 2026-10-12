@@ -1,12 +1,12 @@
 ---
 title: 'Introduction'
-description: 'UltraContext API reference'
+description: 'InfiniteContext API reference'
 ---
 
 ## Base URL
 
 ```
-https://api.ultracontext.ai
+https://api.infinitecontext.ai
 ```
 
 ## Authentication
@@ -14,8 +14,8 @@ https://api.ultracontext.ai
 All endpoints require a Bearer token. Get your API key from the dashboard.
 
 ```bash
-curl https://api.ultracontext.ai/contexts \
-  -H "Authorization: Bearer uc_live_xxxxx"
+curl https://api.infinitecontext.ai/contexts \
+  -H "Authorization: Bearer ic_live_xxxxx"
 ```
 
 ## Quick Example
@@ -24,8 +24,8 @@ Create a context, append a message, and retrieve it:
 
 <CodeGroup>
 ```typescript Node.js
-import { UltraContext } from 'ultracontext';
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+import { InfiniteContext } from 'infinitecontext';
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 
 // create a context
 const ctx = await uc.create();
@@ -38,10 +38,10 @@ const { data } = await uc.get(ctx.id);
 ```
 
 ```python Python
-from ultracontext import UltraContext
+from infinitecontext import InfiniteContext
 import os
 
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 
 # create a context
 ctx = uc.create()
@@ -55,19 +55,19 @@ result = uc.get(ctx["id"])
 
 ```bash curl
 # create a context
-curl -X POST https://api.ultracontext.ai/contexts \
-  -H "Authorization: Bearer $ULTRACONTEXT_API_KEY" \
+curl -X POST https://api.infinitecontext.ai/contexts \
+  -H "Authorization: Bearer $INFINITECONTEXT_API_KEY" \
   -H "Content-Type: application/json"
 
 # append a message
-curl -X POST https://api.ultracontext.ai/contexts/ctx_abc123 \
-  -H "Authorization: Bearer $ULTRACONTEXT_API_KEY" \
+curl -X POST https://api.infinitecontext.ai/contexts/ctx_abc123 \
+  -H "Authorization: Bearer $INFINITECONTEXT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"role": "user", "content": "Hello!"}'
 
 # retrieve the context
-curl https://api.ultracontext.ai/contexts/ctx_abc123 \
-  -H "Authorization: Bearer $ULTRACONTEXT_API_KEY"
+curl https://api.infinitecontext.ai/contexts/ctx_abc123 \
+  -H "Authorization: Bearer $INFINITECONTEXT_API_KEY"
 ```
 </CodeGroup>
 

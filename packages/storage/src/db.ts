@@ -3,7 +3,7 @@ import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { bigint, bigserial, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import postgres, { type Sql } from 'postgres';
 
-const GLOBAL_DB_REGISTRY_KEY = '__ultracontextPgRegistry';
+const GLOBAL_DB_REGISTRY_KEY = '__infinitecontextPgRegistry';
 
 export const projects = pgTable('projects', {
     id: bigserial('id', { mode: 'number' }).primaryKey(),

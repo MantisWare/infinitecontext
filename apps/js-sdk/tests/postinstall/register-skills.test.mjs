@@ -35,7 +35,7 @@ describe("registerSkills — fresh install", () => {
       "# switch skill\n"
     );
     assert.equal(
-      fs.readFileSync(path.join(agentDir, "switch", ".ultracontext-version"), "utf8"),
+      fs.readFileSync(path.join(agentDir, "switch", ".infinitecontext-version"), "utf8"),
       "1.2.3"
     );
   });
@@ -92,10 +92,10 @@ describe("registerSkills — upgrade", () => {
     const skillDir = path.join(agentDir, "switch");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# v1\n");
-    fs.writeFileSync(path.join(skillDir, ".ultracontext-version"), "1.0.0");
+    fs.writeFileSync(path.join(skillDir, ".infinitecontext-version"), "1.0.0");
     registerSkills({ pluginDir, agentDirs: [agentDir], packageVersion: "2.0.0" });
     assert.equal(fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8"), "# v2\n");
-    assert.equal(fs.readFileSync(path.join(skillDir, ".ultracontext-version"), "utf8"), "2.0.0");
+    assert.equal(fs.readFileSync(path.join(skillDir, ".infinitecontext-version"), "utf8"), "2.0.0");
   });
 
   it("no-ops when version marker matches current", () => {
@@ -103,7 +103,7 @@ describe("registerSkills — upgrade", () => {
     const skillDir = path.join(agentDir, "switch");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# existing v2 content\n");
-    fs.writeFileSync(path.join(skillDir, ".ultracontext-version"), "2.0.0");
+    fs.writeFileSync(path.join(skillDir, ".infinitecontext-version"), "2.0.0");
     registerSkills({ pluginDir, agentDirs: [agentDir], packageVersion: "2.0.0" });
     // content untouched
     assert.equal(

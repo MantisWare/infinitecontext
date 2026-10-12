@@ -1,9 +1,9 @@
-import { UltraContext } from "ultracontext";
+import { InfiniteContext } from "infinitecontext";
 import type { ContextReader } from "./types.js";
 
 // -- SDK-backed reader (used by stdio + http standalone transports) -----------
 
-export function sdkReader(uc: UltraContext): ContextReader {
+export function sdkReader(uc: InfiniteContext): ContextReader {
   return {
     listContexts: (input) => uc.get(input),
 

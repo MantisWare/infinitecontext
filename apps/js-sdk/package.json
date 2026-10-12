@@ -1,13 +1,13 @@
 {
-    "name": "ultracontext",
-    "description": "JavaScript/TypeScript SDK + CLI for the UltraContext API",
+    "name": "infinitecontext",
+    "description": "JavaScript/TypeScript SDK + CLI for the InfiniteContext API",
     "type": "module",
     "version": "1.5.0",
     "engines": {
         "node": ">=22.12.0"
     },
     "bin": {
-        "ultracontext": "ultracontext.mjs"
+        "infinitecontext": "infinitecontext.mjs"
     },
     "scripts": {
         "build": "tsdown",
@@ -20,15 +20,15 @@
     "types": "./dist/index.d.mts",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/ultracontext/ultracontext.git",
+        "url": "git+https://github.com/MantisWare/infinitecontext.git",
         "directory": "apps/js-sdk"
     },
-    "author": "Ultracontext",
+    "author": "Waldo Marais / MantisWare",
     "license": "Apache-2.0",
     "bugs": {
-        "url": "https://github.com/ultracontext/ultracontext/issues"
+        "url": "https://github.com/MantisWare/infinitecontext/issues"
     },
-    "homepage": "https://ultracontext.ai",
+    "homepage": "https://infinitecontext.ai",
     "keywords": [
         "ai",
         "llm",
@@ -58,7 +58,7 @@
     "files": [
         "dist/",
         "lib/",
-        "ultracontext.mjs",
+        "infinitecontext.mjs",
         "postinstall.mjs",
         "assets/",
         "plugin/"
@@ -71,8 +71,8 @@
         "react": "^19.2.4"
     },
     "devDependencies": {
-        "@ultracontext/parsers": "workspace:*",
-        "@ultracontext/sync": "workspace:*",
+        "@infinitecontext/parsers": "workspace:*",
+        "@infinitecontext/sync": "workspace:*",
         "node-pty": "^1.1.0",
         "tsdown": "^0.20.3",
         "typescript": "^5.9.3"

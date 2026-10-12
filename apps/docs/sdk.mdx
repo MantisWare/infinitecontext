@@ -5,29 +5,29 @@ description: 'Manage your agent context programmatically'
 
 ## Prerequisites
 
-- **An UltraContext API key** -- [Get yours](https://ultracontext.ai) or [self-host](/guides/self-hosting)
+- **An InfiniteContext API key** -- [Get yours](https://infinitecontext.ai) or [self-host](/guides/self-hosting)
 
 ## 1. Install
 
 <CodeGroup>
 ```bash npm
-npm install ultracontext
+npm install infinitecontext
 ```
 
 ```bash yarn
-yarn add ultracontext
+yarn add infinitecontext
 ```
 
 ```bash pnpm
-pnpm add ultracontext
+pnpm add infinitecontext
 ```
 
 ```bash bun
-bun add ultracontext
+bun add infinitecontext
 ```
 
 ```bash pip
-pip install ultracontext
+pip install infinitecontext
 ```
 </CodeGroup>
 
@@ -35,8 +35,8 @@ pip install ultracontext
 
 <CodeGroup>
 ```typescript Node.js
-import { UltraContext } from 'ultracontext';
-const uc = new UltraContext({ apiKey: process.env.ULTRACONTEXT_API_KEY });
+import { InfiniteContext } from 'infinitecontext';
+const uc = new InfiniteContext({ apiKey: process.env.INFINITECONTEXT_API_KEY });
 const ctx = await uc.create();
 
 // append messages
@@ -61,8 +61,8 @@ const response = await generateText({ model, messages: data });
 
 ```python Python
 import os
-from ultracontext import UltraContext
-uc = UltraContext(api_key=os.environ["ULTRACONTEXT_API_KEY"])
+from infinitecontext import InfiniteContext
+uc = InfiniteContext(api_key=os.environ["INFINITECONTEXT_API_KEY"])
 ctx = uc.create()
 
 # append messages
@@ -88,7 +88,7 @@ response = generate_text(model=model, messages=result["data"])
 
 Every update and delete auto-creates a new version. Retrieve any previous state with a single call.
 
-<Info>UltraContext is **framework-agnostic** and **schema-free**. Use it with any LLM provider and store context in any format you need.</Info>
+<Info>InfiniteContext is **framework-agnostic** and **schema-free**. Use it with any LLM provider and store context in any format you need.</Info>
 
 ## 3. Schema-free messages
 

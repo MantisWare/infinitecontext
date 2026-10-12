@@ -6,7 +6,7 @@ import path from "node:path";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // skip update check in dev
-process.env.ULTRACONTEXT_DEV = "1";
+process.env.INFINITECONTEXT_DEV = "1";
 
 // spawn daemon with --watch in background
 const daemon = spawn("node", ["--watch", path.join(__dirname, "index.mjs")], {
