@@ -1,3 +1,5 @@
+import { resolveRequiredBaseUrl } from './base-url';
+
 export type InfiniteContextConfig = {
     apiKey?: string;
     accessToken?: string;
@@ -114,6 +116,8 @@ export type DeleteManyResponse = {
     deleted_count: number;
 };
 
+export { DOCS_API_BASE_URL_PLACEHOLDER, KEYS_AND_SERVICES_DOC_URL, MissingClientConfigError } from './base-url';
+
 export class InfiniteContextHttpError extends Error {
     readonly status: number;
     readonly url: string;
@@ -138,7 +142,7 @@ export class InfiniteContext {
     private readonly timeoutMs?: number;
 
     constructor(cfg: InfiniteContextConfig) {
-        this.baseUrl = (cfg.baseUrl ?? 'https://api.infinitecontext.ai').replace(/\/+$/, '');
+        this.baseUrl = resolveRequiredBaseUrl(cfg);
         this.apiKey = cfg.apiKey;
         this.accessToken = cfg.accessToken;
         this.getAccessTokenFn = cfg.getAccessToken;

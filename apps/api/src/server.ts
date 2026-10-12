@@ -5,10 +5,13 @@ import { buildAuthRuntimeConfig } from '@infinitecontext/auth';
 import { resolveMailer } from './auth/mailer';
 import { createApp } from './app';
 import { getApiConfig } from './config.node';
+import { logStartupConfigSummary, warnIfJwtSecretMissing, warnIfMailMisconfigured } from './runtime-config';
 import { createStorageAdapter } from '@infinitecontext/storage';
 import { createAuthRepository } from '@infinitecontext/storage/auth';
 
 // -- Node.js entrypoint -------------------------------------------------------
+
+warnIfJwtSecretMissing(process.env);
 
 const config = getApiConfig();
 const storage = createStorageAdapter(config);
@@ -23,8 +26,12 @@ const app = createApp({
     authRepo,
     mailer,
     clientIpOptions: { trustProxy, runtime: 'node' },
+    runtimeEnv: process.env,
 });
 const port = Number(process.env.PORT ?? 8787);
+
+logStartupConfigSummary(process.env);
+void warnIfMailMisconfigured(process.env, 'node');
 
 serve({ fetch: app.fetch, port });
 

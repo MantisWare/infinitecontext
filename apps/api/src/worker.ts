@@ -63,6 +63,7 @@ export default {
                 authRepo,
                 mailer,
                 clientIpOptions: { trustProxy, runtime: 'worker' },
+                runtimeEnv: env as unknown as Record<string, string | undefined>,
             });
         }
 

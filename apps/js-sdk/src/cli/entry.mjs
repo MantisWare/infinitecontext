@@ -38,7 +38,7 @@ Commands:
   sync start    Start daemon in background (no TUI)
   sync stop     Stop a running daemon
   sync status   Show daemon status
-  config        Run the setup wizard
+  config        Config wizard and settings (show, set, doctor, …)
   login         Sign in with email/password or Google OAuth
   logout        Sign out and clear local session tokens
   whoami        Show the signed-in account
@@ -50,7 +50,8 @@ Commands:
 
 Environment:
   INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
-  INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
+  INFINITECONTEXT_BASE_URL  API base URL (required for self-host — no hosted default)
+  INFINITECONTEXT_NO_UPDATE_CHECK  Set to 1 to skip optional npm version check
 
 Vault: Losing both your vault passphrase and recovery key means permanent data loss.
 Run \`infinitecontext vault help\` for init/unlock/recover commands.
@@ -375,6 +376,7 @@ function printUpdateNotice(current, latest) {
 
 // check on every invocation, no cache — like Claude Code
 async function checkForUpdate() {
+  if (String(process.env.INFINITECONTEXT_NO_UPDATE_CHECK ?? "").trim() === "1") return;
   const current = readVersion();
   if (current === "unknown") return;
 
@@ -460,7 +462,8 @@ async function run() {
       break;
 
     case "config": {
-      const configResult = await runOnboarding();
+      const { runConfigCli } = await import("./config-cli.mjs");
+      const configResult = await runConfigCli(process.argv.slice(3));
       if (configResult?.launchTui) {
         if (!isDaemonRunning()) await launchSyncDaemon();
         await launchTui();

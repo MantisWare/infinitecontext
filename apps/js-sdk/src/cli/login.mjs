@@ -4,9 +4,8 @@ import os from "node:os";
 import process from "node:process";
 import readline from "node:readline/promises";
 
+import { resolveBaseUrl, KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
 import { saveCredentials } from "./credentials.mjs";
-
-const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
 const LOCAL_CALLBACK_PORT = 53682;
 
 function parseFlagValue(argv, flagName) {
@@ -28,7 +27,7 @@ function parseArgs(argv) {
     localhost: booleanFlags.has("localhost"),
     passwordStdin: booleanFlags.has("password-stdin"),
     email: parseFlagValue(argv, "email") ?? process.env.INFINITECONTEXT_LOGIN_EMAIL ?? "",
-    baseUrl: parseFlagValue(argv, "base-url") ?? process.env.INFINITECONTEXT_BASE_URL ?? DEFAULT_BASE_URL,
+    baseUrl: parseFlagValue(argv, "base-url"),
   };
 }
 
@@ -260,9 +259,41 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function fetchAuthProviders(baseUrl) {
+  try {
+    const res = await fetch(`${baseUrl}/auth/providers`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function runLogin(argv = process.argv.slice(3)) {
   const args = parseArgs(argv);
-  const baseUrl = String(args.baseUrl).replace(/\/+$/, "");
+  let baseUrl;
+  try {
+    baseUrl = String(args.baseUrl ?? resolveBaseUrl({ required: true })).replace(/\/+$/, "");
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(`Set INFINITECONTEXT_BASE_URL or: infinitecontext config set server http://127.0.0.1:8787`);
+    console.error(`Documentation: ${KEYS_AND_SERVICES_DOC_URL}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (args.google) {
+    const providers = await fetchAuthProviders(baseUrl);
+    if (providers && providers.google === false) {
+      console.error(
+        "Google sign-in is not enabled on this server (missing INFINITECONTEXT_GOOGLE_CLIENT_ID / SECRET). " +
+          "Use email/password login, or configure Google OAuth on the server.",
+      );
+      console.error(`See ${KEYS_AND_SERVICES_DOC_URL}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   if (args.google && args.localhost) {
     await loginWithGoogleLocalhost(baseUrl);

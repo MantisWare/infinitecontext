@@ -9,14 +9,14 @@
     },
     "observability": {
         "enabled": false,
-        "traces": { "enabled": true }
+        "traces": { "enabled": false }
     },
-    "workers_dev": false,
-    "preview_urls": false,
+    "workers_dev": true,
+    "preview_urls": true,
     "routes": [
         {
-            "pattern": "api.infinitecontext.ai",
-            "zone_name": "infinitecontext.ai",
+            "pattern": "api.your-domain.example",
+            "zone_name": "your-domain.example",
             "custom_domain": true
         }
     ],
@@ -24,7 +24,7 @@
     "kv_namespaces": [
         {
             "binding": "INFINITECONTEXT_API_KEYS_CACHE",
-            "id": "049bf353590f4c48a7220e8472065d39"
+            "id": "<YOUR_KV_NAMESPACE_ID>"
         }
     ]
 }

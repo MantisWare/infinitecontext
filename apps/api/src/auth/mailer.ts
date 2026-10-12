@@ -84,7 +84,7 @@ export async function resolveMailer(env: Record<string, string | undefined>, run
         return createConsoleMailer();
     }
 
-    const provider = String(env.INFINITECONTEXT_MAIL_PROVIDER ?? 'resend').trim().toLowerCase();
+    const provider = String(env.INFINITECONTEXT_MAIL_PROVIDER ?? 'smtp').trim().toLowerCase();
     if (provider === 'resend') return createResendMailer(env);
     if (provider === 'smtp') {
         if (runtime === 'worker') {

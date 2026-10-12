@@ -83,7 +83,7 @@ Once set up, you can ask your agent natural language questions:
 The Context API has a built-in MCP endpoint at `/mcp`. Any MCP-compatible client that supports Streamable HTTP can connect directly -- no separate server needed.
 
 ```bash bash
-curl -X POST https://api.infinitecontext.ai/mcp \
+curl -X POST https://your-api.example.com/mcp \
   -H "Authorization: Bearer ic_live_..." \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'

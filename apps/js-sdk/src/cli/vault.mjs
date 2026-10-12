@@ -18,13 +18,14 @@ import { wrapInfiniteContextWithVault } from "../../lib/encrypted-client.mjs";
 import { withRateLimitRetry } from "../../lib/vault-http-retry.mjs";
 import { VAULT_AGENT_DOC } from "../../lib/vault-agent.mjs";
 
-const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
+import { resolveBaseUrl } from "../../lib/client-config.mjs";
 
 function baseUrlFromArgs(argv) {
   const flag = argv.find((a) => a.startsWith("--base-url="));
   if (flag) return flag.slice("--base-url=".length);
   const creds = loadCredentials();
-  return creds?.baseUrl ?? process.env.INFINITECONTEXT_BASE_URL ?? DEFAULT_BASE_URL;
+  if (creds?.baseUrl) return creds.baseUrl;
+  return resolveBaseUrl({ required: true });
 }
 
 async function promptHidden(question) {

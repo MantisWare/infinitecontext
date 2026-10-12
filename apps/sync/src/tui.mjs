@@ -7,6 +7,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
 import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 
@@ -115,7 +116,7 @@ function normalizeBootstrapModeWithPrompt(raw) {
 
 const cfg = {
   apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
-  baseUrl: (process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai").trim(),
+  baseUrl: resolveBaseUrl({ required: true }),
   userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
   host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
   uiRefreshMs: toInt(process.env.TUI_REFRESH_MS, 1200),
@@ -185,6 +186,7 @@ function isNewerVersion(latest, current) {
 }
 
 async function checkForUpdateSilent() {
+  if (String(process.env.INFINITECONTEXT_NO_UPDATE_CHECK ?? "").trim() === "1") return;
   if (process.env.INFINITECONTEXT_DEV) return;
   const current = readTuiVersion();
   if (current === "unknown") return;

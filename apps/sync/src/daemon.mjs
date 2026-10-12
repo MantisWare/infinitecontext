@@ -8,6 +8,7 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
+import { resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
 import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import {
   createBootstrapStateKey,
@@ -161,7 +162,7 @@ function deleteBootstrapState(key) {
 export async function daemonBoot({ createStore, resolveDbPath }) {
   const cfg = {
     apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
-    baseUrl: (process.env.INFINITECONTEXT_BASE_URL ?? "https://api.infinitecontext.ai").trim(),
+    baseUrl: resolveBaseUrl({ required: true }),
     userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
     host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
     pollMs: toInt(process.env.DAEMON_POLL_MS, 1500),

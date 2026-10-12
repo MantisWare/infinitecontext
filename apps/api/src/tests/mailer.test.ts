@@ -19,10 +19,17 @@ describe('resolveMailer', () => {
                     {
                         NODE_ENV: 'production',
                         INFINITECONTEXT_ALLOW_CONSOLE_MAILER: 'true',
-                        INFINITECONTEXT_MAIL_PROVIDER: 'resend',
+                        INFINITECONTEXT_MAIL_PROVIDER: 'smtp',
                     },
                     'node',
                 ),
+            MailerConfigError,
+        );
+    });
+
+    it('defaults to SMTP outside development', async () => {
+        await assert.rejects(
+            () => resolveMailer({ NODE_ENV: 'production' }, 'node'),
             MailerConfigError,
         );
     });

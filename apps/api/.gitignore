@@ -33,4 +33,5 @@ lerna-debug.log*
 .DS_Store
 
 !.env.example
+wrangler.jsonc
 *.excalidraw

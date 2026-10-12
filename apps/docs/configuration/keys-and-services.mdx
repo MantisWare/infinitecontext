@@ -1,0 +1,73 @@
+---
+title: 'Keys and services'
+description: 'Bring-your-own configuration for a 100% free self-hosted InfiniteContext stack'
+---
+
+InfiniteContext is **free and open source**. The repository does not ship paid-service credentials, hosted API endpoints, or telemetry. Every external dependency is **bring-your-own**: you choose providers, generate secrets locally, and store them in your environment or `~/.infinitecontext/config.json`.
+
+<Info>No LLM API keys are required for core context storage. Future optional LLM features will follow the same pattern: documented, optional, and configured by you — never embedded in source.</Info>
+
+## Client configuration
+
+These settings apply to the CLI, sync daemon, TUI, MCP server, and SDKs on your machine.
+
+| Setting | Required | Default | Env variable | Config key | If missing |
+|---------|----------|---------|--------------|------------|------------|
+| API base URL | **Yes** | none (self-host) | `INFINITECONTEXT_BASE_URL` | `baseUrl` via `infinitecontext config set server` | Cannot connect; run `infinitecontext config` or set URL |
+| Legacy API key | One of key **or** login | — | `INFINITECONTEXT_API_KEY` | `apiKey` | Use `infinitecontext login` or set a project key |
+| Account session | One of key **or** login | — | (stored in `~/.infinitecontext/credentials.json`) | — | Run `infinitecontext login` |
+| Skip npm update check | No | check enabled | `INFINITECONTEXT_NO_UPDATE_CHECK=1` | — | Optional registry lookup on CLI start (not telemetry) |
+
+```bash
+infinitecontext config show
+infinitecontext config doctor
+infinitecontext config set server http://127.0.0.1:8787
+```
+
+## Server environment (Context API)
+
+| Variable | Required | Default | Purpose | If missing |
+|----------|----------|---------|---------|------------|
+| `DATABASE_PROVIDER` | **Yes** | — | `postgres` or `supabase` | API fails at startup |
+| `DATABASE_URL` | **Yes** (postgres) | — | Postgres connection string | API fails at startup |
+| `INFINITECONTEXT_ADMIN_KEY` | **Yes** | — | Admin key minting (`POST /v1/keys`) | API fails at startup |
+| `INFINITECONTEXT_JWT_SECRET` | For account auth | — | Signs login JWTs (≥32 bytes) | `/auth/*` disabled; warning at startup |
+| `INFINITECONTEXT_MAIL_PROVIDER` | For account auth | `smtp` | `smtp` (free) or `resend` (optional) | Registration emails fail |
+| `INFINITECONTEXT_SMTP_HOST` | With SMTP | — | Mail relay host | Email verification fails |
+| `INFINITECONTEXT_SMTP_PORT` | No | `587` | SMTP port | — |
+| `INFINITECONTEXT_SMTP_SECURE` | No | `false` | TLS (`true` for port 465) | — |
+| `INFINITECONTEXT_MAIL_FROM` | **Yes** (mail) | — | From address | Mail send fails |
+| `INFINITECONTEXT_GOOGLE_CLIENT_ID` | No | — | Google OAuth | Google login hidden on CLI |
+| `INFINITECONTEXT_GOOGLE_CLIENT_SECRET` | No | — | Google OAuth | Google login hidden on CLI |
+| `INFINITECONTEXT_RESEND_API_KEY` | Only if `MAIL_PROVIDER=resend` | — | Optional hosted mail | — |
+
+Generate secrets locally:
+
+```bash
+openssl rand -base64 32   # INFINITECONTEXT_JWT_SECRET, INFINITECONTEXT_ADMIN_KEY
+openssl rand -base64 24   # POSTGRES_PASSWORD (local Docker)
+```
+
+## 100% free self-host recipe
+
+1. **Postgres** — `cd apps/postgres && cp .env.example .env` (set `POSTGRES_PASSWORD`), then `docker compose up -d` (binds `127.0.0.1:5433` only).
+2. **Migrate** — from repo root: `pnpm infinitecontext:db:migrate`.
+3. **API** — copy `apps/api/.env.example` to `apps/api/.env.local`, set `DATABASE_URL`, `INFINITECONTEXT_ADMIN_KEY`, `INFINITECONTEXT_JWT_SECRET`, and SMTP (`INFINITECONTEXT_SMTP_*` + `INFINITECONTEXT_MAIL_FROM`). Run `pnpm infinitecontext:api`.
+4. **Client** — `infinitecontext config set server http://127.0.0.1:8787`, then `infinitecontext login` or an API key from `pnpm infinitecontext:key:local`.
+
+## Cloudflare Workers (optional)
+
+Copy `apps/api/wrangler.example.jsonc` to `apps/api/wrangler.jsonc` (gitignored) and fill in your KV namespace id and custom domain. Never commit production route or KV ids to the public repo.
+
+## Health and auth providers
+
+```bash
+curl -s http://127.0.0.1:8787/health/config
+curl -s http://127.0.0.1:8787/auth/providers
+```
+
+`/health/config` returns booleans only (no secrets). Use it to see whether Google OAuth or SMTP is configured.
+
+## No telemetry
+
+InfiniteContext does not include product analytics or crash reporting in the open-source tree. The CLI may optionally query the public npm registry for a newer package version unless you set `INFINITECONTEXT_NO_UPDATE_CHECK=1`.

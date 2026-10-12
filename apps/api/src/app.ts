@@ -19,6 +19,7 @@ import { databaseMiddleware } from './middleware/database';
 import { registerContextRoutes } from './routes/contexts';
 import { registerKeyRoutes } from './routes/keys';
 import { registerMcpRoutes } from './routes/mcp';
+import { registerHealthRoutes } from './routes/health';
 import { registerRootRoutes } from './routes/root';
 import type { ApiConfig } from './types/api';
 import type { AppEnv } from './types/http';
@@ -34,6 +35,8 @@ export type AppOptions = {
     mailer?: Mailer;
     googleOAuth?: GoogleOAuthClient;
     clientIpOptions?: ClientIpReaderOptions;
+    /** Process env for public /health/config (no secrets in response). */
+    runtimeEnv?: Record<string, string | undefined>;
 };
 
 export function createApp(options: AppOptions) {
@@ -48,6 +51,7 @@ export function createApp(options: AppOptions) {
         authRepo: options.authRepo ?? null,
     });
     registerRootRoutes(app);
+    registerHealthRoutes(app, options.runtimeEnv ?? {}, Boolean(options.keyCache));
     registerKeyRoutes(app);
     registerContextRoutes(app, { authRepo: options.authRepo ?? null });
     registerMcpRoutes(app);
