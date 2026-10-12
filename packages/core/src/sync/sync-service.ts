@@ -424,6 +424,17 @@ export class SyncService {
             };
         }
 
+        if (mutation.op === 'contexts_delete_many') {
+            const ids = (mutation.payload.ids as string[]) ?? [];
+            const result = await deleteManyContexts(storage, ctx.projectId, ids);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, null, 'contexts_delete_many');
+            return {
+                kind: 'ok',
+                contextId: null,
+                changePayload: { results: result.data.results, deleted_count: result.data.deleted_count },
+            };
+        }
+
         const contextId = mutation.context_id;
         if (!contextId) throw new SyncValidationError('context_id is required for this op');
 
@@ -492,10 +503,16 @@ export class SyncService {
         if (mutation.op === 'message_update') {
             const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload);
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_update');
+            const affectedClientIds = this.extractIcnSelectorsFromUpdatePayload(mutation.payload);
             return {
                 kind: 'ok',
                 contextId,
-                changePayload: { context_id: contextId, version: result.data.version, data: result.data.data },
+                changePayload: {
+                    context_id: contextId,
+                    version: result.data.version,
+                    data: result.data.data,
+                    affected_client_ids: affectedClientIds,
+                },
             };
         }
 
@@ -535,17 +552,6 @@ export class SyncService {
             };
         }
 
-        if (mutation.op === 'contexts_delete_many') {
-            const ids = (mutation.payload.ids as string[]) ?? [];
-            const result = await deleteManyContexts(storage, ctx.projectId, ids);
-            if (!result.ok) return this.mapApplyError(result.code, result.message, null, 'contexts_delete_many');
-            return {
-                kind: 'ok',
-                contextId: null,
-                changePayload: { results: result.data.results, deleted_count: result.data.deleted_count },
-            };
-        }
-
         if (mutation.op === 'prune_plaintext_versions') {
             const result = await prunePlaintextVersionHeads(storage, ctx.projectId, contextId);
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
@@ -559,6 +565,22 @@ export class SyncService {
         throw new SyncValidationError('Unsupported sync op');
     }
 
+    private extractIcnSelectorsFromUpdatePayload(payload: unknown): string[] {
+        const body = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+        const rows = Array.isArray(body.updates)
+            ? body.updates
+            : Array.isArray(body.data)
+              ? body.data
+              : [];
+        const ids: string[] = [];
+        for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const id = (row as { id?: unknown }).id;
+            if (typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id)) ids.push(id);
+        }
+        return ids;
+    }
+
     private extractClientIdsFromChangePayload(payload: Record<string, unknown>): string[] {
         const ids: string[] = [];
         const rows = Array.isArray(payload.data) ? payload.data : [];
@@ -568,9 +590,10 @@ export class SyncService {
             const cid = clientNodeIdFromMetadata(meta) ?? clientNodeIdFromMetadata(row as Record<string, unknown>);
             if (cid) ids.push(cid);
         }
-        const deleted = payload.deleted_client_ids;
-        if (Array.isArray(deleted)) {
-            for (const id of deleted) {
+        for (const key of ['deleted_client_ids', 'affected_client_ids'] as const) {
+            const list = payload[key];
+            if (!Array.isArray(list)) continue;
+            for (const id of list) {
                 if (typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id)) ids.push(id);
             }
         }

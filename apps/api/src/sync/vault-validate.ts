@@ -20,6 +20,9 @@ function payloadMessages(payload: unknown): unknown {
     if (payload && typeof payload === 'object' && 'messages' in (payload as object)) {
         return (payload as { messages: unknown }).messages;
     }
+    if (payload && typeof payload === 'object' && 'updates' in (payload as object)) {
+        return (payload as { updates: unknown }).updates;
+    }
     if (payload && typeof payload === 'object' && 'data' in (payload as object)) {
         return (payload as { data: unknown }).data;
     }
@@ -70,7 +73,15 @@ export async function validateVaultSyncPush(
             continue;
         }
 
-        if (mutation.op === 'message_update' || mutation.op === 'message_delete') {
+        if (mutation.op === 'message_delete') {
+            const deniedMigrate = await validateVaultEncryptedMessageWriteToContext(c, deps, storage, projectId, contextId);
+            if (deniedMigrate) return deniedMigrate;
+            const denied = await validateVaultDeleteWrite(c, deps, mutation.payload ?? {});
+            if (denied) return denied;
+            continue;
+        }
+
+        if (mutation.op === 'message_update') {
             const deniedMigrate = await validateVaultEncryptedMessageWriteToContext(c, deps, storage, projectId, contextId);
             if (deniedMigrate) return deniedMigrate;
             const body = payloadMessages(mutation.payload);

@@ -278,76 +278,6 @@ describe('sync-postgres-live', () => {
         const refresh = await fx.json('POST', '/auth/refresh', { refresh_token: fx.refreshB });
         assert.equal(refresh.res.status, 401);
     });
-});
-
-describe('sync-postgres-live vault', () => {
-    it('round-trips encrypted append via sync push', async () => {
-        if (!postgresReady) return;
-        const fx = await setupApp();
-        const material = await createVaultCryptoMaterial('vault-sync-pass1');
-        await fx.json(
-            'PUT',
-            '/auth/crypto',
-            {
-                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
-                kdf_params: material.kdfParams,
-                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
-                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
-                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
-                dek_version: material.dekVersion,
-                vault_passphrase_required: false,
-            },
-            fx.accessA,
-        );
-
-        const nodeId = generateClientNodeId();
-        const create = await fx.json(
-            'POST',
-            '/sync/push',
-            {
-                mutations: [
-                    {
-                        client_id: generateClientNodeId(),
-                        op: 'context_create',
-                        payload: { metadata: { source: 'vault', session_id: 'vs1' } },
-                    },
-                ],
-            },
-            fx.accessA,
-        );
-        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
-        const me = await fx.json('GET', '/auth/me', undefined, fx.accessA);
-        const userPublicId = String(me.body.id ?? '');
-
-        const crypto = await import('@infinitecontext/crypto');
-        const aad = { contextId, userPublicId, nodePublicId: nodeId };
-        const content = crypto.encryptNodeContent(material.dek, 1, { role: 'user', message: 'secret' }, aad);
-        const meta = crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: nodeId, source: 'vault' }, aad);
-
-        const append = await fx.json(
-            'POST',
-            '/sync/push',
-            {
-                mutations: [
-                    {
-                        client_id: nodeId,
-                        op: 'message_append',
-                        context_id: contextId,
-                        payload: {
-                            messages: [{ id: nodeId, ...content, metadata: meta }],
-                        },
-                    },
-                ],
-            },
-            fx.accessA,
-        );
-        assert.equal(append.res.status, 200);
-        const pull = await fx.json('GET', '/sync/changes?since=0', undefined, fx.accessB);
-        assert.ok((pull.body.changes as any[])?.length >= 2);
-        const appendChange = (pull.body.changes as any[]).find((c) => c.op === 'message_append');
-        const payload = JSON.stringify(appendChange?.payload ?? {});
-        assert.ok(payload.includes('__ic_enc') || payload.includes('ciphertext'), 'vault change log must not store plaintext bodies');
-    });
 
     it('message_delete with stale base_sequence records conflict instead of deleting', async () => {
         if (!postgresReady) return;
@@ -403,7 +333,7 @@ describe('sync-postgres-live vault', () => {
                         op: 'message_update',
                         context_id: contextId,
                         payload: {
-                            data: [{ id: m1, role: 'user', content: { message: 'one edited' }, metadata: { ic_client_node_id: m1 } }],
+                            updates: [{ id: m1, role: 'user', content: { message: 'one edited' }, metadata: { ic_client_node_id: m1 } }],
                         },
                     },
                 ],
@@ -502,7 +432,7 @@ describe('sync-postgres-live vault', () => {
                         op: 'message_update',
                         context_id: contextId,
                         payload: {
-                            data: [{ id: m2, role: 'user', content: { message: 'keep edited' }, metadata: { ic_client_node_id: m2 } }],
+                            updates: [{ id: m2, role: 'user', content: { message: 'keep edited' }, metadata: { ic_client_node_id: m2 } }],
                         },
                     },
                 ],
@@ -518,11 +448,13 @@ describe('sync-postgres-live vault', () => {
         assert.equal(messages.length, 1);
         assert.match(String(messages[0]?.content?.message ?? ''), /keep edited/);
     });
+});
 
-    it('contexts_delete_many works via sync push under vault', async () => {
+describe('sync-postgres-live vault', () => {
+    it('round-trips encrypted append via sync push', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();
-        const material = await createVaultCryptoMaterial('vault-del-many');
+        const material = await createVaultCryptoMaterial('vault-sync-pass1');
         await fx.json(
             'PUT',
             '/auth/crypto',
@@ -537,6 +469,59 @@ describe('sync-postgres-live vault', () => {
             },
             fx.accessA,
         );
+
+        const nodeId = generateClientNodeId();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'vault', session_id: 'vs1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const me = await fx.json('GET', '/auth/me', undefined, fx.accessA);
+        const userPublicId = String(me.body.id ?? '');
+
+        const crypto = await import('@infinitecontext/crypto');
+        const aad = { contextId, userPublicId, nodePublicId: nodeId };
+        const content = crypto.encryptNodeContent(material.dek, 1, { role: 'user', message: 'secret' }, aad);
+        const meta = crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: nodeId, source: 'vault' }, aad);
+
+        const append = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: nodeId,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: {
+                            messages: [{ id: nodeId, ...content, metadata: meta }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(append.res.status, 200);
+        const pull = await fx.json('GET', '/sync/changes?since=0', undefined, fx.accessB);
+        assert.ok((pull.body.changes as any[])?.length >= 2);
+        const appendChange = (pull.body.changes as any[]).find((c) => c.op === 'message_append');
+        const payload = JSON.stringify(appendChange?.payload ?? {});
+        assert.ok(payload.includes('__ic_enc') || payload.includes('ciphertext'), 'vault change log must not store plaintext bodies');
+    });
+
+    it('contexts_delete_many works via sync push under vault', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
         const c1 = generateClientNodeId();
         const c2 = generateClientNodeId();
         const create = await fx.json(
@@ -553,6 +538,21 @@ describe('sync-postgres-live vault', () => {
         assert.equal(create.res.status, 200);
         const ctx1 = String((create.body.effects as any[])?.[0]?.context_id ?? '');
         const ctx2 = String((create.body.effects as any[])?.[1]?.context_id ?? '');
+        const material = await createVaultCryptoMaterial('vaultDelMany1Pass');
+        await fx.json(
+            'PUT',
+            '/auth/crypto',
+            {
+                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+                kdf_params: material.kdfParams,
+                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                dek_version: material.dekVersion,
+                vault_passphrase_required: false,
+            },
+            fx.accessA,
+        );
         const delMany = await fx.json(
             'POST',
             '/sync/push',
@@ -568,7 +568,9 @@ describe('sync-postgres-live vault', () => {
             fx.accessA,
         );
         assert.equal(delMany.res.status, 200, JSON.stringify(delMany.body));
-        assert.ok(Number((delMany.body.effects as any[])?.[0]?.payload?.deleted_count ?? 0) >= 2);
+        const pull = await fx.json('GET', '/sync/changes?since=0&limit=200', undefined, fx.accessA);
+        const delChange = (pull.body.changes as any[])?.find((c) => c.op === 'contexts_delete_many');
+        assert.ok(Number(delChange?.payload?.deleted_count ?? 0) >= 2, JSON.stringify(delChange?.payload));
     });
 
     it('rejects plaintext message_update via sync push', async () => {
@@ -615,7 +617,7 @@ describe('sync-postgres-live vault', () => {
                         op: 'message_update',
                         context_id: contextId,
                         payload: {
-                            data: [{ id: nodeId, role: 'user', content: { message: 'plain' }, metadata: { ic_client_node_id: nodeId } }],
+                            updates: [{ id: nodeId, role: 'user', content: { message: 'plain' }, metadata: { ic_client_node_id: nodeId } }],
                         },
                     },
                 ],

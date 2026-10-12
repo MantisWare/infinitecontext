@@ -427,7 +427,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
                         client_id: generateClientNodeId(),
                         op: 'message_update',
                         context_id: contextId,
-                        payload: { data: [encUpd] },
+                        payload: { updates: [encUpd] },
                     },
                 ],
             },
@@ -524,7 +524,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
             '/sync/push',
             {
                 mutations: [
-                    { client_id: generateClientNodeId(), op: 'message_update', context_id: contextId, payload: { data: [encUpd] } },
+                    { client_id: generateClientNodeId(), op: 'message_update', context_id: contextId, payload: { updates: [encUpd] } },
                 ],
             },
             auth.accessA,
@@ -582,7 +582,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const sessionDir = path.join(home, '.codex', 'sessions');
         fs.mkdirSync(sessionDir, { recursive: true });
         const sessionFile = path.join(sessionDir, 'offline-e2e.jsonl');
-        const sessionId = `sess-offline-${Date.now()}`;
+        const sessionId = 'offline-e2e';
         const lines = [
             JSON.stringify({
                 timestamp: new Date().toISOString(),
@@ -598,16 +598,21 @@ describe('sync daemon two-device e2e (postgres)', () => {
         fs.writeFileSync(sessionFile, `${lines.join('\n')}\n`, 'utf8');
 
         const codexGlob = sessionFile;
+        const ingestEnv = {
+            CODEX_GLOB: codexGlob,
+            CAPTURE_AGENTS: 'codex',
+            INGEST_CLAUDE: 'false',
+            INGEST_CURSOR: 'false',
+            INGEST_OPENCLAW: 'false',
+            INGEST_GEMINI: 'false',
+            INGEST_GSTACK: 'false',
+            INGEST_CODEX: 'true',
+            DAEMON_BOOTSTRAP_MODE: 'all',
+            DAEMON_BOOTSTRAP_RESET: 'true',
+        };
         const offlineEnv = {
             ...cliEnv(home, dbFile, {
-                CODEX_GLOB: codexGlob,
-                INGEST_CLAUDE: 'false',
-                INGEST_CURSOR: 'false',
-                INGEST_OPENCLAW: 'false',
-                INGEST_GEMINI: 'false',
-                INGEST_GSTACK: 'false',
-                INGEST_CODEX: 'true',
-                DAEMON_BOOTSTRAP_MODE: 'all',
+                ...ingestEnv,
                 INFINITECONTEXT_BASE_URL: 'http://127.0.0.1:9',
             }),
         };
@@ -628,15 +633,39 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const contextsBefore = await apiJson('GET', '/contexts?limit=50', undefined, auth.accessA);
         const beforeCount = ((contextsBefore.body.data as any[]) ?? []).length;
 
-        await runDaemonCycle(home, dbFile);
+        await ensureDaemonDb(dbFile);
+        const onlineChild = spawn(process.execPath, [cliPath, 'sync', 'start'], {
+            env: cliEnv(home, dbFile, ingestEnv),
+            stdio: 'ignore',
+        });
+        await new Promise((r) => setTimeout(r, 8000));
+        try {
+            await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: cliEnv(home, dbFile, ingestEnv) });
+        } catch {
+            onlineChild.kill('SIGTERM');
+        }
+        await new Promise((r) => setTimeout(r, 300));
+        await ensureDaemonDb(dbFile);
+        const onlineChild2 = spawn(process.execPath, [cliPath, 'sync', 'start'], {
+            env: cliEnv(home, dbFile, ingestEnv),
+            stdio: 'ignore',
+        });
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+            await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: cliEnv(home, dbFile, ingestEnv) });
+        } catch {
+            onlineChild2.kill('SIGTERM');
+        }
 
         const contextsAfter = await apiJson('GET', '/contexts?limit=50', undefined, auth.accessA);
         const afterList = (contextsAfter.body.data as any[]) ?? [];
         assert.ok(afterList.length > beforeCount, 'expected new context from offline replay');
-        const hit = afterList.find((c) => JSON.stringify(c.metadata ?? {}).includes(sessionId));
+        const hit = afterList.find((c) => JSON.stringify(c.metadata ?? {}).includes('offline-e2e'));
         assert.ok(hit?.id, 'expected daemon-created context for offline session');
         const ctx = await apiJson('GET', `/contexts/${hit.id}`, undefined, auth.accessA);
-        const blob = JSON.stringify(ctx.body.data ?? []);
-        assert.ok(blob.includes('xyzzy'), 'offline line should reach server after reconnect');
+        const msgs = (ctx.body.data as any[]) ?? [];
+        assert.ok(msgs.length >= 1, `expected messages on daemon context, got ${msgs.length}`);
+        const blob = JSON.stringify(msgs);
+        assert.ok(blob.includes('xyzzy'), `offline line should reach server after reconnect: ${blob.slice(0, 400)}`);
     });
 });
