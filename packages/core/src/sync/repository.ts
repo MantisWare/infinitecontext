@@ -34,6 +34,7 @@ export interface SyncRepository {
 
 export type SyncStorageTransactionContext = {
     storage: StorageAdapter;
+    listChanges(userId: number, since: number, limit: number): Promise<SyncChangeRecord[]>;
     appendChange(input: SyncAppendChangeInput): Promise<number>;
     insertConflict(input: {
         userId: number;

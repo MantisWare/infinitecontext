@@ -5,7 +5,12 @@ import { MemoryStorage } from '../testing/memory-adapter';
 import { SyncService } from './sync-service';
 import type { SyncRepository, SyncAppendChangeInput } from './repository';
 import type { SyncChangeRecord, SyncConflictRecord } from './types';
-const testClientId = () => `icn_${'a'.repeat(24)}`;
+let testClientSeq = 0;
+const testClientId = () => {
+    testClientSeq += 1;
+    const hex = testClientSeq.toString(16).padStart(24, '0').slice(-24);
+    return `icn_${hex}`;
+};
 
 class MemorySyncRepository implements SyncRepository {
     private head = 0;
@@ -108,5 +113,47 @@ describe('SyncService', () => {
         const pull = await service.pullChanges(1, 0, 100);
         assert.equal(pull.changes.length, 1);
         assert.equal(pull.changes[0]?.op, 'context_create');
+    });
+
+    it('returns per-item failed for message_delete without base_sequence', async () => {
+        const storage = new MemoryStorage();
+        const project = await storage.insertProject('p');
+        const syncRepo = new MemorySyncRepository();
+        const service = new SyncService(storage, syncRepo);
+        const ctx = { userId: 1, projectId: project!.id };
+
+        const createId = testClientId();
+        const created = await service.pushMutations(ctx, [
+            {
+                client_id: createId,
+                op: 'context_create',
+                payload: { metadata: { source: 'test' } },
+            },
+        ]);
+        const contextId = String(created.effects[0]?.context_id ?? '');
+        assert.ok(contextId.startsWith('ctx_'));
+        const m1 = testClientId();
+        await service.pushMutations(ctx, [
+            {
+                client_id: m1,
+                op: 'message_append',
+                context_id: contextId,
+                payload: {
+                    messages: [{ id: m1, role: 'user', content: { message: 'hi' }, metadata: { ic_client_node_id: m1 } }],
+                },
+            },
+        ]);
+
+        const delClient = testClientId();
+        const result = await service.pushMutations(ctx, [
+            {
+                client_id: delClient,
+                op: 'message_delete',
+                context_id: contextId,
+                payload: { ids: [m1] },
+            },
+        ]);
+        assert.ok(result.failed?.some((f) => f.code === 'invalid_input' && f.client_id === delClient));
+        assert.equal(result.applied.includes(delClient), false);
     });
 });

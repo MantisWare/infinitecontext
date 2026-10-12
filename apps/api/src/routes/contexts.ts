@@ -319,9 +319,8 @@ export function registerContextRoutes(
                 clientId: generateClientNodeId(),
                 payload: {
                     context_id: contextPublicId,
-                    ids,
                     version: result.data.version,
-                    data: result.data.data,
+                    deleted_client_ids: result.data.deleted_client_ids,
                 },
             });
         }

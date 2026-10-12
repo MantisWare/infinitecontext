@@ -453,6 +453,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const conflictKinds = (delAttempt.body.conflicts as any[])?.map((c) => c.kind) ?? [];
         assert.ok(conflictKinds.includes('delete_stale_base'));
 
+        const headBeforeDel = await apiJson('GET', '/sync/status', undefined, auth.accessA);
         await apiJson(
             'POST',
             '/sync/push',
@@ -462,6 +463,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
                         client_id: generateClientNodeId(),
                         op: 'message_delete',
                         context_id: contextId,
+                        base_sequence: Number(headBeforeDel.body.head_sequence ?? 0),
                         payload: { ids: [m2] },
                     },
                 ],
@@ -503,11 +505,18 @@ describe('sync daemon two-device e2e (postgres)', () => {
             { clientId: m2, message: 'stay' },
         ]);
 
+        const headBeforeDel = await apiJson('GET', '/sync/status', undefined, auth.accessA);
         await apiJson(
             'POST',
             '/sync/push',
             {
-                mutations: [{ client_id: generateClientNodeId(), op: 'message_delete', context_id: contextId, payload: { ids: [m1] } }],
+                mutations: [{
+                    client_id: generateClientNodeId(),
+                    op: 'message_delete',
+                    context_id: contextId,
+                    base_sequence: Number(headBeforeDel.body.head_sequence ?? 0),
+                    payload: { ids: [m1] },
+                }],
             },
             auth.accessB,
         );

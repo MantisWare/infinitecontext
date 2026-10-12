@@ -30,7 +30,7 @@ The CLI maps 503 to a plain-language error (see `lib/sync-errors.mjs`).
 | `context_metadata` | LWW root metadata (`updated_at` / `ic_metadata_updated_at`) |
 | `message_append` | Append-only messages (`icn_*` ids) |
 | `message_update` | Versioned message patch |
-| `message_delete` | Versioned message delete |
+| `message_delete` | Versioned message delete (**requires `base_sequence`** — client head when the delete was planned; server rejects stale bases when the target message changed) |
 | `context_delete` | Permanent context delete |
 | `contexts_delete_many` | Batch delete |
 | `prune_plaintext_versions` | Vault migrate helper |
@@ -69,18 +69,25 @@ For MCP, SDK, or migrate tooling that still calls `/contexts`, the API **mirrors
 ## CLI
 
 ```bash
-infinitecontext sync status    # daemon ctl + server cursor
-infinitecontext sync pull      # apply changes since local cursor (~/.infinitecontext/sync-state.json)
-infinitecontext sync push      # flush local outbox
+infinitecontext sync status    # server head + CLI cursor, outbox, parked failures
+infinitecontext sync pull      # apply changes since CLI cursor (~/.infinitecontext/sync-cli-state.json)
+infinitecontext sync push      # flush local outbox (~/.infinitecontext/sync-state.json)
+infinitecontext sync parked list
+infinitecontext sync parked retry <client_id>
+infinitecontext sync parked drop <client_id>
 infinitecontext sync devices   # list devices
 infinitecontext sync devices revoke <session-public-id>
 ```
+
+**Cursors:** the daemon keeps its pull cursor in `daemon.db` (`sync:pull_cursor`). The CLI keeps a separate cursor in `sync-cli-state.json`. Shared outbox + parked failures live in `sync-state.json`.
+
+**Deletes:** clients must send `base_sequence` on every `message_delete` mutation (use `mutationForMessageDelete()` in the SDK, or `GET /sync/status` → `head_sequence`).
 
 Device list/revoke uses `/auth/devices` (revoking invalidates refresh tokens for that session).
 
 ## Local replica
 
-The sync daemon pulls each cycle into `daemon.db` tables `sync_context_meta` and `sync_message_nodes`. Conflict UI is Phase 5; conflicts are exposed in API/CLI JSON only.
+The sync daemon pulls each cycle into `daemon.db` tables `sync_context_meta` and `sync_message_nodes`. `message_delete` change payloads carry `deleted_client_ids` only (not a full context snapshot). Conflict UI is Phase 5; conflicts are exposed in API/CLI JSON only.
 
 ## Migration
 

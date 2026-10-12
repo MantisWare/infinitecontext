@@ -168,6 +168,13 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     setOffset(fileKey, value) {
       stmt.setOffset.run(String(fileKey ?? ""), parseNumber(value, 0));
     },
+    getSyncPullCursor() {
+      const row = stmt.getOffset.get("sync:pull_cursor");
+      return row ? parseNumber(row.offset_value, 0) : 0;
+    },
+    setSyncPullCursor(value) {
+      stmt.setOffset.run("sync:pull_cursor", parseNumber(value, 0));
+    },
     getContextCache(cacheKey) {
       const row = stmt.getContextCache.get(String(cacheKey ?? ""));
       return row ? String(row.context_id ?? "") : "";
@@ -198,6 +205,7 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       if (op === "contexts_delete_many") {
         const results = Array.isArray(payload.results) ? payload.results : [];
         for (const row of results) {
+          if (row?.deleted !== true) continue;
           const id = String(row?.id ?? row?.context_id ?? "");
           if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
         }
@@ -208,13 +216,6 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
         const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
         for (const id of deletedIds) {
           if (id) stmt.deleteSyncMessage.run(String(id));
-        }
-        const rows = Array.isArray(payload.data) ? payload.data : [];
-        for (const row of rows) {
-          if (!row || typeof row !== "object") continue;
-          const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-          if (!clientNodeId) continue;
-          stmt.upsertSyncMessage.run(String(clientNodeId), String(payload.context_id ?? contextId), JSON.stringify(row), sequence);
         }
         return;
       }

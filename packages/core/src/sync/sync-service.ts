@@ -158,7 +158,19 @@ export class SyncService {
 
         for (const raw of rawMutations) {
             const parsed = validateMutation(raw);
-            if ('error' in parsed) throw new SyncValidationError(parsed.error);
+            if ('error' in parsed) {
+                const rawClientId =
+                    isPlainObject(raw) && typeof raw.client_id === 'string' ? String(raw.client_id) : '';
+                failed.push({
+                    client_id: SYNC_CLIENT_ID_PATTERN.test(rawClientId)
+                        ? rawClientId
+                        : `icn_${'0'.repeat(24)}`,
+                    code: 'invalid_input',
+                    message: parsed.error,
+                    retryable: false,
+                });
+                continue;
+            }
 
             const existing = await this.syncRepo.findChangeByClientId(ctx.userId, parsed.client_id);
             if (existing) {
@@ -209,7 +221,9 @@ export class SyncService {
         effect?: SyncPushEffect;
         failed?: SyncPushFailure;
     }> {
-        const applyResult = await this.applyMutationWithRetry(this.storage, ctx, parsed);
+        const applyResult = await this.applyMutationWithRetry(this.storage, ctx, parsed, {
+            listChanges: (since, limit) => this.syncRepo.listChanges(ctx.userId, since, limit),
+        });
         return this.finalizePushOutcome(ctx, parsed, applyResult, async (input) => this.syncRepo.appendChange(input), async (input) =>
             this.syncRepo.insertConflict(input),
         );
@@ -229,6 +243,7 @@ export class SyncService {
                 return await txRepo.runStorageTransaction(async (txCtx) => {
                     const applyResult = await this.applyMutationWithRetry(txCtx.storage, ctx, parsed, {
                         inTransaction: true,
+                        listChanges: (since, limit) => txCtx.listChanges(ctx.userId, since, limit),
                     });
                     if (applyResult.kind === 'retryable') {
                         throw new SyncTransientError();
@@ -304,6 +319,17 @@ export class SyncService {
         }
 
         if (applyResult.kind === 'failed') {
+            if (applyResult.code === 'invalid_input') {
+                return {
+                    head: await this.syncRepo.getHeadSequence(ctx.userId),
+                    failed: {
+                        client_id: parsed.client_id,
+                        code: applyResult.code,
+                        message: applyResult.message,
+                        retryable: false,
+                    },
+                };
+            }
             const contextId = applyResult.contextId ?? parsed.context_id ?? 'unknown';
             const sequence = await appendChange({
                 userId: ctx.userId,
@@ -382,14 +408,17 @@ export class SyncService {
         storage: StorageAdapter,
         ctx: SyncApplyContext,
         mutation: SyncMutation,
-        options?: { inTransaction?: boolean },
+        options?: {
+            inTransaction?: boolean;
+            listChanges?: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>;
+        },
     ): Promise<ApplyResult> {
         if (mutation.op !== 'message_append') {
-            return this.applyMutation(storage, ctx, mutation);
+            return this.applyMutation(storage, ctx, mutation, options);
         }
 
         for (let attempt = 0; attempt < APPEND_RETRY_ATTEMPTS; attempt += 1) {
-            const result = await this.applyMutation(storage, ctx, mutation);
+            const result = await this.applyMutation(storage, ctx, mutation, options);
             if (result.kind !== 'retryable') return result;
             if (options?.inTransaction) return result;
             await sleep(5 * (attempt + 1));
@@ -401,7 +430,14 @@ export class SyncService {
         };
     }
 
-    private async applyMutation(storage: StorageAdapter, ctx: SyncApplyContext, mutation: SyncMutation): Promise<ApplyResult> {
+    private async applyMutation(
+        storage: StorageAdapter,
+        ctx: SyncApplyContext,
+        mutation: SyncMutation,
+        options?: {
+            listChanges?: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>;
+        },
+    ): Promise<ApplyResult> {
         if (mutation.op === 'context_create' || mutation.op === 'context_fork') {
             const payload = mutation.payload;
             const metadata = isPlainObject(payload.metadata) ? payload.metadata : {};
@@ -524,10 +560,19 @@ export class SyncService {
                 .filter((id): id is string => typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id))
                 .map(String);
             const baseSeq = mutation.base_sequence ?? deleteParams.base_sequence;
-            if (typeof baseSeq === 'number' && Number.isFinite(baseSeq)) {
-                const stale = await this.assertDeleteNotStale(ctx, contextId, baseSeq, targetClientIds);
-                if (stale) return stale;
+            if (typeof baseSeq !== 'number' || !Number.isFinite(baseSeq)) {
+                return {
+                    kind: 'failed',
+                    code: 'invalid_input',
+                    message: 'base_sequence is required for message_delete',
+                    contextId,
+                };
             }
+            const listChanges =
+                options?.listChanges ??
+                ((since, limit) => this.syncRepo.listChanges(ctx.userId, since, limit));
+            const stale = await this.assertDeleteNotStale(contextId, baseSeq, targetClientIds, listChanges);
+            if (stale) return stale;
             const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any);
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_delete');
             return {
@@ -536,7 +581,6 @@ export class SyncService {
                 changePayload: {
                     context_id: contextId,
                     version: result.data.version,
-                    data: result.data.data,
                     deleted_client_ids: result.data.deleted_client_ids,
                 },
             };
@@ -581,15 +625,8 @@ export class SyncService {
         return ids;
     }
 
-    private extractClientIdsFromChangePayload(payload: Record<string, unknown>): string[] {
+    private extractAffectedClientIdsFromChangePayload(payload: Record<string, unknown>): string[] {
         const ids: string[] = [];
-        const rows = Array.isArray(payload.data) ? payload.data : [];
-        for (const row of rows) {
-            if (!row || typeof row !== 'object') continue;
-            const meta = (row as { metadata?: Record<string, unknown> }).metadata;
-            const cid = clientNodeIdFromMetadata(meta) ?? clientNodeIdFromMetadata(row as Record<string, unknown>);
-            if (cid) ids.push(cid);
-        }
         for (const key of ['deleted_client_ids', 'affected_client_ids'] as const) {
             const list = payload[key];
             if (!Array.isArray(list)) continue;
@@ -600,25 +637,39 @@ export class SyncService {
         return ids;
     }
 
+    private async listChangesAfterSequence(
+        listChanges: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>,
+        baseSequence: number,
+    ): Promise<import('./types').SyncChangeRecord[]> {
+        const all: import('./types').SyncChangeRecord[] = [];
+        let since = baseSequence;
+        const pageSize = 500;
+        while (true) {
+            const page = await listChanges(since, pageSize);
+            if (page.length === 0) break;
+            all.push(...page);
+            since = page[page.length - 1]!.sequence;
+            if (page.length < pageSize) break;
+        }
+        return all;
+    }
+
     private async assertDeleteNotStale(
-        ctx: SyncApplyContext,
         contextId: string,
         baseSequence: number,
         targetClientIds: string[],
+        listChanges: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>,
     ): Promise<ApplyResult | null> {
         const targets = new Set(targetClientIds);
         if (targets.size === 0) return null;
-        const changes = await this.syncRepo.listChanges(ctx.userId, baseSequence, 2000);
+        const changes = await this.listChangesAfterSequence(listChanges, baseSequence);
         for (const change of changes) {
             if (change.context_id !== contextId) continue;
             if (change.sequence <= baseSequence) continue;
-            if (change.op !== 'message_update' && change.op !== 'message_delete' && change.op !== 'message_append') {
+            if (change.op !== 'message_update' && change.op !== 'message_delete') {
                 continue;
             }
-            const touched = this.extractClientIdsFromChangePayload(change.payload);
-            if (change.op === 'message_append') {
-                continue;
-            }
+            const touched = this.extractAffectedClientIdsFromChangePayload(change.payload);
             if (touched.some((id) => targets.has(id))) {
                 return {
                     kind: 'conflict',
@@ -662,6 +713,14 @@ export class SyncService {
                 conflictKind: 'operation_conflict',
                 leftPayload: { message },
                 rightPayload: {},
+            };
+        }
+        if (code === 'invalid_input') {
+            return {
+                kind: 'failed',
+                code: 'invalid_input',
+                message,
+                contextId: contextId ?? undefined,
             };
         }
         throw new SyncApplyError(message, code);

@@ -107,6 +107,7 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
             const txDb = tx as ApiDb;
             const ctx: SyncStorageTransactionContext = {
                 storage: new DrizzleAdapter(txDb),
+                listChanges: (userId, since, limit) => this.listChangesOnDb(txDb, userId, since, limit),
                 appendChange: (input) => this.appendChangeOnDb(txDb, input),
                 insertConflict: (input) => this.insertConflictOnDb(txDb, input),
             };
@@ -143,14 +144,18 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
         return mapConflict(rows[0]!);
     }
 
-    async listChanges(userId: number, since: number, limit: number): Promise<SyncChangeRecord[]> {
-        const rows = await this.db
+    private async listChangesOnDb(db: ApiDb, userId: number, since: number, limit: number): Promise<SyncChangeRecord[]> {
+        const rows = await db
             .select()
             .from(sync_change_log)
             .where(and(eq(sync_change_log.user_id, userId), gt(sync_change_log.sequence, since)))
             .orderBy(asc(sync_change_log.sequence))
             .limit(limit);
         return rows.map(mapChange);
+    }
+
+    async listChanges(userId: number, since: number, limit: number): Promise<SyncChangeRecord[]> {
+        return this.listChangesOnDb(this.db, userId, since, limit);
     }
 
     async insertConflict(input: {

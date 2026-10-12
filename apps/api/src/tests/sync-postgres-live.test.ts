@@ -406,6 +406,7 @@ describe('sync-postgres-live', () => {
             },
             fx.accessA,
         );
+        const headBeforeDel = await fx.json('GET', '/sync/status', undefined, fx.accessA);
         const del = await fx.json(
             'POST',
             '/sync/push',
@@ -415,6 +416,7 @@ describe('sync-postgres-live', () => {
                         client_id: generateClientNodeId(),
                         op: 'message_delete',
                         context_id: contextId,
+                        base_sequence: Number(headBeforeDel.body.head_sequence ?? 0),
                         payload: { ids: [m1] },
                     },
                 ],
@@ -447,6 +449,281 @@ describe('sync-postgres-live', () => {
         const messages = (read.body.data as any[]) ?? [];
         assert.equal(messages.length, 1);
         assert.match(String(messages[0]?.content?.message ?? ''), /keep edited/);
+    });
+
+    it('delete stale check is scoped to the deleted icn id (edit on another message does not block)', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'del-scope', session_id: 'ds1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: m1,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m1, role: 'user', content: { message: 'one' }, metadata: { ic_client_node_id: m1 } }] },
+                    },
+                    {
+                        client_id: m2,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m2, role: 'user', content: { message: 'two' }, metadata: { ic_client_node_id: m2 } }] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const statusBefore = await fx.json('GET', '/sync/status', undefined, fx.accessA);
+        const baseSeq = Number(statusBefore.body.head_sequence ?? 0);
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: {
+                            updates: [{ id: m1, role: 'user', content: { message: 'one edited' }, metadata: { ic_client_node_id: m1 } }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const delOther = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        base_sequence: baseSeq,
+                        payload: { ids: [m2] },
+                    },
+                ],
+            },
+            fx.accessB,
+        );
+        assert.equal(delOther.res.status, 200);
+        const conflictKinds = (delOther.body.conflicts as any[])?.map((c) => c.kind) ?? [];
+        assert.ok(!conflictKinds.includes('delete_stale_base'), conflictKinds.join(','));
+        const read = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        assert.equal((read.body.data as any[])?.length, 1);
+    });
+
+    it('message_delete change log omits full context snapshot', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'del-slim', session_id: 'sl1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: m1,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m1, role: 'user', content: { message: 'a' }, metadata: { ic_client_node_id: m1 } }] },
+                    },
+                    {
+                        client_id: m2,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m2, role: 'user', content: { message: 'b' }, metadata: { ic_client_node_id: m2 } }] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const head = await fx.json('GET', '/sync/status', undefined, fx.accessA);
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        base_sequence: Number(head.body.head_sequence ?? 0),
+                        payload: { ids: [m1] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const pull = await fx.json('GET', '/sync/changes?since=0&limit=200', undefined, fx.accessA);
+        const delChange = (pull.body.changes as any[])?.find((c) => c.op === 'message_delete');
+        assert.ok(delChange?.payload?.deleted_client_ids?.includes(m1));
+        assert.equal(delChange?.payload?.data, undefined);
+    });
+
+    it('invalid_input on one mutation does not fail the whole push batch', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'batch-fail', session_id: 'bf1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const bad = generateClientNodeId();
+        const good = generateClientNodeId();
+        const push = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: bad,
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: {
+                            data: [{ id: generateClientNodeId(), role: 'user', content: { message: 'nope' } }],
+                        },
+                    },
+                    {
+                        client_id: good,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: {
+                            messages: [{ id: good, role: 'user', content: { message: 'ok' }, metadata: { ic_client_node_id: good } }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(push.res.status, 200);
+        assert.ok((push.body.failed as any[])?.some((f) => f.code === 'invalid_input'));
+        assert.ok((push.body.applied as string[])?.includes(good));
+    });
+
+    it('contexts_delete_many records only successfully deleted ids in results', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const c1 = generateClientNodeId();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [{ client_id: c1, op: 'context_create', payload: { metadata: { source: 'dm-partial', n: 1 } } }],
+            },
+            fx.accessA,
+        );
+        const ctx1 = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const delMany = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'contexts_delete_many',
+                        payload: { ids: [ctx1, 'ctx_does_not_exist_000000000000000000000000'] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(delMany.res.status, 200);
+        const pull = await fx.json('GET', '/sync/changes?since=0&limit=200', undefined, fx.accessA);
+        const row = (pull.body.changes as any[])?.find((c) => c.op === 'contexts_delete_many');
+        const results = (row?.payload?.results as any[]) ?? [];
+        assert.ok(results.some((r) => r.id === ctx1 && r.deleted === true));
+        assert.ok(results.some((r) => r.id === 'ctx_does_not_exist_000000000000000000000000' && r.deleted === false));
+    });
+
+    it('REST DELETE logs deleted_client_ids for replica consumers', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'rest-del', session_id: 'rd1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: m1,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m1, role: 'user', content: { message: 'x' }, metadata: { ic_client_node_id: m1 } }] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const del = await fx.json('DELETE', `/contexts/${contextId}`, { ids: [m1] }, fx.accessA);
+        assert.equal(del.res.status, 200);
+        const pull = await fx.json('GET', '/sync/changes?since=0&limit=200', undefined, fx.accessA);
+        const delChange = (pull.body.changes as any[])?.find((c) => c.op === 'message_delete' && c.context_id === contextId);
+        assert.ok(Array.isArray(delChange?.payload?.deleted_client_ids));
+        assert.ok(delChange?.payload?.deleted_client_ids?.includes(m1));
+        assert.equal(delChange?.payload?.data, undefined);
     });
 });
 

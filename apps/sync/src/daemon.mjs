@@ -1260,7 +1260,13 @@ export async function daemonBoot({
 
       if (syncEngine?.pullAndApplySync) {
         try {
-          await syncEngine.pullAndApplySync({ baseUrl: cfg.baseUrl, store, log });
+          await syncEngine.pullAndApplySync({
+            baseUrl: cfg.baseUrl,
+            store,
+            log,
+            getCursor: () => store.getSyncPullCursor(),
+            setCursor: (value) => store.setSyncPullCursor(value),
+          });
           await syncEngine.flushSyncOutbox({ baseUrl: cfg.baseUrl, log });
         } catch (error) {
           bumpStat("errors");

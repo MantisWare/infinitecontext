@@ -3,38 +3,105 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
-import { pullSyncChanges, pushSyncMutations } from "./sync-api.mjs";
+import { fetchSyncStatus, pullSyncChanges, pushSyncMutations } from "./sync-api.mjs";
 
-const SYNC_STATE_FILE = path.join(os.homedir(), ".infinitecontext", "sync-state.json");
-const SYNC_REPLICA_FILE = path.join(os.homedir(), ".infinitecontext", "sync-replica.json");
+const SYNC_DIR = path.join(os.homedir(), ".infinitecontext");
+const SYNC_STATE_FILE = path.join(SYNC_DIR, "sync-state.json");
+const SYNC_CLI_STATE_FILE = path.join(SYNC_DIR, "sync-cli-state.json");
+const SYNC_REPLICA_FILE = path.join(SYNC_DIR, "sync-replica.json");
 
-function readSyncState() {
+function readJsonFile(filePath, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(SYNC_STATE_FILE, "utf8"));
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
-    return { cursor: 0, outbox: [] };
+    return fallback;
   }
 }
 
-function writeSyncState(state) {
-  const dir = path.dirname(SYNC_STATE_FILE);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${SYNC_STATE_FILE}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, SYNC_STATE_FILE);
+function writeJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, filePath);
 }
 
-export function getSyncCursor() {
-  return Number(readSyncState().cursor ?? 0);
+function migrateLegacySyncState() {
+  const legacy = readJsonFile(SYNC_STATE_FILE, null);
+  if (!legacy || typeof legacy !== "object") return;
+  const cli = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
+  if (legacy.cursor !== undefined && cli.cursor === 0) {
+    cli.cursor = Number(legacy.cursor ?? 0);
+    writeJsonFile(SYNC_CLI_STATE_FILE, cli);
+  }
+  const { cursor: _drop, ...shared } = legacy;
+  writeJsonFile(SYNC_STATE_FILE, {
+    outbox: Array.isArray(shared.outbox) ? shared.outbox : [],
+    parked_failures: Array.isArray(shared.parked_failures) ? shared.parked_failures : [],
+  });
 }
 
-export function readLocalSyncState() {
-  const state = readSyncState();
+migrateLegacySyncState();
+
+function readSyncState() {
+  const state = readJsonFile(SYNC_STATE_FILE, { outbox: [], parked_failures: [] });
   return {
-    cursor: Number(state.cursor ?? 0),
     outbox: Array.isArray(state.outbox) ? state.outbox : [],
     parked_failures: Array.isArray(state.parked_failures) ? state.parked_failures : [],
   };
+}
+
+function writeSyncState(state) {
+  writeJsonFile(SYNC_STATE_FILE, {
+    outbox: Array.isArray(state.outbox) ? state.outbox : [],
+    parked_failures: Array.isArray(state.parked_failures) ? state.parked_failures : [],
+  });
+}
+
+function readCliSyncState() {
+  const state = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
+  return { cursor: Number(state.cursor ?? 0) };
+}
+
+function writeCliSyncState(state) {
+  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(state.cursor ?? 0) });
+}
+
+export function getSyncCursor() {
+  return readCliSyncState().cursor;
+}
+
+export function readLocalSyncState() {
+  const shared = readSyncState();
+  const cli = readCliSyncState();
+  return {
+    cursor: cli.cursor,
+    outbox: shared.outbox,
+    parked_failures: shared.parked_failures,
+  };
+}
+
+export function listParkedFailures() {
+  return readSyncState().parked_failures;
+}
+
+export function dropParkedFailure(clientId) {
+  const state = readSyncState();
+  const id = String(clientId ?? "");
+  const parked_failures = state.parked_failures.filter((row) => row?.client_id !== id);
+  if (parked_failures.length === state.parked_failures.length) return false;
+  writeSyncState({ ...state, parked_failures });
+  return true;
+}
+
+export function retryParkedFailure(clientId) {
+  const state = readSyncState();
+  const id = String(clientId ?? "");
+  const row = state.parked_failures.find((entry) => entry?.client_id === id);
+  if (!row?.mutation) return false;
+  const parked_failures = state.parked_failures.filter((entry) => entry?.client_id !== id);
+  const outbox = [...state.outbox, row.mutation];
+  writeSyncState({ ...state, outbox, parked_failures });
+  return true;
 }
 
 export function queueSyncMutation(mutation) {
@@ -68,7 +135,8 @@ export async function flushSyncOutbox({ baseUrl, log } = {}) {
   const parkedById = new Map(parkedExisting.map((row) => [row.client_id, row]));
   for (const row of result.failed ?? []) {
     if (row?.retryable || !row?.client_id) continue;
-    parkedById.set(row.client_id, row);
+    const mutation = outbox.find((m) => m.client_id === row.client_id);
+    parkedById.set(row.client_id, { ...row, mutation });
   }
   const parked_failures = [...parkedById.values()];
   writeSyncState({ ...state, outbox: remaining, parked_failures });
@@ -89,26 +157,21 @@ export async function flushSyncOutbox({ baseUrl, log } = {}) {
 }
 
 function readReplica() {
-  try {
-    return JSON.parse(fs.readFileSync(SYNC_REPLICA_FILE, "utf8"));
-  } catch {
-    return { contexts: {}, messages: {} };
-  }
+  return readJsonFile(SYNC_REPLICA_FILE, { contexts: {}, messages: {} });
 }
 
 function writeReplica(replica) {
-  const dir = path.dirname(SYNC_REPLICA_FILE);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${SYNC_REPLICA_FILE}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(replica, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, SYNC_REPLICA_FILE);
+  writeJsonFile(SYNC_REPLICA_FILE, replica);
 }
 
 /** Lightweight on-disk replica for `infinitecontext sync pull` (no daemon.db). */
 export function createCliSyncStore() {
   return {
     applySyncChange(change) {
-      applySyncChangeToReplica(readReplica(), change, writeReplica);
+      applySyncChangeToReplica(readReplica(), change, () => {});
+    },
+    flushReplica(replica) {
+      writeReplica(replica);
     },
   };
 }
@@ -140,6 +203,7 @@ export function applySyncChangeToReplica(replica, change, persist) {
   if (op === "contexts_delete_many") {
     const results = Array.isArray(payload.results) ? payload.results : [];
     for (const row of results) {
+      if (row?.deleted !== true) continue;
       const id = String(row?.id ?? row?.context_id ?? "");
       if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
     }
@@ -168,18 +232,6 @@ export function applySyncChangeToReplica(replica, change, persist) {
     for (const id of deletedIds) {
       if (id) delete replica.messages[String(id)];
     }
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-      if (!clientNodeId) continue;
-      replica.messages[String(clientNodeId)] = {
-        context_id: String(payload.context_id ?? contextId),
-        payload: row,
-        sequence,
-        op,
-      };
-    }
     persist(replica);
     return;
   }
@@ -201,27 +253,43 @@ export function applySyncChangeToReplica(replica, change, persist) {
   }
 }
 
-export async function pullAndApplySync({ baseUrl, store, log } = {}) {
-  const state = readSyncState();
-  let since = Number(state.cursor ?? 0);
+export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor } = {}) {
+  const readCursor = getCursor ?? (() => getSyncCursor());
+  const writeCursor =
+    setCursor ??
+    ((value) => {
+      writeCliSyncState({ cursor: value });
+    });
+
+  let since = Number(readCursor() ?? 0);
   let total = 0;
   let hasMore = true;
-
   let lastPage = null;
+
+  const replica = store?.flushReplica ? readReplica() : null;
+  const persistReplica = () => {
+    if (replica && store?.flushReplica) store.flushReplica(replica);
+  };
+
   while (hasMore) {
     lastPage = await pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange) {
-        store.applySyncChange(change);
+        if (replica) {
+          applySyncChangeToReplica(replica, change, persistReplica);
+        } else {
+          store.applySyncChange(change);
+        }
       }
       since = change.sequence;
       total += 1;
     }
+    if (replica) persistReplica();
     hasMore = Boolean(lastPage.has_more);
     if ((lastPage.changes ?? []).length === 0) break;
   }
 
-  writeSyncState({ ...state, cursor: since });
+  writeCursor(since);
   if (log && total > 0) log("info", "Applied sync pull", { changes: total, cursor: since });
   const conflictCount = pageConflicts(lastPage);
   if (log && conflictCount > 0) {
@@ -232,6 +300,16 @@ export async function pullAndApplySync({ baseUrl, store, log } = {}) {
 
 function pageConflicts(page) {
   return Array.isArray(page?.conflicts) ? page.conflicts.length : 0;
+}
+
+export async function resolveDeleteBaseSequence({ baseUrl, explicitBaseSequence } = {}) {
+  if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
+    return explicitBaseSequence;
+  }
+  const local = getSyncCursor();
+  if (local > 0) return local;
+  const remote = await fetchSyncStatus({ baseUrl });
+  return Number(remote.head_sequence ?? 0);
 }
 
 export function mutationForContextCreate(metadata) {
@@ -248,6 +326,18 @@ export function mutationForMessageAppend(contextId, messages) {
     op: "message_append",
     context_id: contextId,
     payload: { messages },
+  };
+}
+
+export async function mutationForMessageDelete(contextId, ids, { baseUrl, base_sequence: baseSequence } = {}) {
+  const idList = Array.isArray(ids) ? ids : [ids];
+  const base_sequence = await resolveDeleteBaseSequence({ baseUrl, explicitBaseSequence: baseSequence });
+  return {
+    client_id: generateClientNodeId(),
+    op: "message_delete",
+    context_id: contextId,
+    base_sequence,
+    payload: { ids: idList },
   };
 }
 
