@@ -153,5 +153,7 @@ export function registerAuthMiddleware(app: HttpApp, options?: AuthOptions) {
         app.use('/auth/crypto/*', bearerAuthMiddleware(verifyUser));
         app.use('/auth/devices', bearerAuthMiddleware(verifyUser));
         app.use('/auth/devices/*', bearerAuthMiddleware(verifyUser));
+        app.use('/sync', bearerAuthMiddleware(verifyUser));
+        app.use('/sync/*', bearerAuthMiddleware(verifyUser));
     }
 }

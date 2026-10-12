@@ -26,7 +26,11 @@ import {
     validateVaultPrunePlaintextVersions,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
-import type { HttpApp } from '../types/http';
+import type { SyncRepository } from '@infinitecontext/core/sync';
+import { isClientNodeId } from '@infinitecontext/crypto';
+
+import { recordSyncChange } from '../sync/record-change';
+import type { HttpApp, HttpContext } from '../types/http';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
 
@@ -34,8 +38,33 @@ const status = (code: ErrorCode) => resultStatus(code) as ContentfulStatusCode;
 
 // -- routes -------------------------------------------------------------------
 
-export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthRepository | null }) {
+function extractAppendClientIds(body: unknown): string[] {
+    const items = Array.isArray(body) ? body : [body];
+    const ids: string[] = [];
+    for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const id = (item as { id?: unknown }).id;
+        if (typeof id === 'string' && isClientNodeId(id)) ids.push(id);
+    }
+    return ids;
+}
+
+async function syncSessionMeta(c: HttpContext, authRepo: AuthRepository | null | undefined) {
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session' || !authRepo) return null;
+    const session = await authRepo.findSessionById(auth.sessionId);
+    return {
+        userId: auth.userId,
+        deviceId: session?.device_id ?? null,
+    };
+}
+
+export function registerContextRoutes(
+    app: HttpApp,
+    options?: { authRepo?: AuthRepository | null; syncRepo?: SyncRepository | null },
+) {
     const vaultDeps: VaultEncryptionDeps | null = options?.authRepo ? { authRepo: options.authRepo } : null;
+    const syncRepo = options?.syncRepo ?? null;
 
     // create context — parse body (default {} on bad JSON), call core, map Result
     app.post('/contexts', async (c) => {
@@ -50,6 +79,20 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
 
         const result = await createContext(storage, projectId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        if (syncMeta) {
+            await recordSyncChange(syncRepo, {
+                userId: syncMeta.userId,
+                op: 'context_create',
+                contextId: result.data.id,
+                payload: {
+                    context_id: result.data.id,
+                    metadata: result.data.metadata,
+                    created_at: result.data.created_at,
+                },
+                deviceId: syncMeta.deviceId,
+            });
+        }
         return c.json(result.data, 201);
     });
 
@@ -127,6 +170,38 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
 
         const result = await appendMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        if (syncMeta) {
+            const clientIds = extractAppendClientIds(body);
+            const fallbackId = clientIds[0];
+            await recordSyncChange(syncRepo, {
+                userId: syncMeta.userId,
+                op: 'message_append',
+                contextId: contextPublicId,
+                clientId: fallbackId,
+                payload: {
+                    context_id: contextPublicId,
+                    data: result.data.data,
+                    version: result.data.version,
+                },
+                deviceId: syncMeta.deviceId,
+            });
+            for (const clientId of clientIds.slice(1)) {
+                await recordSyncChange(syncRepo, {
+                    userId: syncMeta.userId,
+                    op: 'message_append',
+                    contextId: contextPublicId,
+                    clientId,
+                    payload: {
+                        context_id: contextPublicId,
+                        data: result.data.data,
+                        version: result.data.version,
+                        batch: true,
+                    },
+                    deviceId: syncMeta.deviceId,
+                });
+            }
+        }
         return c.json(result.data, 201);
     });
 

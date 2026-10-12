@@ -5,6 +5,7 @@
     "type": "module",
     "exports": {
         ".": "./src/index.ts",
+        "./sync": "./src/sync/index.ts",
         "./doc-urls": {
             "types": "./src/doc-urls.d.ts",
             "import": "./src/doc-urls.mjs",

@@ -53,6 +53,20 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       context_id TEXT NOT NULL,
       updated_at INTEGER DEFAULT (unixepoch())
     );
+
+    CREATE TABLE IF NOT EXISTS sync_context_meta (
+      context_id TEXT PRIMARY KEY,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_message_nodes (
+      client_node_id TEXT PRIMARY KEY,
+      context_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
   `);
 
   const stmt = {
@@ -100,6 +114,22 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
         context_id = excluded.context_id,
         updated_at = unixepoch()
     `),
+    upsertSyncContextMeta: db.prepare(`
+      INSERT INTO sync_context_meta (context_id, metadata_json, updated_at)
+      VALUES (?, ?, unixepoch())
+      ON CONFLICT(context_id) DO UPDATE SET
+        metadata_json = excluded.metadata_json,
+        updated_at = unixepoch()
+    `),
+    upsertSyncMessage: db.prepare(`
+      INSERT INTO sync_message_nodes (client_node_id, context_id, payload_json, sequence, updated_at)
+      VALUES (?, ?, ?, ?, unixepoch())
+      ON CONFLICT(client_node_id) DO UPDATE SET
+        context_id = excluded.context_id,
+        payload_json = excluded.payload_json,
+        sequence = excluded.sequence,
+        updated_at = unixepoch()
+    `),
   };
 
   // manual transaction wrapper (node:sqlite has no .transaction() helper)
@@ -141,6 +171,30 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     },
     setContextCache(cacheKey, contextId) {
       stmt.setContextCache.run(String(cacheKey ?? ""), String(contextId ?? ""));
+    },
+    applySyncChange(change) {
+      if (!change || typeof change !== "object") return;
+      const op = String(change.op ?? "");
+      const contextId = change.context_id ? String(change.context_id) : "";
+      const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
+      const sequence = parseNumber(change.sequence, 0);
+
+      if (op === "context_create" || op === "context_metadata") {
+        const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
+        const id = String(payload.context_id ?? contextId ?? "");
+        if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify(meta));
+        return;
+      }
+
+      if (op === "message_append") {
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        for (const row of rows) {
+          if (!row || typeof row !== "object") continue;
+          const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+          if (!clientNodeId) continue;
+          stmt.upsertSyncMessage.run(String(clientNodeId), String(payload.context_id ?? contextId), JSON.stringify(row), sequence);
+        }
+      }
     },
     close() {
       db.close();

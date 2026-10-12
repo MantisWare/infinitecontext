@@ -20,7 +20,10 @@ import { registerContextRoutes } from './routes/contexts';
 import { registerKeyRoutes } from './routes/keys';
 import { registerMcpRoutes } from './routes/mcp';
 import { registerHealthRoutes } from './routes/health';
+import { registerSyncRoutes } from './routes/sync';
 import { registerRootRoutes } from './routes/root';
+import { createSyncRateLimiters } from './sync/rate-limit';
+import { createSyncRepository, DrizzleAdapter } from '@infinitecontext/storage';
 import type { ApiConfig } from './types/api';
 import type { AppEnv } from './types/http';
 
@@ -53,7 +56,11 @@ export function createApp(options: AppOptions) {
     registerRootRoutes(app);
     registerHealthRoutes(app, options.runtimeEnv ?? {}, Boolean(options.keyCache));
     registerKeyRoutes(app);
-    registerContextRoutes(app, { authRepo: options.authRepo ?? null });
+    const syncRepo =
+        options.authConfig && options.authRepo && options.storage instanceof DrizzleAdapter
+            ? createSyncRepository(options.config)
+            : null;
+    registerContextRoutes(app, { authRepo: options.authRepo ?? null, syncRepo });
     registerMcpRoutes(app);
 
     if (options.authConfig && options.authRepo) {
@@ -71,6 +78,11 @@ export function createApp(options: AppOptions) {
             clientIpOptions: options.clientIpOptions ?? { trustProxy: false, runtime: 'node' },
         });
         registerVaultRoutes(app, options.authRepo);
+        registerSyncRoutes(app, {
+            syncRepo,
+            authRepo: options.authRepo,
+            rateLimiters: createSyncRateLimiters(),
+        });
     }
 
     return app;

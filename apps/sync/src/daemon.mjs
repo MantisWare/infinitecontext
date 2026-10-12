@@ -1158,8 +1158,25 @@ export async function daemonBoot({
     const uc = createInfiniteContextClient(cfg);
     runtime.uc = uc;
 
+    const useAccountSync = !cfg.apiKey;
+    let syncEngine = null;
+    if (useAccountSync) {
+      try {
+        syncEngine = await import("infinitecontext/lib/sync-engine.mjs");
+      } catch (error) {
+        log("warn", "Sync engine unavailable; falling back to context list probe", errorDetails(error));
+      }
+    }
+
     // connectivity check
-    try { await uc.get({ limit: 1 }); } catch (error) {
+    try {
+      if (syncEngine?.fetchSyncStatus) {
+        const { fetchSyncStatus } = await import("infinitecontext/lib/sync-api.mjs");
+        await fetchSyncStatus({ baseUrl: cfg.baseUrl });
+      } else {
+        await uc.get({ limit: 1 });
+      }
+    } catch (error) {
       const details = errorDetails(error);
       throw new Error(`InfiniteContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). See ${KEYS_AND_SERVICES_DOC_URL}`);
     }
@@ -1218,6 +1235,16 @@ export async function daemonBoot({
       ));
 
       if (stats.cycles % cfg.cleanupEveryCycles === 0) { try { store.cleanupExpired(); } catch { /* ignore */ } }
+
+      if (syncEngine?.pullAndApplySync) {
+        try {
+          await syncEngine.pullAndApplySync({ baseUrl: cfg.baseUrl, store, log });
+          await syncEngine.flushSyncOutbox({ baseUrl: cfg.baseUrl, log });
+        } catch (error) {
+          bumpStat("errors");
+          log("warn", "Sync pull/push cycle failed", errorDetails(error));
+        }
+      }
 
       // write status.json atomically after each cycle
       try { await writeStatusJson(cfg, stats, state, runtime); } catch { /* ignore */ }

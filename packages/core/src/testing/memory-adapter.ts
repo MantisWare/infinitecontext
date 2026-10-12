@@ -116,6 +116,13 @@ export class MemoryStorage implements StorageAdapter {
         }
     }
 
+    async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
+        const node = this.nodes.find(
+            (n) => n.project_id === projectId && n.public_id === publicId && n.type === 'context' && n.context_id === null,
+        );
+        if (node) node.metadata = metadata;
+    }
+
     async findApiKeyByPrefix(prefix: string): Promise<ApiKeyRow | null> {
         const k = this.keys.find((k) => k.key_prefix === prefix);
         return k ? { id: k.id, project_id: k.project_id, key_hash: k.key_hash } : null;

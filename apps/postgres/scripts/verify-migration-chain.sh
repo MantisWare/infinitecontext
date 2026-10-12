@@ -100,10 +100,33 @@ else
   PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$DB_NAME")
 fi
 
+assert_sync_schema() {
+  echo "Asserting sync schema..."
+  "${PSQL[@]}" <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'sync_change_log'
+  ) THEN
+    RAISE EXCEPTION 'missing sync_change_log table';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'sessions' AND column_name = 'last_sync_at'
+  ) THEN
+    RAISE EXCEPTION 'missing sessions.last_sync_at column';
+  END IF;
+END $$;
+SQL
+}
+
 apply_up
 assert_user_crypto_schema
+assert_sync_schema
 apply_down
 apply_up
 assert_user_crypto_schema
+assert_sync_schema
 
-echo "Migration chain init -> 005 verified (up, down, up) with schema assertions."
+echo "Migration chain init -> 006 verified (up, down, up) with schema assertions."
