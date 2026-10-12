@@ -3,7 +3,15 @@ title: 'Authentication'
 description: 'API keys and security'
 ---
 
-All API requests require authentication via Bearer token.
+All API requests require authentication via Bearer token — either a **project API key** or a **user access JWT** from account login.
+
+## Account login (CLI)
+
+Use `infinitecontext login` to obtain a refresh token stored in `~/.infinitecontext/credentials.json` (mode `0600`). The CLI refreshes access tokens automatically for sync.
+
+Access JWTs are short-lived; refresh tokens remain valid for seven days by default (`INFINITECONTEXT_REFRESH_TOKEN_TTL_SEC`).
+
+<Info>Server login passwords use Argon2id for **authentication only**. Vault encryption keys (Phase 2+) use a separate client-side KDF — see the [fork plan §7.1](https://github.com/MantisWare/infinitecontext/blob/main/docs/plan/infinitecontext-plan.md).</Info>
 
 ## API Key Format
 

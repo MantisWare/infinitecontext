@@ -1,5 +1,7 @@
 export type InfiniteContextConfig = {
-    apiKey: string;
+    apiKey?: string;
+    accessToken?: string;
+    getAccessToken?: () => Promise<string>;
     baseUrl?: string;
     fetch?: typeof fetch;
     headers?: Record<string, string>;
@@ -125,7 +127,9 @@ export class InfiniteContextHttpError extends Error {
 
 export class InfiniteContext {
     private readonly baseUrl: string;
-    private readonly apiKey: string;
+    private readonly apiKey?: string;
+    private readonly accessToken?: string;
+    private readonly getAccessTokenFn?: () => Promise<string>;
     private readonly fetchFn: typeof fetch;
     private readonly headers?: Record<string, string>;
     private readonly timeoutMs?: number;
@@ -133,6 +137,11 @@ export class InfiniteContext {
     constructor(cfg: InfiniteContextConfig) {
         this.baseUrl = (cfg.baseUrl ?? 'https://api.infinitecontext.ai').replace(/\/+$/, '');
         this.apiKey = cfg.apiKey;
+        this.accessToken = cfg.accessToken;
+        this.getAccessTokenFn = cfg.getAccessToken;
+        if (!this.apiKey && !this.accessToken && !this.getAccessTokenFn) {
+            throw new Error('InfiniteContext requires apiKey, accessToken, or getAccessToken');
+        }
         this.fetchFn = cfg.fetch ?? fetch;
         this.headers = cfg.headers;
         this.timeoutMs = cfg.timeoutMs;
@@ -230,11 +239,19 @@ export class InfiniteContext {
         });
     }
 
+    private async resolveBearerToken(): Promise<string> {
+        if (this.getAccessTokenFn) return this.getAccessTokenFn();
+        if (this.accessToken) return this.accessToken;
+        if (this.apiKey) return this.apiKey;
+        throw new Error('Missing InfiniteContext credentials');
+    }
+
     private async request<T>(path: string, init: { method: string; body?: unknown; headers?: Record<string, string>; acceptStatuses?: number[] }): Promise<T> {
         const url = `${this.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+        const bearer = await this.resolveBearerToken();
 
         const headers: Record<string, string> = {
-            Authorization: `Bearer ${this.apiKey}`,
+            Authorization: `Bearer ${bearer}`,
             ...(this.headers ?? {}),
             ...(init.headers ?? {}),
         };

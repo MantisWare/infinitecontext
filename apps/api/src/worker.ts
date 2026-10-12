@@ -1,6 +1,10 @@
+import { buildAuthRuntimeConfig, type Mailer } from '@infinitecontext/auth';
+
+import { resolveMailer } from './auth/mailer';
 import { KvKeyCache } from './cache/kv';
 import { buildApiConfig } from './config';
 import { createApp } from './app';
+import { createAuthRepository } from '@infinitecontext/storage/auth';
 import { SupabaseAdapter } from '@infinitecontext/storage/supabase';
 
 // =============================================================================
@@ -12,14 +16,28 @@ type Env = {
     SUPABASE_URL: string;
     SUPABASE_SERVICE_ROLE_KEY: string;
     INFINITECONTEXT_ADMIN_KEY: string;
+    INFINITECONTEXT_JWT_SECRET?: string;
+    INFINITECONTEXT_GOOGLE_CLIENT_ID?: string;
+    INFINITECONTEXT_GOOGLE_CLIENT_SECRET?: string;
+    INFINITECONTEXT_AUTH_PUBLIC_BASE_URL?: string;
+    INFINITECONTEXT_ACCESS_TOKEN_TTL_SEC?: string;
+    INFINITECONTEXT_REFRESH_TOKEN_TTL_SEC?: string;
+    INFINITECONTEXT_MAIL_PROVIDER?: string;
+    INFINITECONTEXT_RESEND_API_KEY?: string;
+    INFINITECONTEXT_MAIL_FROM?: string;
+    INFINITECONTEXT_ALLOW_CONSOLE_MAILER?: string;
+    INFINITECONTEXT_TRUSTED_PROXY?: string;
+    INFINITECONTEXT_ENV?: string;
+    NODE_ENV?: string;
     INFINITECONTEXT_API_KEYS_CACHE?: KVNamespace;
 };
 
 // cached per worker instance
 let app: ReturnType<typeof createApp> | null = null;
+let mailerPromise: Promise<Mailer | undefined> | null = null;
 
 export default {
-    fetch(request: Request, env: Env): Response | Promise<Response> {
+    async fetch(request: Request, env: Env): Promise<Response> {
         if (!app) {
             const config = buildApiConfig(env as unknown as Record<string, string | undefined>);
             if (config.DATABASE_PROVIDER !== 'supabase') {
@@ -31,7 +49,21 @@ export default {
                 ? new KvKeyCache(env.INFINITECONTEXT_API_KEYS_CACHE)
                 : undefined;
 
-            app = createApp({ config, storage, keyCache });
+            const authConfig = buildAuthRuntimeConfig(env as unknown as Record<string, string | undefined>);
+            const authRepo = authConfig ? createAuthRepository(config) : undefined;
+            mailerPromise ??= authConfig ? resolveMailer(env as unknown as Record<string, string | undefined>, 'worker') : Promise.resolve(undefined);
+            const mailer = await mailerPromise;
+
+            const trustProxy = String(env.INFINITECONTEXT_TRUSTED_PROXY ?? '').trim() === 'true';
+            app = createApp({
+                config,
+                storage,
+                keyCache,
+                authConfig,
+                authRepo,
+                mailer,
+                clientIpOptions: { trustProxy, runtime: 'worker' },
+            });
         }
 
         return app.fetch(request);

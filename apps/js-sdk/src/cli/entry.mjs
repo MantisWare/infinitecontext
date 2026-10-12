@@ -39,13 +39,16 @@ Commands:
   sync stop     Stop a running daemon
   sync status   Show daemon status
   config        Run the setup wizard
+  login         Sign in with email/password or Google OAuth
+  logout        Sign out and clear local session tokens
+  whoami        Show the signed-in account
   switch        Switch session to another agent (codex, claude)
   update        Update CLI globally via npm/pnpm/bun
   version       Print version
   help          Show this help message
 
 Environment:
-  INFINITECONTEXT_API_KEY   Required. Your InfiniteContext API key.
+  INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
   INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
 `);
 }
@@ -92,6 +95,16 @@ function loadApiKeyFromConfig() {
     const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
     if (cfg.apiKey) process.env.INFINITECONTEXT_API_KEY = String(cfg.apiKey);
   } catch { /* no config */ }
+}
+
+async function hasSyncCredentials() {
+  if (process.env.INFINITECONTEXT_API_KEY) return true;
+  try {
+    const { hasSessionCredentials } = await import("../../lib/credentials.mjs");
+    return hasSessionCredentials();
+  } catch {
+    return false;
+  }
 }
 
 function normalizeTag(value) {
@@ -399,7 +412,7 @@ async function run() {
   let onboardResult = null;
   if (NEEDS_KEY.has(command)) {
     loadApiKeyFromConfig();
-    if (!process.env.INFINITECONTEXT_API_KEY) onboardResult = await runOnboarding();
+    if (!(await hasSyncCredentials())) onboardResult = await runOnboarding();
   }
 
   switch (command) {
@@ -464,6 +477,24 @@ async function run() {
     case "switch": {
       const { runSwitch } = await import("./switch.mjs");
       await runSwitch();
+      break;
+    }
+
+    case "login": {
+      const { runLogin } = await import("./login.mjs");
+      await runLogin();
+      break;
+    }
+
+    case "logout": {
+      const { runLogout } = await import("./login.mjs");
+      await runLogout();
+      break;
+    }
+
+    case "whoami": {
+      const { runWhoami } = await import("./login.mjs");
+      await runWhoami();
       break;
     }
 

@@ -7,7 +7,8 @@
         ".": "./src/index.ts",
         "./drizzle": "./src/drizzle.ts",
         "./supabase": "./src/supabase.ts",
-        "./sqlite": "./src/sqlite/index.ts"
+        "./sqlite": "./src/sqlite/index.ts",
+        "./auth": "./src/auth/index.ts"
     },
     "scripts": {
         "check": "tsc --noEmit",
@@ -16,6 +17,7 @@
     "dependencies": {
         "@libsql/client": "^0.17.3",
         "@supabase/supabase-js": "^2.49.4",
+        "@infinitecontext/auth": "workspace:*",
         "@infinitecontext/core": "workspace:*",
         "drizzle-orm": "^0.44.5",
         "postgres": "^3.4.7"
