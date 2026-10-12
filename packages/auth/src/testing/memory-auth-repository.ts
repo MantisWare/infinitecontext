@@ -248,6 +248,28 @@ export class MemoryAuthRepository implements AuthRepository {
         return true;
     }
 
+    async ensureVaultPassphraseRequired(userId: number): Promise<void> {
+        const existing = this.userCrypto.get(userId);
+        const now = new Date().toISOString();
+        if (existing) {
+            this.userCrypto.set(userId, { ...existing, vault_passphrase_required: true, updated_at: now });
+            return;
+        }
+        this.userCrypto.set(userId, {
+            user_id: userId,
+            kdf_salt: null,
+            kdf_params: null,
+            wrapped_dek: null,
+            wrapped_dek_recovery: null,
+            recovery_kdf_salt: null,
+            dek_version: 1,
+            crypto_initialized_at: null,
+            vault_passphrase_required: true,
+            created_at: now,
+            updated_at: now,
+        });
+    }
+
     async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
         return this.userCrypto.get(userId) ?? null;
     }

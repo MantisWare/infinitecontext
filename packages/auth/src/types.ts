@@ -143,6 +143,7 @@ export type AuthRepository = {
     markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean>;
 
     findUserCrypto(userId: number): Promise<UserCryptoRow | null>;
+    ensureVaultPassphraseRequired(userId: number): Promise<void>;
     upsertUserCrypto(input: {
         userId: number;
         kdfSalt: Buffer;

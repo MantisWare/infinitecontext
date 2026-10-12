@@ -302,6 +302,17 @@ export class SupabaseAuthRepository implements AuthRepository {
         return (data?.length ?? 0) > 0;
     }
 
+    async ensureVaultPassphraseRequired(userId: number): Promise<void> {
+        const now = new Date().toISOString();
+        const { error } = await this.client.from('user_crypto').upsert({
+            user_id: userId,
+            vault_passphrase_required: true,
+            updated_at: now,
+            dek_version: 1,
+        });
+        if (error) throw error;
+    }
+
     async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
         const { data, error } = await this.client.from('user_crypto').select().eq('user_id', userId).maybeSingle();
         if (error) throw error;

@@ -367,6 +367,10 @@ export class AuthService {
             });
         }
 
+        if (!user.password_hash) {
+            await this.deps.authRepo.ensureVaultPassphraseRequired(user.id);
+        }
+
         await this.ensureUserProject(user.id);
         const tokens = await this.issueSession(user, deviceId, deviceName);
         return { user, tokens };

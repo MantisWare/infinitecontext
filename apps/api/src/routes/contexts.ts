@@ -13,6 +13,9 @@ import {
     type ErrorCode,
 } from '@infinitecontext/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AuthRepository } from '@infinitecontext/auth';
+
+import { validateVaultContextWrite, type VaultEncryptionDeps } from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
@@ -21,12 +24,19 @@ const status = (code: ErrorCode) => resultStatus(code) as ContentfulStatusCode;
 
 // -- routes -------------------------------------------------------------------
 
-export function registerContextRoutes(app: HttpApp) {
+export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthRepository | null }) {
+    const vaultDeps: VaultEncryptionDeps | null = options?.authRepo ? { authRepo: options.authRepo } : null;
+
     // create context — parse body (default {} on bad JSON), call core, map Result
     app.post('/contexts', async (c) => {
         const { projectId } = c.get('auth');
         const storage = c.get('storage');
         const body = await c.req.json().catch(() => ({}));
+
+        if (vaultDeps) {
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'create_root');
+            if (denied) return denied;
+        }
 
         const result = await createContext(storage, projectId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
@@ -96,6 +106,11 @@ export function registerContextRoutes(app: HttpApp) {
         const contextPublicId = c.req.param('id');
         const body = await c.req.json();
 
+        if (vaultDeps) {
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages');
+            if (denied) return denied;
+        }
+
         const result = await appendMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         return c.json(result.data, 201);
@@ -127,6 +142,11 @@ export function registerContextRoutes(app: HttpApp) {
         const body = await c.req.json().catch(() => null);
 
         if (body === null) return c.json({ error: 'Invalid JSON body' }, 400);
+
+        if (vaultDeps) {
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages');
+            if (denied) return denied;
+        }
 
         const result = await updateMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));

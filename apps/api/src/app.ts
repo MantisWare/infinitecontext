@@ -49,7 +49,7 @@ export function createApp(options: AppOptions) {
     });
     registerRootRoutes(app);
     registerKeyRoutes(app);
-    registerContextRoutes(app);
+    registerContextRoutes(app, { authRepo: options.authRepo ?? null });
     registerMcpRoutes(app);
 
     if (options.authConfig && options.authRepo) {

@@ -72,7 +72,9 @@ Commands:
   change-passphrase    Re-wrap DEK with a new vault passphrase
   recover              Unlock using recovery key (alias for unlock --recovery)
   rotate-recovery-key  Generate a new recovery key (shown once)
-  migrate-encrypt      Encrypt an existing plaintext context in place
+  migrate-encrypt <id> Encrypt one plaintext context in place
+  migrate-project      Encrypt all plaintext contexts (resumable state file)
+    --dry-run          List contexts that still need encryption
   devices list         List signed-in devices
   devices revoke <id>  Revoke another device session
 
@@ -134,14 +136,12 @@ async function cmdStatus(baseUrl) {
   );
 }
 
-async function cmdMigrateEncrypt(baseUrl, argv) {
-  const contextId = argv[0];
-  if (!contextId) throw new Error("Usage: infinitecontext vault migrate-encrypt <context-id>");
+async function buildEncryptedClient(baseUrl) {
   const { getUnlockedDek } = await import("../../lib/vault-session.mjs");
   const unlocked = await getUnlockedDek({ baseUrl });
   if (!unlocked) throw new Error("Vault is locked. Run `infinitecontext vault unlock`.");
   const { InfiniteContext } = await import("infinitecontext");
-  const client = wrapInfiniteContextWithVault(
+  return wrapInfiniteContextWithVault(
     new InfiniteContext({
       baseUrl,
       getAccessToken: async () => {
@@ -152,8 +152,38 @@ async function cmdMigrateEncrypt(baseUrl, argv) {
     }),
     unlocked,
   );
+}
+
+async function cmdMigrateEncrypt(baseUrl, argv) {
+  const contextId = argv.filter((a) => !a.startsWith("--"))[0];
+  if (!contextId) throw new Error("Usage: infinitecontext vault migrate-encrypt <context-id>");
+  const client = await buildEncryptedClient(baseUrl);
   await client.migrateEncryptContext(contextId);
   console.log(`Encrypted context ${contextId} in place.`);
+}
+
+async function cmdMigrateProject(baseUrl, argv) {
+  const dryRun = argv.includes("--dry-run");
+  const { InfiniteContext } = await import("infinitecontext");
+  const tokenClient = new InfiniteContext({
+    baseUrl,
+    getAccessToken: async () => {
+      const { getValidAccessToken } = await import("../../lib/credentials.mjs");
+      const s = await getValidAccessToken({ baseUrl });
+      return s.accessToken;
+    },
+  });
+  const client = dryRun ? tokenClient : await buildEncryptedClient(baseUrl);
+  const { migrateProjectEncryption } = await import("../../lib/vault-migrate.mjs");
+  const { fetchMe } = await import("../../lib/vault-api.mjs");
+  const me = await fetchMe({ baseUrl });
+  const report = await migrateProjectEncryption({
+    scopeKey: me.id,
+    dryRun,
+    listContexts: (opts) => tokenClient.get(opts),
+    encryptContext: (id) => client.migrateEncryptContext(id),
+  });
+  console.log(JSON.stringify(report, null, 2));
 }
 
 export async function runVaultCli(argv) {
@@ -189,6 +219,7 @@ export async function runVaultCli(argv) {
     return;
   }
   if (cmd === "migrate-encrypt") return cmdMigrateEncrypt(baseUrl, rest);
+  if (cmd === "migrate-project") return cmdMigrateProject(baseUrl, rest);
   if (cmd === "devices") {
     const [sub, id] = rest;
     if (sub === "list") {

@@ -278,6 +278,24 @@ export class DrizzleAuthRepository implements AuthRepository {
         return rows.length > 0;
     }
 
+    async ensureVaultPassphraseRequired(userId: number): Promise<void> {
+        const now = new Date().toISOString();
+        await this.db
+            .insert(user_crypto)
+            .values({
+                user_id: userId,
+                vault_passphrase_required: true,
+                updated_at: now,
+            })
+            .onConflictDoUpdate({
+                target: user_crypto.user_id,
+                set: {
+                    vault_passphrase_required: true,
+                    updated_at: now,
+                },
+            });
+    }
+
     async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
         const rows = await this.db.select().from(user_crypto).where(eq(user_crypto.user_id, userId)).limit(1);
         const row = rows[0];

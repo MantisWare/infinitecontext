@@ -76,9 +76,12 @@ export class VaultError extends Error {
     }
 }
 
-export function serializeUserCryptoPublic(row: UserCryptoRow | null) {
+export function serializeUserCryptoPublic(row: UserCryptoRow | null, user?: { password_hash: string | null }) {
+    const passphraseRequired =
+        Boolean(row?.vault_passphrase_required) ||
+        (user?.password_hash === null || user?.password_hash === undefined);
     if (!row?.crypto_initialized_at) {
-        return { initialized: false as const, vault_passphrase_required: Boolean(row?.vault_passphrase_required) };
+        return { initialized: false as const, vault_passphrase_required: passphraseRequired };
     }
     return {
         initialized: true as const,
@@ -87,7 +90,7 @@ export function serializeUserCryptoPublic(row: UserCryptoRow | null) {
         kdf_salt: row.kdf_salt ? row.kdf_salt.toString('base64') : null,
         wrapped_dek: row.wrapped_dek ? row.wrapped_dek.toString('base64') : null,
         wrapped_dek_recovery: row.wrapped_dek_recovery ? row.wrapped_dek_recovery.toString('base64') : null,
-        vault_passphrase_required: row.vault_passphrase_required,
+        vault_passphrase_required: passphraseRequired,
         crypto_initialized_at: row.crypto_initialized_at,
     };
 }

@@ -10,15 +10,8 @@ export async function assertSyncAuth(cfg) {
   if (!session?.accessToken) {
     throw new Error("Session expired or invalid. Run `infinitecontext login`.");
   }
-  const { fetchCryptoState } = await import("infinitecontext/lib/vault-api.mjs");
-  const crypto = await fetchCryptoState({ baseUrl: cfg.baseUrl });
-  if (crypto?.initialized) {
-    const { getUnlockedDek } = await import("infinitecontext/lib/vault-session.mjs");
-    const unlocked = await getUnlockedDek({ baseUrl: cfg.baseUrl });
-    if (!unlocked) {
-      throw new Error("Vault is locked. Run `infinitecontext vault unlock` (or `vault recover`).");
-    }
-  }
+  const { assertVaultReadyForSync } = await import("infinitecontext/lib/vault-require.mjs");
+  await assertVaultReadyForSync({ baseUrl: cfg.baseUrl });
 }
 
 export function createInfiniteContextClient(cfg) {

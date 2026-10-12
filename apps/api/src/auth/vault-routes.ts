@@ -35,8 +35,9 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
     app.get('/auth/crypto', async (c) => {
         const auth = requireUserSession(c);
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+        const user = await authRepo.findUserById(auth.userId);
         const row = await vault.getCryptoState(auth.userId);
-        return c.json(serializeUserCryptoPublic(row));
+        return c.json(serializeUserCryptoPublic(row, user ?? undefined));
     });
 
     app.put('/auth/crypto', async (c) => {
@@ -66,7 +67,8 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
                 dekVersion,
                 vaultPassphraseRequired,
             });
-            return c.json(serializeUserCryptoPublic(row));
+            const user = await authRepo.findUserById(auth.userId);
+            return c.json(serializeUserCryptoPublic(row, user ?? undefined));
         } catch (error) {
             const mapped = mapVaultError(error);
             return c.json({ error: mapped.message }, mapped.status);
@@ -91,7 +93,8 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
                 wrappedDekRecovery,
                 dekVersion,
             });
-            return c.json(serializeUserCryptoPublic(row));
+            const user = await authRepo.findUserById(auth.userId);
+            return c.json(serializeUserCryptoPublic(row, user ?? undefined));
         } catch (error) {
             const mapped = mapVaultError(error);
             return c.json({ error: mapped.message }, mapped.status);

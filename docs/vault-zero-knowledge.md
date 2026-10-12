@@ -24,9 +24,21 @@ Envelope stored in `nodes.content` / sensitive metadata:
 }
 ```
 
-### Server-side filters (v1)
+### Server-side filters (v1 — accepted leakage)
 
-Message bodies and rich metadata are encrypted. These metadata keys stay **cleartext** so `GET /contexts` filters keep working: `source`, `user_id`, `host`, `project_path`, `session_id`.
+**Decision (Waldo v1):** accept cleartext index fields below; **blind indexes** remain a later item.
+
+Message bodies and all other metadata fields are encrypted (`ic_sensitive` envelope). These metadata keys stay **cleartext** on the server so `GET /contexts` filters keep working:
+
+| Field | What leaks to the operator |
+|-------|----------------------------|
+| `source` | Agent/source enum (e.g. `claude`, `codex`) |
+| `user_id` | Daemon user id string |
+| `host` | Hostname string |
+| `project_path` | Filesystem path string |
+| `session_id` | Upstream agent session id |
+
+Everything else (notes, titles, custom tags, message text, etc.) must be ciphertext once the vault is initialized.
 
 ## Key recovery (strict zero-knowledge)
 
@@ -52,6 +64,8 @@ infinitecontext vault devices revoke <session-public-id>
 ```
 
 Cached unlock TTL defaults to 15 minutes (`INFINITECONTEXT_VAULT_TTL_SEC` overrides).
+
+When OS keychain (`keytar`) is unavailable, the DEK stays **in process memory only** for that CLI/daemon lifetime. An optional `vault-cache.enc` file holds only ciphertext sealed by an in-memory session key (never a plaintext DEK on disk). `vault lock` wipes memory, keychain entries, and cache files.
 
 ## Threat model (summary)
 

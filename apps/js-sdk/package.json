@@ -58,7 +58,9 @@
         "./credentials": "./lib/credentials.mjs",
         "./lib/vault-api.mjs": "./lib/vault-api.mjs",
         "./lib/vault-session.mjs": "./lib/vault-session.mjs",
-        "./lib/encrypted-client.mjs": "./lib/encrypted-client.mjs"
+        "./lib/encrypted-client.mjs": "./lib/encrypted-client.mjs",
+        "./lib/vault-require.mjs": "./lib/vault-require.mjs",
+        "./lib/vault-migrate.mjs": "./lib/vault-migrate.mjs"
     },
     "files": [
         "dist/",
@@ -73,6 +75,7 @@
     },
     "dependencies": {
         "@infinitecontext/crypto": "workspace:*",
+        "@noble/ciphers": "^1.3.0",
         "@mishieck/ink-titled-box": "^0.4.2",
         "fast-glob": "^3.3.3",
         "figlet": "^1.10.0",

@@ -1,14 +1,22 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { xchacha20poly1305 } from "@noble/ciphers/chacha";
+
 import { infinitecontextHome } from "./credentials.mjs";
 
-const CACHE_FILE = "vault-cache.json";
+const ENCRYPTED_CACHE_FILE = "vault-cache.enc";
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 
+/** @type {Buffer | null} */
 let memoryDek = null;
 let memoryExpiresAt = 0;
+
+/** In-process session secret for optional encrypted cache (never written to disk). */
+let sessionWrapKey = null;
+let sessionWrapExpiresAt = 0;
 
 /** @returns {Promise<import('keytar') | null>} */
 async function loadKeytar() {
@@ -21,39 +29,67 @@ async function loadKeytar() {
   }
 }
 
-function cacheFilePath() {
-  return path.join(infinitecontextHome(), CACHE_FILE);
+function encryptedCachePath() {
+  return path.join(infinitecontextHome(), ENCRYPTED_CACHE_FILE);
 }
 
-function readFileCache(accountKey) {
+function ensureSessionWrapKey(ttlMs) {
+  if (sessionWrapKey && sessionWrapExpiresAt > Date.now()) return sessionWrapKey;
+  sessionWrapKey = crypto.randomBytes(32);
+  sessionWrapExpiresAt = Date.now() + ttlMs;
+  return sessionWrapKey;
+}
+
+function writeEncryptedCache(accountKey, dekBytes, ttlMs) {
+  const wrapKey = ensureSessionWrapKey(ttlMs);
+  const nonce = crypto.randomBytes(24);
+  const aad = new TextEncoder().encode(`infinitecontext/vault-cache/v1|${accountKey}`);
+  const cipher = xchacha20poly1305(wrapKey, nonce, aad);
+  const ct = cipher.encrypt(dekBytes);
+  const payload = {
+    v: 1,
+    accountKey,
+    expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+    nonce: Buffer.from(nonce).toString("base64"),
+    ct: Buffer.from(ct).toString("base64"),
+  };
+  const dir = infinitecontextHome();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(encryptedCachePath(), `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+}
+
+function readEncryptedCache(accountKey) {
+  if (!sessionWrapKey || sessionWrapExpiresAt <= Date.now()) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(cacheFilePath(), "utf8"));
+    const raw = JSON.parse(fs.readFileSync(encryptedCachePath(), "utf8"));
     if (raw?.accountKey !== accountKey) return null;
     if (Date.parse(String(raw.expiresAt ?? 0)) <= Date.now()) return null;
-    const dekB64 = String(raw.dekB64 ?? "");
-    if (!dekB64) return null;
-    return Buffer.from(dekB64, "base64");
+    const nonce = Buffer.from(String(raw.nonce ?? ""), "base64");
+    const ct = Buffer.from(String(raw.ct ?? ""), "base64");
+    const aad = new TextEncoder().encode(`infinitecontext/vault-cache/v1|${accountKey}`);
+    const cipher = xchacha20poly1305(sessionWrapKey, nonce, aad);
+    return cipher.decrypt(ct);
   } catch {
     return null;
   }
 }
 
-function writeFileCache(accountKey, dekBytes, ttlMs) {
-  const dir = infinitecontextHome();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
-  fs.writeFileSync(
-    cacheFilePath(),
-    `${JSON.stringify({ accountKey, dekB64: Buffer.from(dekBytes).toString("base64"), expiresAt }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+function removeLegacyPlaintextCache() {
+  try {
+    fs.unlinkSync(path.join(infinitecontextHome(), "vault-cache.json"));
+  } catch {
+    // ignore
+  }
 }
 
 export function clearVaultKeychainCache(accountKey) {
   memoryDek = null;
   memoryExpiresAt = 0;
+  sessionWrapKey = null;
+  sessionWrapExpiresAt = 0;
+  removeLegacyPlaintextCache();
   try {
-    fs.unlinkSync(cacheFilePath());
+    fs.unlinkSync(encryptedCachePath());
   } catch {
     // ignore
   }
@@ -79,9 +115,16 @@ export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_T
       expiresAt: new Date(memoryExpiresAt).toISOString(),
     });
     await keytar.setPassword("infinitecontext-vault", accountKey, payload);
+    removeLegacyPlaintextCache();
+    try {
+      fs.unlinkSync(encryptedCachePath());
+    } catch {
+      // ignore
+    }
     return;
   }
-  writeFileCache(accountKey, dekBytes, ttlMs);
+
+  writeEncryptedCache(accountKey, dekBytes, ttlMs);
 }
 
 export async function loadCachedDek(accountKey) {
@@ -105,10 +148,11 @@ export async function loadCachedDek(accountKey) {
     }
   }
 
-  const fromFile = readFileCache(accountKey);
-  if (!fromFile) return null;
-  memoryDek = fromFile;
-  return new Uint8Array(fromFile);
+  const fromEncrypted = readEncryptedCache(accountKey);
+  if (!fromEncrypted) return null;
+  memoryDek = Buffer.from(fromEncrypted);
+  memoryExpiresAt = Date.parse(String(JSON.parse(fs.readFileSync(encryptedCachePath(), "utf8")).expiresAt));
+  return new Uint8Array(fromEncrypted);
 }
 
 export function vaultAccountKey({ userPublicId, email }) {

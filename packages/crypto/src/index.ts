@@ -5,3 +5,4 @@ export * from './aead';
 export * from './dek-wrap';
 export * from './node-payload';
 export * from './vault-setup';
+export * from './plaintext-policy';
