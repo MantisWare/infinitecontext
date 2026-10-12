@@ -68,6 +68,12 @@ importers:
 
   apps/js-sdk:
     dependencies:
+      '@infinitecontext/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@infinitecontext/sync':
+        specifier: workspace:*
+        version: link:../sync
       '@mishieck/ink-titled-box':
         specifier: ^0.4.2
         version: 0.4.2(ink@6.7.0(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
@@ -96,9 +102,6 @@ importers:
       '@infinitecontext/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
-      '@infinitecontext/sync':
-        specifier: workspace:*
-        version: link:../sync
       tsdown:
         specifier: ^0.20.3
         version: 0.20.3(typescript@5.9.3)
@@ -118,6 +121,9 @@ importers:
 
   apps/mcp-server:
     dependencies:
+      '@infinitecontext/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@modelcontextprotocol/sdk':
         specifier: ^1.27.1
         version: 1.27.1(zod@3.25.76)
@@ -131,6 +137,9 @@ importers:
       '@types/node':
         specifier: ^22.18.6
         version: 22.19.11
+      tsdown:
+        specifier: ^0.20.3
+        version: 0.20.3(typescript@5.9.3)
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
@@ -142,6 +151,9 @@ importers:
 
   apps/sync:
     dependencies:
+      '@infinitecontext/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@infinitecontext/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
@@ -157,9 +169,6 @@ importers:
       figlet:
         specifier: ^1.10.0
         version: 1.10.0
-      infinitecontext:
-        specifier: workspace:*
-        version: link:../js-sdk
       ink:
         specifier: ^6.7.0
         version: 6.7.0(react@19.2.4)

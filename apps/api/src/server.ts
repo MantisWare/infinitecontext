@@ -16,7 +16,15 @@ warnIfJwtSecretMissing(process.env);
 const storage = createStorageAdapter(config);
 const authConfig = buildAuthRuntimeConfig(process.env);
 const authRepo = authConfig ? createAuthRepository(config) : undefined;
-const mailer = authConfig ? await resolveMailer(process.env, 'node') : undefined;
+await warnIfMailMisconfigured(process.env, 'node');
+let mailer;
+if (authConfig) {
+    try {
+        mailer = await resolveMailer(process.env, 'node');
+    } catch {
+        mailer = undefined;
+    }
+}
 const trustProxy = String(process.env.INFINITECONTEXT_TRUSTED_PROXY ?? '').trim() === 'true';
 const app = createApp({
     config,
@@ -30,7 +38,6 @@ const app = createApp({
 const port = Number(process.env.PORT ?? 8787);
 
 logStartupConfigSummary(process.env);
-await warnIfMailMisconfigured(process.env, 'node');
 
 serve({ fetch: app.fetch, port });
 

@@ -2,7 +2,7 @@
   "name": "infinitecontext-python-sdk",
   "private": true,
   "scripts": {
-    "test": "python3 -m pip install -e '.[dev]' -q && python3 -m pytest -q",
-    "check": "python3 -m pip install -e '.[dev]' -q && python3 -m pytest -q"
+    "test": "node scripts/run-pytest.mjs",
+    "check": "node scripts/run-pytest.mjs"
   }
 }

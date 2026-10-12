@@ -161,6 +161,11 @@ async function goApiKeyMode(w) {
   await w.send(KEY.enter);
 }
 
+async function goLoginMode(w) {
+  await w.waitFor(/How do you want to authenticate/);
+  await w.send(KEY.down, KEY.enter);
+}
+
 async function enterApiKey(w, key) {
   await w.waitFor(/Enter your API key:/);
   await w.send(...chars(key), KEY.enter);
@@ -252,6 +257,25 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     assert.deepEqual(cfg.captureAgents, ["codex"]);
     assert.deepEqual(cfg.projectPaths, [realProject]);
     assert.equal(cfg.bootstrapMode, "new_only");
+  });
+
+  it("hosted + account login shows vault init offer", async () => {
+    const w = spawnWizard();
+
+    try {
+      await goWelcome(w);
+      await goHostingHosted(w);
+      await goLoginMode(w);
+      await w.waitFor(/Initialize vault after you sign in/);
+      await w.send(KEY.enter);
+      await finishWizardDefaults(w);
+    } finally {
+      w.kill();
+    }
+
+    const cfg = readConfig();
+    assert.equal(cfg.vaultInitRecommended, true);
+    assert.equal(cfg.baseUrl, "https://api.infinitecontext.ai");
   });
 
   it("rejects malformed api key then accepts a valid one", async () => {

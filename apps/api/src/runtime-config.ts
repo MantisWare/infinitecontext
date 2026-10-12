@@ -1,9 +1,9 @@
 import { buildAuthRuntimeConfig } from '@infinitecontext/auth';
+import { KEYS_AND_SERVICES_DOC_URL } from '@infinitecontext/core/doc-urls';
 
 import { resolveMailer } from './auth/mailer';
 
-export const KEYS_AND_SERVICES_DOC_URL =
-    'https://docs.infinitecontext.ai/configuration/keys-and-services';
+export { KEYS_AND_SERVICES_DOC_URL };
 
 export class MissingConfigError extends Error {
     readonly envVar: string;

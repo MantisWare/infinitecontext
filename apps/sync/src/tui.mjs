@@ -7,7 +7,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
+import { resolveBaseUrl } from "./base-url.mjs";
 import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 

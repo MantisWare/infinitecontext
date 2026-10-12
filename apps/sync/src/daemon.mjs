@@ -8,7 +8,8 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
-import { KEYS_AND_SERVICES_DOC_URL, resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
+import { KEYS_AND_SERVICES_DOC_URL } from "@infinitecontext/core/doc-urls";
+import { resolveBaseUrl } from "./base-url.mjs";
 import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import {
   createBootstrapStateKey,

@@ -5,6 +5,11 @@
     "type": "module",
     "exports": {
         ".": "./src/index.ts",
+        "./doc-urls": {
+            "types": "./src/doc-urls.d.ts",
+            "import": "./src/doc-urls.mjs",
+            "default": "./src/doc-urls.mjs"
+        },
         "./testing": "./src/testing/index.ts"
     },
     "scripts": {

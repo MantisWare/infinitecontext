@@ -3,6 +3,18 @@ import { getUnlockedDek } from "./vault-session.mjs";
 import { DATA_LOSS_WARNING } from "./vault-session.mjs";
 import { isHostedApiBaseUrl, readConfigFile } from "./client-config.mjs";
 
+export const VAULT_DECLINE_SERVER_READABLE_WARNING =
+  "Without vault, new context data may be stored in plaintext that the server can read. " +
+  "Run `infinitecontext vault init` to enable zero-knowledge encryption.";
+
+export function formatYesNoPromptLabel(defaultYes = true) {
+  return defaultYes ? "[Y/n]" : "[y/N]";
+}
+
+export function warnVaultDeclinedForHosted() {
+  console.warn(VAULT_DECLINE_SERVER_READABLE_WARNING);
+}
+
 export async function fetchVaultGateState({ baseUrl }) {
   const crypto = await fetchCryptoState({ baseUrl });
   const needsInit =
@@ -43,7 +55,10 @@ export async function runInteractiveVaultInitIfRequired({
   baseUrl,
   googleAccount = false,
   hostedVaultRecommended = false,
+  interactive = true,
 }) {
+  if (!interactive) return false;
+
   const { needsInit, crypto } = await fetchVaultGateState({ baseUrl });
   if (crypto?.initialized) return false;
 
@@ -55,19 +70,24 @@ export async function runInteractiveVaultInitIfRequired({
   if (!shouldOffer) return false;
 
   if (hosted && !needsInit) {
+    const defaultYes = recommendFromConfig;
     const yes = await promptYesNoRecommended({
       question:
-        "\nInitialize zero-knowledge vault now? (recommended on hosted — run `infinitecontext vault init`)\n[Y/n]: ",
-      defaultYes: recommendFromConfig,
+        `\nInitialize zero-knowledge vault now? (recommended on hosted — run \`infinitecontext vault init\`)\n${formatYesNoPromptLabel(defaultYes)}: `,
+      defaultYes,
     });
-    if (!yes) return false;
+    if (!yes) {
+      warnVaultDeclinedForHosted();
+      return false;
+    }
   } else if (hosted && needsInit) {
     const yes = await promptYesNoRecommended({
       question:
-        "\nThis account requires vault setup for encryption when vault is enabled. Initialize vault now?\n[Y/n]: ",
+        `\nThis account requires vault setup for encryption when vault is enabled. Initialize vault now?\n${formatYesNoPromptLabel(true)}: `,
       defaultYes: true,
     });
     if (!yes) {
+      warnVaultDeclinedForHosted();
       console.log("Vault init skipped. Sync may fail until you run `infinitecontext vault init`.");
       return false;
     }

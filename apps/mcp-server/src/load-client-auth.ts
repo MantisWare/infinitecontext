@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 
 import { InfiniteContext } from "infinitecontext";
 import { getValidAccessToken, loadCredentials } from "infinitecontext/credentials";
-import { KEYS_AND_SERVICES_DOC_URL, resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
+import { KEYS_AND_SERVICES_DOC_URL } from '@infinitecontext/core/doc-urls';
+import { resolveBaseUrl } from 'infinitecontext/lib/client-config.mjs';
 
 export type LoadedClientAuth = {
     baseUrl: string;

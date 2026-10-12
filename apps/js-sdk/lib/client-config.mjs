@@ -2,15 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-/** Default free hosted Context API (single source of truth for this URL in JS). */
-export const HOSTED_API_BASE_URL = "https://api.infinitecontext.ai";
+import {
+  DOCS_API_BASE_URL_PLACEHOLDER,
+  HOSTED_API_BASE_URL,
+  KEYS_AND_SERVICES_DOC_URL,
+} from "@infinitecontext/core/doc-urls";
 
-/** Example URL for self-host docs and OpenAPI samples. */
-export const DOCS_API_BASE_URL_PLACEHOLDER = "https://your-api.example.com";
-
-/** Mintlify doc for bring-your-own keys and services. */
-export const KEYS_AND_SERVICES_DOC_URL =
-  "https://docs.infinitecontext.ai/configuration/keys-and-services";
+export { DOCS_API_BASE_URL_PLACEHOLDER, HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL };
 
 export class MissingClientConfigError extends Error {
   /** @param {string} message */

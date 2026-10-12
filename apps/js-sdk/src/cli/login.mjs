@@ -115,7 +115,17 @@ async function postJson(baseUrl, path, body) {
   return parsed;
 }
 
-async function afterLoginVaultGate(baseUrl, { google = false } = {}) {
+const VAULT_INIT_HINT =
+  "Tip: on hosted, run `infinitecontext vault init` for zero-knowledge encryption (optional until you enable vault).";
+
+async function afterLoginVaultGate(baseUrl, { google = false, skipInteractiveVault = false } = {}) {
+  if (skipInteractiveVault) {
+    const { isHostedApiBaseUrl } = await import("../../lib/client-config.mjs");
+    if (isHostedApiBaseUrl(baseUrl)) {
+      console.log(VAULT_INIT_HINT);
+    }
+    return;
+  }
   const { runInteractiveVaultInitIfRequired } = await import("../../lib/vault-require.mjs");
   const { isHostedApiBaseUrl } = await import("../../lib/client-config.mjs");
   await runInteractiveVaultInitIfRequired({
@@ -148,7 +158,9 @@ async function loginWithPassword({ baseUrl, email, passwordStdin }) {
   });
   persistTokens(baseUrl, body, { email: resolvedEmail });
   console.log(`Signed in as ${resolvedEmail}`);
-  await afterLoginVaultGate(baseUrl, { google: false });
+  const skipVault =
+    passwordStdin || Boolean(process.env.INFINITECONTEXT_LOGIN_PASSWORD) || !process.stdin.isTTY;
+  await afterLoginVaultGate(baseUrl, { google: false, skipInteractiveVault: skipVault });
 }
 
 async function loginWithGoogleDevice(baseUrl) {
