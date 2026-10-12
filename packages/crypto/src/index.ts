@@ -9,3 +9,4 @@ export * from './plaintext-policy';
 export * from './dek-proof';
 export * from './passphrase-policy';
 export * from './envelope-schema';
+export * from './chain';

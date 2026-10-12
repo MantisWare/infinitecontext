@@ -1,6 +1,19 @@
-import { CLEARTEXT_METADATA_KEYS } from './constants';
+import { CLEARTEXT_METADATA_KEYS, CLIENT_NODE_ID_PATTERN, SERVER_MSG_ID_PATTERN } from './constants';
 import { isEncryptedContent } from './node-payload';
 import { assertStrictEncryptedEnvelope, validateEncryptedWriteShape } from './envelope-schema';
+
+const ALLOWED_MESSAGE_TOP_KEYS = new Set([
+    'id',
+    'index',
+    'metadata',
+    'created_at',
+    '__ic_enc',
+    'kid',
+    'v',
+    'alg',
+    'nonce',
+    'ct',
+]);
 
 const SENSITIVE_METADATA_WRAP_KEY = 'ic_sensitive';
 
@@ -37,8 +50,14 @@ export function isEncryptedWritePayload(content: Record<string, unknown>, metada
     }
 }
 
-export function extractMessageWrites(body: unknown): Array<{ content: Record<string, unknown>; metadata: Record<string, unknown> }> {
-    const items: Array<{ content: Record<string, unknown>; metadata: Record<string, unknown> }> = [];
+export function extractMessageWrites(
+    body: unknown,
+): Array<{ content: Record<string, unknown>; metadata: Record<string, unknown>; clientNodeId?: string }> {
+    const items: Array<{
+        content: Record<string, unknown>;
+        metadata: Record<string, unknown>;
+        clientNodeId?: string;
+    }> = [];
     let topLevelMetadata: Record<string, unknown> | undefined;
 
     const pushOne = (raw: unknown) => {
@@ -54,10 +73,18 @@ export function extractMessageWrites(body: unknown): Array<{ content: Record<str
             for (const update of rec.updates) pushOne(update);
             return;
         }
-        const { metadata, id: _id, index: _index, ...content } = rec;
+        const { metadata, id, index: _index, ...content } = rec;
+        const metaObj = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>;
+        const clientNodeId =
+            typeof id === 'string'
+                ? id
+                : typeof metaObj.ic_client_node_id === 'string'
+                  ? metaObj.ic_client_node_id
+                  : undefined;
         items.push({
             content: content as Record<string, unknown>,
-            metadata: (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>,
+            metadata: metaObj,
+            clientNodeId,
         });
     };
 
@@ -78,6 +105,49 @@ export function contextRootMetadata(body: unknown): Record<string, unknown> {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
     const metadata = (body as Record<string, unknown>).metadata;
     return (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>;
+}
+
+export function isClientNodeId(value: unknown): value is string {
+    return typeof value === 'string' && CLIENT_NODE_ID_PATTERN.test(value);
+}
+
+export function isVaultMessageWriteId(value: unknown): value is string {
+    return typeof value === 'string' && (CLIENT_NODE_ID_PATTERN.test(value) || SERVER_MSG_ID_PATTERN.test(value));
+}
+
+function contentEnvelopeOnly(row: Record<string, unknown>): Record<string, unknown> {
+    return {
+        __ic_enc: row.__ic_enc,
+        kid: row.kid,
+        v: row.v,
+        alg: row.alg,
+        nonce: row.nonce,
+        ct: row.ct,
+    };
+}
+
+export function vaultMessageRowViolations(row: Record<string, unknown>): string[] {
+    const violations: string[] = [];
+    for (const key of Object.keys(row)) {
+        if (!ALLOWED_MESSAGE_TOP_KEYS.has(key)) violations.push(`forbidden field: ${key}`);
+    }
+    if (!isEncryptedContent(row)) violations.push('content not encrypted');
+    else {
+        try {
+            assertStrictEncryptedEnvelope(contentEnvelopeOnly(row), 'content');
+        } catch (error) {
+            violations.push(error instanceof Error ? error.message : 'invalid content envelope');
+        }
+    }
+    const metadata = row.metadata;
+    if (metadata !== undefined && metadata !== null) {
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            violations.push('metadata must be an object');
+        } else if (metadataHasSensitivePlaintext(metadata as Record<string, unknown>)) {
+            violations.push('metadata contains sensitive plaintext');
+        }
+    }
+    return violations;
 }
 
 export function deleteBodyMetadata(body: unknown): Record<string, unknown> | undefined {

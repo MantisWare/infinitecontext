@@ -43,8 +43,14 @@ export async function appendMessages(
 
             // split metadata out of each message; the rest is content
             const nodeInputs = items.map((msg) => {
-                const { metadata, ...content } = msg as Record<string, unknown>;
-                return { type: 'message', content, metadata: (metadata ?? {}) as Record<string, unknown> };
+                const { metadata, id, ...content } = msg as Record<string, unknown>;
+                const clientPublicId = typeof id === 'string' ? id : undefined;
+                return {
+                    type: 'message',
+                    content: content as Record<string, unknown>,
+                    metadata: (metadata ?? {}) as Record<string, unknown>,
+                    clientPublicId,
+                };
             });
             const insertRecords = buildNodeInsertRecords(nodeInputs, projectId, head.public_id, tailPublicId);
 

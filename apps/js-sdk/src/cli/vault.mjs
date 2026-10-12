@@ -120,7 +120,9 @@ async function cmdUnlock(baseUrl, argv) {
     const key = await promptVisible("Recovery key: ");
     await unlockVaultWithRecoveryKey({ baseUrl, recoveryKey: key, accountKey, crypto });
   } else {
-    const passphrase = await promptHidden("Vault passphrase: ");
+    const passphrase = process.env.INFINITECONTEXT_VAULT_PASSPHRASE?.trim()
+      ? process.env.INFINITECONTEXT_VAULT_PASSPHRASE
+      : await promptHidden("Vault passphrase: ");
     await unlockVaultWithPassphrase({ baseUrl, passphrase, accountKey, crypto });
   }
   console.log("Vault unlocked.");

@@ -11,7 +11,17 @@ const SOCKET_NAME = "vault-agent.sock";
 const PID_NAME = "vault-agent.pid";
 const DEFAULT_IDLE_MS = 15 * 60 * 1000;
 
-const SERVE_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "vault-agent-serve.mjs");
+function resolveServeScript() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(here, "vault-agent-serve.mjs"),
+    path.join(here, "..", "lib", "vault-agent-serve.mjs"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error("vault-agent-serve.mjs not found in package");
+}
 
 function socketPath() {
   return path.join(infinitecontextHome(), SOCKET_NAME);
@@ -63,7 +73,7 @@ async function pingAgent() {
 
 export async function ensureDetachedVaultAgent() {
   if (await pingAgent()) return;
-  const child = spawn(process.execPath, [SERVE_SCRIPT], {
+  const child = spawn(process.execPath, [resolveServeScript()], {
     detached: true,
     stdio: "ignore",
     env: process.env,
@@ -101,6 +111,20 @@ export async function vaultAgentLoad(accountKey) {
 export async function vaultAgentClear(accountKey) {
   try {
     await agentRequest({ cmd: "clear", accountKey });
+  } catch {
+    // ignore
+  }
+}
+
+export async function vaultAgentShutdown() {
+  try {
+    await agentRequest({ cmd: "shutdown" }, { timeoutMs: 1500 });
+  } catch {
+    // ignore
+  }
+  try {
+    const pid = fs.readFileSync(pidPath(), "utf8").trim();
+    if (pid) process.kill(Number(pid), "SIGTERM");
   } catch {
     // ignore
   }

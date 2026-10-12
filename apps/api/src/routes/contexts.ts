@@ -19,6 +19,7 @@ import {
     validateVaultContextWrite,
     validateVaultDeleteWrite,
     validateVaultHistoricalRead,
+    validateVaultMessageRead,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
@@ -138,7 +139,9 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
 
         if (vaultDeps) {
-            const denied = await validateVaultHistoricalRead(c, vaultDeps, opts, result.data);
+            const denied =
+                (await validateVaultHistoricalRead(c, vaultDeps, opts, result.data)) ??
+                (await validateVaultMessageRead(c, vaultDeps, result.data));
             if (denied) return denied;
         }
 

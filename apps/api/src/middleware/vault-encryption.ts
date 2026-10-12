@@ -2,9 +2,12 @@ import {
     contextRootMetadata,
     deleteBodyMetadata,
     extractMessageWrites,
+    isClientNodeId,
+    isVaultMessageWriteId,
     isEncryptedContent,
     isEncryptedWritePayload,
     metadataHasSensitivePlaintext,
+    vaultMessageRowViolations,
 } from '@infinitecontext/crypto';
 import type { AuthRepository } from '@infinitecontext/auth';
 
@@ -56,11 +59,67 @@ async function validateInitializedVaultWrites(
 
     const writes = extractMessageWrites(body);
     for (const write of writes) {
+        if (!write.clientNodeId || !isVaultMessageWriteId(write.clientNodeId)) {
+            return reject(
+                c,
+                422,
+                'Vault message writes must include `id` (icn_* for new messages or msg_* when updating by id).',
+            );
+        }
+        if (!isClientNodeId(write.metadata.ic_client_node_id)) {
+            return reject(c, 422, 'metadata.ic_client_node_id must be set to the stable icn_* client node id.');
+        }
+        if (isClientNodeId(write.clientNodeId) && write.metadata.ic_client_node_id !== write.clientNodeId) {
+            return reject(c, 422, 'For new messages, metadata.ic_client_node_id must match id.');
+        }
         if (!isEncryptedWritePayload(write.content, write.metadata)) {
             return reject(
                 c,
                 422,
                 'Encrypted vault accounts must send ciphertext payloads only (strict __ic_enc envelope).',
+            );
+        }
+    }
+    return null;
+}
+
+export async function validateVaultMessageRead(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    body: { data?: Array<Record<string, unknown>> },
+): Promise<Response | null> {
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session') return null;
+
+    const user = await deps.authRepo.findUserById(auth.userId);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
+    if (!policy.initialized) return null;
+
+    const rows = body.data ?? [];
+    if (rows.length === 0) return null;
+
+    const encryptedCount = rows.filter((row) => isEncryptedContent(row)).length;
+    if (encryptedCount === 0) {
+        // Legacy plaintext context (pre-migrate); still readable for migration tooling.
+        return null;
+    }
+    if (encryptedCount !== rows.length) {
+        return reject(
+            c,
+            422,
+            'Vault context contains a mix of plaintext and encrypted messages. Run migrate-encrypt to converge.',
+        );
+    }
+
+    for (const row of rows) {
+        const violations = vaultMessageRowViolations(row);
+        if (violations.length > 0) {
+            return reject(
+                c,
+                422,
+                `Vault context response contains forbidden plaintext: ${violations[0]}`,
             );
         }
     }
@@ -94,16 +153,7 @@ export async function validateVaultHistoricalRead(
     const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
     if (!policy.initialized) return null;
 
-    for (const row of body.data ?? []) {
-        if (!isEncryptedContent(row)) {
-            return reject(
-                c,
-                422,
-                'Historical plaintext context versions are not available for encrypted vault accounts.',
-            );
-        }
-    }
-    return null;
+    return validateVaultMessageRead(c, deps, body);
 }
 
 export async function validateVaultDeleteWrite(

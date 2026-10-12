@@ -72,6 +72,8 @@ export async function getUnlockedDek({ baseUrl }) {
 
 export async function lockVault(accountKey) {
   await clearVaultKeychainCache(accountKey);
+  const { vaultAgentShutdown } = await import("./vault-agent.mjs");
+  await vaultAgentShutdown();
 }
 
 export async function initVault({ baseUrl, passphrase, vaultPassphraseRequired = false }) {

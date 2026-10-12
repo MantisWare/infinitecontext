@@ -26,8 +26,13 @@ const DB_URL =
 let postgresReady = false;
 
 before(async () => {
+    process.env.POSTGRES_PASSWORD = process.env.POSTGRES_PASSWORD ?? 'infinitecontext';
     const script = path.resolve(process.cwd(), '../postgres/scripts/verify-migration-chain.sh');
-    const res = spawnSync('bash', [script], { encoding: 'utf8', timeout: 180_000 });
+    const res = spawnSync('bash', [script], {
+        encoding: 'utf8',
+        timeout: 180_000,
+        env: { ...process.env, POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD },
+    });
     postgresReady = res.status === 0;
     if (!postgresReady) {
         console.warn('vault-postgres-live skipped: migration verify failed\n', res.stderr || res.stdout);
@@ -163,13 +168,29 @@ describe('vault postgres live e2e', () => {
         const row0 = rows[0]!;
         const row1 = rows[1]!;
 
+        const stableId = (row: Record<string, unknown>) =>
+            String((row.metadata as Record<string, unknown>)?.ic_client_node_id ?? row.id);
         const swap = await json(
             'PATCH',
             `/contexts/${created.id}`,
             {
                 updates: [
-                    { index: 0, ...pickEnvelope(row1), metadata: row1.metadata },
-                    { index: 1, ...pickEnvelope(row0), metadata: row0.metadata },
+                    {
+                        id: row0.id,
+                        ...pickEnvelope(row1),
+                        metadata: {
+                            ...(row1.metadata as Record<string, unknown>),
+                            ic_client_node_id: stableId(row0),
+                        },
+                    },
+                    {
+                        id: row1.id,
+                        ...pickEnvelope(row0),
+                        metadata: {
+                            ...(row0.metadata as Record<string, unknown>),
+                            ic_client_node_id: stableId(row1),
+                        },
+                    },
                 ],
             },
             accessToken,
@@ -177,17 +198,39 @@ describe('vault postgres live e2e', () => {
         assert.equal(swap.res.status, 200);
 
         const afterSwap = await vaultClient.get(created.id);
-        assert.ok(afterSwap.data[0]?.decrypt_error);
-        assert.ok(afterSwap.data[1]?.decrypt_error);
+        assert.ok(afterSwap.data[0]?.decrypt_error || afterSwap.chain_error, 'expected decrypt or chain failure');
+        assert.ok(afterSwap.data[1]?.decrypt_error || afterSwap.chain_error, 'expected decrypt or chain failure');
     });
 
-    it('fork preserves root title', async (t) => {
+    it('fork preserves root title and message metadata', async (t) => {
         if (!postgresReady) t.skip();
         const { vaultClient } = await setupLiveApp();
         const source = await vaultClient.create({ metadata: { title: 'Fork Me', source: 'fork-test' } });
+        await vaultClient.append(source.id, {
+            role: 'user',
+            text: 'body',
+            metadata: { event_id: 'ev_fork', note: 'secret' },
+        });
         assert.equal(source.metadata?.title, 'Fork Me');
         const fork = await vaultClient.create({ from: source.id, metadata: { source: 'fork-test' } });
         assert.equal(fork.metadata?.title, 'Fork Me');
+        const forkRead = await vaultClient.get(fork.id);
+        assert.equal(forkRead.data[0]?.metadata?.event_id, 'ev_fork');
+    });
+
+    it('delete-then-read keeps stable client node ids', async (t) => {
+        if (!postgresReady) t.skip();
+        const { vaultClient } = await setupLiveApp();
+        const created = await vaultClient.create({ metadata: { source: 'delete-test' } });
+        await vaultClient.append(created.id, { role: 'user', text: 'a' });
+        await vaultClient.append(created.id, { role: 'user', text: 'b' });
+        const before = await vaultClient.get(created.id);
+        const keepClientNodeId = (before.data[1]?.metadata as Record<string, unknown>)?.ic_client_node_id;
+        await vaultClient.delete(created.id, 0);
+        const after = await vaultClient.get(created.id);
+        assert.equal(after.data.length, 1);
+        assert.equal((after.data[0]?.metadata as Record<string, unknown>)?.ic_client_node_id, keepClientNodeId);
+        assert.equal(after.data[0]?.text, 'b');
     });
 
     it('migrateEncryptContext converges plaintext', async (t) => {

@@ -207,6 +207,40 @@ describe('updateMessages — success by id', () => {
     });
 });
 
+describe('updateMessages — encrypted vault replace', () => {
+    it('replaces content and metadata outright when ciphertext is sent (no plaintext merge)', async () => {
+        const { storage, projectId, seed } = await setup([{ role: 'user', text: 'legacy', tag: 'keep-me' }]);
+
+        const envelope = {
+            __ic_enc: 1,
+            kid: 'dek_v1',
+            v: 1,
+            alg: 'XC20P',
+            nonce: 'AAAAAAAAAAAAAAAAAAAAAA==',
+            ct: 'AA==',
+        };
+        const result = await updateMessages(storage, projectId, seed.rootId, {
+            updates: [
+                {
+                    index: 0,
+                    ...envelope,
+                    metadata: { source: 'vault', ic_client_node_id: 'icn_' + 'a'.repeat(24) },
+                },
+            ],
+        });
+
+        assert.equal(result.ok, true);
+        if (!result.ok) return;
+
+        const row = result.data.data[0] as Record<string, unknown>;
+        assert.equal(row.role, undefined);
+        assert.equal(row.text, undefined);
+        assert.equal(row.tag, undefined);
+        assert.equal(row.__ic_enc, 1);
+        assert.deepEqual(row.metadata, { source: 'vault', ic_client_node_id: 'icn_' + 'a'.repeat(24) });
+    });
+});
+
 describe('updateMessages — success by index', () => {
     it('resolves a positive index to its message and updates it', async () => {
         const { storage, projectId, seed } = await setup([

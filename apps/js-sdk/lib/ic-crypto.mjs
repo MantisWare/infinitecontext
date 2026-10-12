@@ -25,8 +25,15 @@ const CLEARTEXT_METADATA_KEYS = [
 	"host",
 	"project_path",
 	"session_id",
-	"ic_root_aad"
+	"ic_root_aad",
+	"ic_client_node_id",
+	"ic_chain_index",
+	"ic_chain_link"
 ];
+/** Client-chosen message ids stored verbatim as node public_id (vault writes). */
+const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
+/** Server-assigned message ids (updates/deletes by existing row). */
+const SERVER_MSG_ID_PATTERN = /^msg_[0-9a-f]{24}$/;
 /** AAD field for encrypting context root metadata (not message bodies). */
 const ROOT_METADATA_AAD_FIELD = "context_root";
 
@@ -241,6 +248,18 @@ function validateEncryptedWriteShape(content, metadata) {
 //#region src/node-payload.ts
 const ENCRYPTED_CONTENT_MARKER = "__ic_enc";
 function buildNodeAad(parts) {
+	if ((parts.aadVersion ?? (parts.nodePublicId ? "v4" : "v3")) === "v4") {
+		const nodeId = parts.nodePublicId ?? "";
+		const canonical = [
+			"v4",
+			parts.userPublicId,
+			parts.contextId,
+			String(parts.dekVersion),
+			parts.field,
+			nodeId
+		].join("|");
+		return new TextEncoder().encode(canonical);
+	}
 	const nodeIndex = parts.nodeIndex === void 0 ? "" : String(parts.nodeIndex);
 	const canonical = [
 		"v3",
@@ -261,11 +280,12 @@ function isEncryptedField(value) {
 	return rec[ENCRYPTED_CONTENT_MARKER] === ENVELOPE_VERSION && typeof rec.kid === "string";
 }
 function encryptNodeContent(dek, dekVersion, plaintext, aadParts, options) {
-	if (options?.requireNodeBinding !== false && aadParts.nodeIndex === void 0) throw new Error("nodeIndex is required for message content encryption");
+	if (options?.requireNodeBinding !== false && !aadParts.nodePublicId && aadParts.nodeIndex === void 0) throw new Error("nodePublicId is required for message content encryption");
 	const envelope = encryptAead(dek, new TextEncoder().encode(JSON.stringify(plaintext)), buildNodeAad({
 		...aadParts,
 		field: "content",
-		dekVersion
+		dekVersion,
+		aadVersion: aadParts.nodePublicId ? "v4" : "v3"
 	}));
 	return {
 		[ENCRYPTED_CONTENT_MARKER]: ENVELOPE_VERSION,
@@ -280,12 +300,21 @@ function decryptNodeContent(dek, wrapped, aadParts, options) {
 	}
 	assertStrictEncryptedEnvelope(wrapped, "content");
 	const dekVersion = parseDekVersion(String(wrapped.kid ?? ""));
-	const pt = decryptAead(dek, wrapped, buildNodeAad({
-		...aadParts,
-		field: "content",
-		dekVersion
-	}));
-	return JSON.parse(new TextDecoder().decode(pt));
+	const tryDecrypt = (aadVersion) => {
+		const pt = decryptAead(dek, wrapped, buildNodeAad({
+			...aadParts,
+			field: "content",
+			dekVersion,
+			aadVersion
+		}));
+		return JSON.parse(new TextDecoder().decode(pt));
+	};
+	if (aadParts.nodePublicId) try {
+		return tryDecrypt("v4");
+	} catch (first) {
+		if (aadParts.nodeIndex === void 0) throw first;
+	}
+	return tryDecrypt(aadParts.nodeIndex !== void 0 ? "v3" : "v4");
 }
 function splitMetadata(metadata) {
 	const cleartext = {};
@@ -308,7 +337,9 @@ function encryptNodeMetadata(dek, dekVersion, metadata, aadParts, options) {
 		contextId,
 		field,
 		dekVersion,
-		nodeIndex: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodeIndex
+		nodePublicId: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodePublicId,
+		nodeIndex: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodeIndex,
+		aadVersion: aadParts.nodePublicId ? "v4" : "v3"
 	}));
 	return {
 		...cleartext,
@@ -336,14 +367,25 @@ function decryptNodeMetadata(dek, metadata, aadParts, options) {
 	const field = rootNonce ? ROOT_METADATA_AAD_FIELD : "metadata_sensitive";
 	const contextId = field === ROOT_METADATA_AAD_FIELD && rootNonce ? buildRootMetadataContextAad(aadParts.userPublicId, rootNonce) : aadParts.contextId;
 	const dekVersion = parseDekVersion(String(wrap.kid ?? ""));
-	const pt = decryptAead(dek, wrap, buildNodeAad({
-		...aadParts,
-		contextId,
-		field,
-		dekVersion,
-		nodeIndex: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodeIndex
-	}));
-	const sensitive = JSON.parse(new TextDecoder().decode(pt));
+	const tryDecrypt = (aadVersion) => {
+		const pt = decryptAead(dek, wrap, buildNodeAad({
+			...aadParts,
+			contextId,
+			field,
+			dekVersion,
+			nodePublicId: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodePublicId,
+			nodeIndex: field === ROOT_METADATA_AAD_FIELD ? void 0 : aadParts.nodeIndex,
+			aadVersion
+		}));
+		return JSON.parse(new TextDecoder().decode(pt));
+	};
+	let sensitive;
+	try {
+		sensitive = aadParts.nodePublicId ? tryDecrypt("v4") : tryDecrypt("v3");
+	} catch (first) {
+		if (aadParts.nodePublicId && aadParts.nodeIndex !== void 0) sensitive = tryDecrypt("v3");
+		else throw first;
+	}
 	const { ic_sensitive: _removed, ...cleartext } = metadata;
 	return {
 		...cleartext,
@@ -427,6 +469,18 @@ async function rotateRecoveryWrap(input) {
 
 //#endregion
 //#region src/plaintext-policy.ts
+const ALLOWED_MESSAGE_TOP_KEYS = new Set([
+	"id",
+	"index",
+	"metadata",
+	"created_at",
+	"__ic_enc",
+	"kid",
+	"v",
+	"alg",
+	"nonce",
+	"ct"
+]);
 const SENSITIVE_METADATA_WRAP_KEY = "ic_sensitive";
 function metadataHasSensitivePlaintext(metadata) {
 	for (const [key, value] of Object.entries(metadata)) {
@@ -467,10 +521,13 @@ function extractMessageWrites(body) {
 			for (const update of rec.updates) pushOne(update);
 			return;
 		}
-		const { metadata, id: _id, index: _index, ...content } = rec;
+		const { metadata, id, index: _index, ...content } = rec;
+		const metaObj = metadata && typeof metadata === "object" ? metadata : {};
+		const clientNodeId = typeof id === "string" ? id : typeof metaObj.ic_client_node_id === "string" ? metaObj.ic_client_node_id : void 0;
 		items.push({
 			content,
-			metadata: metadata && typeof metadata === "object" ? metadata : {}
+			metadata: metaObj,
+			clientNodeId
 		});
 	};
 	if (Array.isArray(body)) for (const item of body) pushOne(item);
@@ -485,6 +542,38 @@ function contextRootMetadata(body) {
 	if (!body || typeof body !== "object" || Array.isArray(body)) return {};
 	const metadata = body.metadata;
 	return metadata && typeof metadata === "object" ? metadata : {};
+}
+function isClientNodeId(value) {
+	return typeof value === "string" && CLIENT_NODE_ID_PATTERN.test(value);
+}
+function isVaultMessageWriteId(value) {
+	return typeof value === "string" && (CLIENT_NODE_ID_PATTERN.test(value) || SERVER_MSG_ID_PATTERN.test(value));
+}
+function contentEnvelopeOnly(row) {
+	return {
+		__ic_enc: row.__ic_enc,
+		kid: row.kid,
+		v: row.v,
+		alg: row.alg,
+		nonce: row.nonce,
+		ct: row.ct
+	};
+}
+function vaultMessageRowViolations(row) {
+	const violations = [];
+	for (const key of Object.keys(row)) if (!ALLOWED_MESSAGE_TOP_KEYS.has(key)) violations.push(`forbidden field: ${key}`);
+	if (!isEncryptedContent(row)) violations.push("content not encrypted");
+	else try {
+		assertStrictEncryptedEnvelope(contentEnvelopeOnly(row), "content");
+	} catch (error) {
+		violations.push(error instanceof Error ? error.message : "invalid content envelope");
+	}
+	const metadata = row.metadata;
+	if (metadata !== void 0 && metadata !== null) {
+		if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) violations.push("metadata must be an object");
+		else if (metadataHasSensitivePlaintext(metadata)) violations.push("metadata contains sensitive plaintext");
+	}
+	return violations;
 }
 function deleteBodyMetadata(body) {
 	if (!body || typeof body !== "object" || Array.isArray(body)) return void 0;
@@ -513,4 +602,76 @@ function verifyDekProofBytes(dek, proofTag) {
 }
 
 //#endregion
-export { AEAD_ALG, CLEARTEXT_METADATA_KEYS, DEK_BYTES, DecryptionFailedError, ENCRYPTED_CONTENT_MARKER, ENVELOPE_VERSION, PassphrasePolicyError, RECOVERY_KEY_BYTES, ROOT_METADATA_AAD_FIELD, VAULT_KDF_PARAMS, WRAP_ALG, assertStrictEncryptedEnvelope, assertVaultPassphrase, base64ToBytes, bufferToWrappedDek, buildNodeAad, buildRootMetadataContextAad, bytesToBase64, bytesToBase64Url, computeDekProof, constantTimeEqual, contextRootMetadata, createVaultCryptoMaterial, decodeRecoveryKey, decryptAead, decryptNodeContent, decryptNodeMetadata, dekProofToBase64, deleteBodyMetadata, deriveVaultKek, encodeRecoveryKey, encryptAead, encryptNodeContent, encryptNodeMetadata, extractMessageWrites, isEncryptedContent, isEncryptedWritePayload, metadataHasSensitivePlaintext, parseDekVersion, parseWrappedDekRecord, pickCleartextMetadata, randomBytes, recoveryKeyToKek, rewrapDekWithNewPassphrase, rotateRecoveryWrap, serializeKdfParams, splitMetadata, unwrapDek, validateEncryptedWriteShape, verifyDekProof, verifyDekProofBytes, wrapDek, wrappedDekToBuffer };
+//#region src/chain.ts
+const CHAIN_SCHEME_VERSION = 1;
+function generateClientNodeId() {
+	const bytes = crypto.getRandomValues(new Uint8Array(12));
+	return `icn_${Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+const CHAIN_INFO = new TextEncoder().encode("infinitecontext-vault-chain-v1");
+function deriveContextChainKey(dek, contextId, dekVersion) {
+	const material = new TextEncoder().encode(`${contextId}|dek_v${dekVersion}`);
+	return hmac(sha256, dek, new Uint8Array([...CHAIN_INFO, ...material]));
+}
+function envelopeContentDigest(content) {
+	const canonical = JSON.stringify({
+		alg: content.alg,
+		ct: content.ct,
+		kid: content.kid,
+		nonce: content.nonce,
+		v: content.v,
+		[ENCRYPTED_CONTENT_MARKER]: content[ENCRYPTED_CONTENT_MARKER]
+	});
+	return sha256(new TextEncoder().encode(canonical));
+}
+function computeChainLink(chainKey, contextId, chainIndex, messageId, content, prevLinkB64) {
+	const digest = envelopeContentDigest(content);
+	return bytesToBase64(hmac(sha256, chainKey, new TextEncoder().encode([
+		"v1",
+		contextId,
+		String(chainIndex),
+		messageId,
+		bytesToBase64(digest),
+		prevLinkB64
+	].join("|"))));
+}
+var ChainVerificationError = class extends Error {
+	constructor(message) {
+		super(message);
+		this.name = "ChainVerificationError";
+	}
+};
+function stableClientNodeId(row) {
+	const fromMeta = (row.metadata ?? {}).ic_client_node_id;
+	if (typeof fromMeta === "string" && fromMeta.length > 0) return fromMeta;
+	return String(row.id);
+}
+function verifyContextMessageChain(messages, chainKey, contextId, { pickContent, minExpectedMaxIndex }) {
+	const rows = messages.map((m) => ({
+		id: stableClientNodeId(m),
+		metadata: m.metadata ?? {},
+		content: pickContent(m)
+	})).filter((r) => r.metadata.ic_chain_index !== void 0);
+	if (rows.length === 0) return;
+	rows.sort((a, b) => Number(a.metadata.ic_chain_index) - Number(b.metadata.ic_chain_index));
+	let prevLink = "GENESIS";
+	const seenIndex = /* @__PURE__ */ new Set();
+	let maxIndex = -1;
+	for (const row of rows) {
+		const chainIndex = Number(row.metadata.ic_chain_index);
+		const link = String(row.metadata.ic_chain_link ?? "");
+		if (!Number.isInteger(chainIndex) || chainIndex < 0) throw new ChainVerificationError("Invalid ic_chain_index");
+		if (seenIndex.has(chainIndex)) throw new ChainVerificationError(`Duplicate ic_chain_index ${chainIndex} (possible rollback)`);
+		seenIndex.add(chainIndex);
+		maxIndex = Math.max(maxIndex, chainIndex);
+		if (link !== computeChainLink(chainKey, contextId, chainIndex, row.id, row.content, prevLink)) throw new ChainVerificationError(`Chain link mismatch at index ${chainIndex}`);
+		prevLink = link;
+	}
+	if (minExpectedMaxIndex !== void 0 && maxIndex < minExpectedMaxIndex) throw new ChainVerificationError("Missing newer chain indices (possible truncation)");
+}
+function parseChainLinkB64(value) {
+	return base64ToBytes(value);
+}
+
+//#endregion
+export { AEAD_ALG, CHAIN_SCHEME_VERSION, CLEARTEXT_METADATA_KEYS, CLIENT_NODE_ID_PATTERN, ChainVerificationError, DEK_BYTES, DecryptionFailedError, ENCRYPTED_CONTENT_MARKER, ENVELOPE_VERSION, PassphrasePolicyError, RECOVERY_KEY_BYTES, ROOT_METADATA_AAD_FIELD, SERVER_MSG_ID_PATTERN, VAULT_KDF_PARAMS, WRAP_ALG, assertStrictEncryptedEnvelope, assertVaultPassphrase, base64ToBytes, bufferToWrappedDek, buildNodeAad, buildRootMetadataContextAad, bytesToBase64, bytesToBase64Url, computeChainLink, computeDekProof, constantTimeEqual, contextRootMetadata, createVaultCryptoMaterial, decodeRecoveryKey, decryptAead, decryptNodeContent, decryptNodeMetadata, dekProofToBase64, deleteBodyMetadata, deriveContextChainKey, deriveVaultKek, encodeRecoveryKey, encryptAead, encryptNodeContent, encryptNodeMetadata, envelopeContentDigest, extractMessageWrites, generateClientNodeId, isClientNodeId, isEncryptedContent, isEncryptedWritePayload, isVaultMessageWriteId, metadataHasSensitivePlaintext, parseChainLinkB64, parseDekVersion, parseWrappedDekRecord, pickCleartextMetadata, randomBytes, recoveryKeyToKek, rewrapDekWithNewPassphrase, rotateRecoveryWrap, serializeKdfParams, splitMetadata, stableClientNodeId, unwrapDek, validateEncryptedWriteShape, vaultMessageRowViolations, verifyContextMessageChain, verifyDekProof, verifyDekProofBytes, wrapDek, wrappedDekToBuffer };

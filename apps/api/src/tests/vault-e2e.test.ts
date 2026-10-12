@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 import { createMockGoogleOAuthClient } from '@infinitecontext/auth';
 import { MemoryAuthRepository } from '@infinitecontext/auth/testing';
 import {
+    computeChainLink,
     computeDekProof,
     createVaultCryptoMaterial,
     decodeRecoveryKey,
+    deriveContextChainKey,
     deriveVaultKek,
     encryptNodeContent,
     encryptNodeMetadata,
+    generateClientNodeId,
     recoveryKeyToKek,
     rewrapDekWithNewPassphrase,
     unwrapDek,
@@ -80,10 +83,22 @@ async function setupVaultE2E() {
 }
 
 function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: string) {
-    const aad = { contextId, userPublicId, nodeIndex: 0 };
+    const nodeId = generateClientNodeId();
+    const aad = { contextId, userPublicId, nodePublicId: nodeId };
     const content = encryptNodeContent(dek, 1, { role: 'user', text: 'secret payload' }, aad);
-    const metadata = encryptNodeMetadata(dek, 1, { source: 'cli-test', note: 'hidden' }, aad);
-    return { ...content, metadata };
+    const metadata = encryptNodeMetadata(
+        dek,
+        1,
+        { source: 'cli-test', note: 'hidden', ic_client_node_id: nodeId },
+        aad,
+    );
+    const chainKey = deriveContextChainKey(dek, contextId, 1);
+    const link = computeChainLink(chainKey, contextId, 0, nodeId, content, 'GENESIS');
+    return {
+        id: nodeId,
+        ...content,
+        metadata: { ...metadata, ic_chain_index: 0, ic_chain_link: link },
+    };
 }
 
 describe('vault CLI-equivalent e2e', () => {

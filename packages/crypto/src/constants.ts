@@ -27,7 +27,19 @@ export const CLEARTEXT_METADATA_KEYS = [
     'session_id',
     /** Stable cleartext nonce binding encrypted root metadata AAD (per context). */
     'ic_root_aad',
+    /** Stable client-chosen id for AAD binding (survives message COW). */
+    'ic_client_node_id',
+    /** Monotonic per-message chain index (vault integrity). */
+    'ic_chain_index',
+    /** HMAC chain link for rollback/truncation detection. */
+    'ic_chain_link',
 ] as const;
+
+/** Client-chosen message ids stored verbatim as node public_id (vault writes). */
+export const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
+
+/** Server-assigned message ids (updates/deletes by existing row). */
+export const SERVER_MSG_ID_PATTERN = /^msg_[0-9a-f]{24}$/;
 
 /** AAD field for encrypting context root metadata (not message bodies). */
 export const ROOT_METADATA_AAD_FIELD = 'context_root' as const;

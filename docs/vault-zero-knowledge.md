@@ -8,7 +8,8 @@ InfiniteContext encrypts **all context node payloads on the client** before they
 |-------|-----------|--------|
 | Vault passphrase → KEK | Argon2id (64 MiB, t=3, p=4) | Per-user salt in `user_crypto`; **not** the server login password hash |
 | Data encryption (DEK) | Random 256-bit DEK | One DEK per user account |
-| Node payloads | XChaCha20-Poly1305 (`XC20P`) | `@noble/ciphers`; AAD v3 binds user id, context id, dek version, field, and **message index** (not server-assigned node id) |
+| Node payloads | XChaCha20-Poly1305 (`XC20P`) | `@noble/ciphers`; **AAD v4** binds user id, context id, dek version, field, and stable **`ic_client_node_id`** (cleartext metadata, survives COW). Legacy v3 (ordinal index) is decrypt-only. |
+| Integrity chain | HMAC-SHA256 (`ic_chain_index` + `ic_chain_link`) | Per-context chain MAC derived from the DEK detects rollback (duplicate index / bad link) and optional truncation checks. |
 | DEK wrap | XChaCha20-Poly1305 | Dual wrap: vault passphrase KEK + recovery key KEK |
 
 Envelope stored in `nodes.content` / sensitive metadata:
@@ -35,7 +36,7 @@ Message bodies and all other metadata fields are encrypted (`ic_sensitive` envel
 | `source` | Agent/source enum (e.g. `claude`, `codex`) |
 | `user_id` | Daemon user id string |
 | `host` | Hostname string |
-| `project_path` | Filesystem path string |
+| `project_path` | Filesystem path string (still cleartext for server-side filters; encrypt sensitive path details inside `ic_sensitive` if needed) |
 | `session_id` | Upstream agent session id |
 
 Everything else (notes, titles, custom tags, message text, etc.) must be ciphertext once the vault is initialized.

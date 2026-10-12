@@ -8,13 +8,20 @@ MIGRATIONS_DIR="$POSTGRES_DIR/migrations"
 cd "$POSTGRES_DIR"
 
 DB_USER="${POSTGRES_USER:-infinitecontext}"
-DB_PASS="${POSTGRES_PASSWORD:-infinitecontext}"
 DB_NAME="${POSTGRES_DB:-infinitecontext_verify}"
+PG_HOST="${PGHOST:-127.0.0.1}"
+PG_PORT="${PGPORT:-5432}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-infinitecontext_migration_verify}"
+
+if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+  echo "POSTGRES_PASSWORD is required (no default)." >&2
+  exit 1
+fi
+DB_PASS="$POSTGRES_PASSWORD"
 
 export COMPOSE_PROJECT_NAME
 
-PSQL=(psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
+PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 export PGPASSWORD="$DB_PASS"
 
 assert_user_crypto_schema() {
@@ -90,7 +97,7 @@ else
   END \$\$;"
   sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" 2>/dev/null || true
   sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};" 2>/dev/null || true
-  PSQL=(psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME")
+  PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$DB_NAME")
 fi
 
 apply_up

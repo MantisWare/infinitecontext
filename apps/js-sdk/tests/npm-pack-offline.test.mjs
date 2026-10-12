@@ -22,6 +22,8 @@ describe("npm pack offline install", () => {
     execSync(`npm install --no-save --ignore-scripts "${tgz}"`, { cwd: installDir, stdio: "inherit" });
     const installedRoot = path.join(installDir, "node_modules", "infinitecontext");
     assert.ok(fs.existsSync(path.join(installedRoot, "lib/ic-crypto.mjs")));
+    assert.ok(fs.existsSync(path.join(installedRoot, "lib/vault-agent-serve.mjs")));
+    assert.ok(fs.existsSync(path.join(installedRoot, "lib/vault-agent.mjs")));
     const scriptPath = path.join(installDir, "smoke.mjs");
     fs.writeFileSync(
       scriptPath,
