@@ -309,6 +309,7 @@ export class DrizzleAuthRepository implements AuthRepository {
         kdfParams: Record<string, unknown>;
         wrappedDek: Buffer;
         wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
         dekVersion: number;
         cryptoInitializedAt: string;
         vaultPassphraseRequired: boolean;
@@ -321,6 +322,7 @@ export class DrizzleAuthRepository implements AuthRepository {
                 kdf_params: input.kdfParams,
                 wrapped_dek: input.wrappedDek,
                 wrapped_dek_recovery: input.wrappedDekRecovery,
+                dek_proof_tag: input.dekProofTag,
                 dek_version: input.dekVersion,
                 crypto_initialized_at: input.cryptoInitializedAt,
                 vault_passphrase_required: input.vaultPassphraseRequired,
@@ -333,6 +335,7 @@ export class DrizzleAuthRepository implements AuthRepository {
                     kdf_params: input.kdfParams,
                     wrapped_dek: input.wrappedDek,
                     wrapped_dek_recovery: input.wrappedDekRecovery,
+                    dek_proof_tag: input.dekProofTag,
                     dek_version: input.dekVersion,
                     crypto_initialized_at: input.cryptoInitializedAt,
                     vault_passphrase_required: input.vaultPassphraseRequired,
@@ -345,14 +348,29 @@ export class DrizzleAuthRepository implements AuthRepository {
 
     async updateUserCryptoWraps(input: {
         userId: number;
+        kdfSalt?: Buffer;
         wrappedDek?: Buffer;
         wrappedDekRecovery?: Buffer;
         dekVersion?: number;
+        dekProofTag?: Buffer;
+        expectedWrappedDek?: Buffer;
+        expectedWrappedDekRecovery?: Buffer;
         updatedAt: string;
     }): Promise<UserCryptoRow | null> {
+        const existing = await this.findUserCrypto(input.userId);
+        if (!existing) return null;
+
         const patch: Record<string, unknown> = { updated_at: input.updatedAt };
-        if (input.wrappedDek) patch.wrapped_dek = input.wrappedDek;
-        if (input.wrappedDekRecovery) patch.wrapped_dek_recovery = input.wrappedDekRecovery;
+        if (input.kdfSalt) patch.kdf_salt = input.kdfSalt;
+        if (input.wrappedDek) {
+            patch.wrapped_dek_prev = existing.wrapped_dek;
+            patch.wrapped_dek = input.wrappedDek;
+        }
+        if (input.wrappedDekRecovery) {
+            patch.wrapped_dek_recovery_prev = existing.wrapped_dek_recovery;
+            patch.wrapped_dek_recovery = input.wrappedDekRecovery;
+        }
+        if (input.dekProofTag) patch.dek_proof_tag = input.dekProofTag;
         if (input.dekVersion !== undefined) patch.dek_version = input.dekVersion;
 
         const rows = await this.db

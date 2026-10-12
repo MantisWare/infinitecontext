@@ -1,8 +1,12 @@
+import { sha256 } from '@noble/hashes/sha256';
+
 const BASE64URL =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 /** Crockford-like base32 without I/L/O/U for recovery key display. */
 const RECOVERY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+const RECOVERY_CHECKSUM_BYTES = 2;
 
 export function bytesToBase64(bytes: Uint8Array): string {
     let binary = '';
@@ -17,12 +21,11 @@ export function base64ToBytes(b64: string): Uint8Array {
     return out;
 }
 
-export function encodeRecoveryKey(raw: Uint8Array): string {
-    if (raw.length !== 32) throw new Error('Recovery key must be 32 bytes');
+function encodeBase32(data: Uint8Array): string {
     let bits = 0;
     let value = 0;
     const chars: string[] = [];
-    for (const byte of raw) {
+    for (const byte of data) {
         value = (value << 8) | byte;
         bits += 8;
         while (bits >= 5) {
@@ -41,6 +44,15 @@ export function encodeRecoveryKey(raw: Uint8Array): string {
     return grouped.join('-');
 }
 
+export function encodeRecoveryKey(raw: Uint8Array): string {
+    if (raw.length !== 32) throw new Error('Recovery key must be 32 bytes');
+    const checksum = sha256(raw).slice(0, RECOVERY_CHECKSUM_BYTES);
+    const payload = new Uint8Array(raw.length + RECOVERY_CHECKSUM_BYTES);
+    payload.set(raw, 0);
+    payload.set(checksum, raw.length);
+    return encodeBase32(payload);
+}
+
 export function decodeRecoveryKey(input: string): Uint8Array {
     const cleaned = input.toUpperCase().replace(/[^0-9A-Z]/g, '');
     let bits = 0;
@@ -56,8 +68,17 @@ export function decodeRecoveryKey(input: string): Uint8Array {
             out.push((value >> bits) & 255);
         }
     }
-    if (out.length !== 32) throw new Error('Invalid recovery key length');
-    return new Uint8Array(out);
+    if (out.length === 32) {
+        return new Uint8Array(out);
+    }
+    const payloadLen = 32 + RECOVERY_CHECKSUM_BYTES;
+    if (out.length !== payloadLen) throw new Error('Invalid recovery key length');
+    const payload = new Uint8Array(out);
+    const raw = payload.slice(0, 32);
+    const checksum = payload.slice(32);
+    const expected = sha256(raw).slice(0, RECOVERY_CHECKSUM_BYTES);
+    if (!constantTimeEqual(checksum, expected)) throw new Error('Invalid recovery key checksum');
+    return raw;
 }
 
 export function randomBytes(length: number): Uint8Array {

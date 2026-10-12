@@ -25,6 +25,11 @@ export const CLEARTEXT_METADATA_KEYS = [
     'host',
     'project_path',
     'session_id',
+    /** Stable cleartext nonce binding encrypted root metadata AAD (per context). */
+    'ic_root_aad',
 ] as const;
+
+/** AAD field for encrypting context root metadata (not message bodies). */
+export const ROOT_METADATA_AAD_FIELD = 'context_root' as const;
 
 export type CleartextMetadataKey = (typeof CLEARTEXT_METADATA_KEYS)[number];

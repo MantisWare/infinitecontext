@@ -6,3 +6,6 @@ export * from './dek-wrap';
 export * from './node-payload';
 export * from './vault-setup';
 export * from './plaintext-policy';
+export * from './dek-proof';
+export * from './passphrase-policy';
+export * from './envelope-schema';

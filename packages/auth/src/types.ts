@@ -49,7 +49,10 @@ export type UserCryptoRow = {
     kdf_params: Record<string, unknown> | null;
     wrapped_dek: Buffer | null;
     wrapped_dek_recovery: Buffer | null;
+    wrapped_dek_prev: Buffer | null;
+    wrapped_dek_recovery_prev: Buffer | null;
     recovery_kdf_salt: Buffer | null;
+    dek_proof_tag: Buffer | null;
     dek_version: number;
     crypto_initialized_at: string | null;
     vault_passphrase_required: boolean;
@@ -150,15 +153,20 @@ export type AuthRepository = {
         kdfParams: Record<string, unknown>;
         wrappedDek: Buffer;
         wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
         dekVersion: number;
         cryptoInitializedAt: string;
         vaultPassphraseRequired: boolean;
     }): Promise<UserCryptoRow>;
     updateUserCryptoWraps(input: {
         userId: number;
+        kdfSalt?: Buffer;
         wrappedDek?: Buffer;
         wrappedDekRecovery?: Buffer;
         dekVersion?: number;
+        dekProofTag?: Buffer;
+        expectedWrappedDek?: Buffer;
+        expectedWrappedDekRecovery?: Buffer;
         updatedAt: string;
     }): Promise<UserCryptoRow | null>;
 

@@ -22,12 +22,23 @@ export function encryptAead(key: Uint8Array, plaintext: Uint8Array, aad: Uint8Ar
     };
 }
 
+export class DecryptionFailedError extends Error {
+    constructor(message = 'Decryption failed — wrong key, tampered data, or corrupted ciphertext.') {
+        super(message);
+        this.name = 'DecryptionFailedError';
+    }
+}
+
 export function decryptAead(key: Uint8Array, envelope: AeadEnvelope, aad: Uint8Array): Uint8Array {
     if (envelope.v !== 1 || envelope.alg !== AEAD_ALG) {
-        throw new Error('Unsupported AEAD envelope');
+        throw new DecryptionFailedError('Unsupported AEAD envelope');
     }
     const nonce = base64ToBytes(envelope.nonce);
     const ct = base64ToBytes(envelope.ct);
     const cipher = xchacha20poly1305(key, nonce, aad);
-    return cipher.decrypt(ct);
+    try {
+        return cipher.decrypt(ct);
+    } catch {
+        throw new DecryptionFailedError();
+    }
 }

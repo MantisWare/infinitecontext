@@ -15,7 +15,11 @@ import {
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AuthRepository } from '@infinitecontext/auth';
 
-import { validateVaultContextWrite, type VaultEncryptionDeps } from '../middleware/vault-encryption';
+import {
+    validateVaultContextWrite,
+    validateVaultDeleteWrite,
+    type VaultEncryptionDeps,
+} from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
@@ -202,6 +206,11 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         if (!isPlainObject(body)) return c.json({ error: 'Request body must be a JSON object' }, 400);
         if (!hasIds) {
             return c.json({ error: 'Body must contain "ids" (delete messages) or {"permanent": true} (delete entire context)' }, 400);
+        }
+
+        if (vaultDeps) {
+            const denied = await validateVaultDeleteWrite(c, vaultDeps, body);
+            if (denied) return denied;
         }
 
         // message delete — pass ids + optional metadata to core (core validates shapes)

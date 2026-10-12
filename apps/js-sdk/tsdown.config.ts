@@ -29,7 +29,6 @@ export default defineConfig([
       "figlet",
       "fast-glob",
       "infinitecontext",
-      "@infinitecontext/crypto",
       "keytar",
     ],
   },

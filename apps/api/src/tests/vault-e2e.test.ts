@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 import { createMockGoogleOAuthClient } from '@infinitecontext/auth';
 import { MemoryAuthRepository } from '@infinitecontext/auth/testing';
 import {
+    computeDekProof,
     createVaultCryptoMaterial,
     decodeRecoveryKey,
     deriveVaultKek,
     encryptNodeContent,
     encryptNodeMetadata,
+    recoveryKeyToKek,
     rewrapDekWithNewPassphrase,
     unwrapDek,
 } from '@infinitecontext/crypto';
@@ -78,7 +80,7 @@ async function setupVaultE2E() {
 }
 
 function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: string) {
-    const aad = { contextId, userPublicId, dekVersion: 1 };
+    const aad = { contextId, userPublicId, nodePublicId: 'msg_test_1', nodeIndex: 0 };
     const content = encryptNodeContent(dek, 1, { role: 'user', text: 'secret payload' }, aad);
     const metadata = encryptNodeMetadata(dek, 1, { source: 'cli-test', note: 'hidden' }, aad);
     return { ...content, metadata };
@@ -88,7 +90,7 @@ describe('vault CLI-equivalent e2e', () => {
     it('init, encrypted write/read, lock/unlock, passphrase change, recovery device', async () => {
         const { json, storage, accessToken } = await setupVaultE2E();
 
-        const material = await createVaultCryptoMaterial('vault-pass-e2e');
+        const material = await createVaultCryptoMaterial('vault-pass-e2e1');
         const init = await json(
             'PUT',
             '/auth/crypto',
@@ -97,6 +99,7 @@ describe('vault CLI-equivalent e2e', () => {
                 kdf_params: material.kdfParams,
                 wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
                 wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
                 dek_version: material.dekVersion,
                 vault_passphrase_required: false,
             },
@@ -134,27 +137,32 @@ describe('vault CLI-equivalent e2e', () => {
         let dek = material.dek;
         dek = unwrapDek(
             material.wrappedDekPassphrase,
-            await deriveVaultKek('vault-pass-e2e', material.kdfSalt),
+            await deriveVaultKek('vault-pass-e2e1', material.kdfSalt),
         );
         assert.deepEqual(dek, material.dek);
 
         const rewrapped = await rewrapDekWithNewPassphrase({
             dek,
-            newPassphrase: 'vault-pass-rotated',
-            kdfSalt: material.kdfSalt,
+            newPassphrase: 'vault-pass-rotated1',
         });
         const patch = await json(
             'PATCH',
             '/auth/crypto',
-            { wrapped_dek: Buffer.from(rewrapped).toString('base64') },
+            {
+                wrapped_dek: Buffer.from(rewrapped.wrappedDek).toString('base64'),
+                kdf_salt: Buffer.from(rewrapped.kdfSalt).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                expected_wrapped_dek: init.body.wrapped_dek,
+                expected_wrapped_dek_recovery: init.body.wrapped_dek_recovery,
+            },
             accessToken,
         );
         assert.equal(patch.res.status, 200);
 
-        dek = unwrapDek(rewrapped, await deriveVaultKek('vault-pass-rotated', material.kdfSalt));
+        dek = unwrapDek(rewrapped.wrappedDek, await deriveVaultKek('vault-pass-rotated1', rewrapped.kdfSalt));
         assert.deepEqual(dek, material.dek);
 
-        const recoveryKek = decodeRecoveryKey(material.recoveryKeyDisplay);
+        const recoveryKek = recoveryKeyToKek(decodeRecoveryKey(material.recoveryKeyDisplay));
         const dekFromRecovery = unwrapDek(material.wrappedDekRecovery, recoveryKek);
         assert.deepEqual(dekFromRecovery, material.dek);
     });

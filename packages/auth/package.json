@@ -12,6 +12,7 @@
         "test": "node --import tsx --test src/**/*.test.ts"
     },
     "dependencies": {
+        "@infinitecontext/crypto": "workspace:*",
         "@infinitecontext/core": "workspace:*",
         "hash-wasm": "^4.12.0",
         "jose": "^6.2.0"

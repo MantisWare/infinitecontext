@@ -15,7 +15,7 @@ export function wrapDek(dek: Uint8Array, kek: Uint8Array): Uint8Array {
     return new TextEncoder().encode(JSON.stringify(record));
 }
 
-export function unwrapDek(wrapped: Uint8Array, kek: Uint8Array): Uint8Array {
+export function parseWrappedDekRecord(wrapped: Uint8Array): WrappedDekRecord {
     let parsed: WrappedDekRecord;
     try {
         parsed = JSON.parse(new TextDecoder().decode(wrapped)) as WrappedDekRecord;
@@ -23,6 +23,12 @@ export function unwrapDek(wrapped: Uint8Array, kek: Uint8Array): Uint8Array {
         throw new Error('Invalid wrapped DEK format');
     }
     if (parsed.v !== 1 || parsed.alg !== WRAP_ALG) throw new Error('Unsupported wrapped DEK version');
+    if (!parsed.envelope || parsed.envelope.v !== 1) throw new Error('Invalid wrapped DEK envelope');
+    return parsed;
+}
+
+export function unwrapDek(wrapped: Uint8Array, kek: Uint8Array): Uint8Array {
+    const parsed = parseWrappedDekRecord(wrapped);
     return decryptAead(kek, parsed.envelope, WRAP_AAD);
 }
 

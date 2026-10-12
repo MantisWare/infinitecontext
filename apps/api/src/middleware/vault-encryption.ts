@@ -1,5 +1,6 @@
 import {
     contextRootMetadata,
+    deleteBodyMetadata,
     extractMessageWrites,
     isEncryptedWritePayload,
     metadataHasSensitivePlaintext,
@@ -25,7 +26,7 @@ function reject(c: HttpContext, status: 403 | 422, message: string) {
     return c.json({ error: message, code: status === 403 ? 'vault_setup_required' : 'plaintext_forbidden' }, status);
 }
 
-export async function validateVaultContextWrite(
+async function validateInitializedVaultWrites(
     c: HttpContext,
     deps: VaultEncryptionDeps,
     body: unknown,
@@ -58,9 +59,28 @@ export async function validateVaultContextWrite(
             return reject(
                 c,
                 422,
-                'Encrypted vault accounts must send ciphertext payloads only (missing __ic_enc envelope).',
+                'Encrypted vault accounts must send ciphertext payloads only (strict __ic_enc envelope).',
             );
         }
     }
     return null;
+}
+
+export async function validateVaultContextWrite(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    body: unknown,
+    mode: 'create_root' | 'messages',
+): Promise<Response | null> {
+    return validateInitializedVaultWrites(c, deps, body, mode);
+}
+
+export async function validateVaultDeleteWrite(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    body: unknown,
+): Promise<Response | null> {
+    const metadata = deleteBodyMetadata(body);
+    if (!metadata) return null;
+    return validateInitializedVaultWrites(c, deps, { metadata }, 'create_root');
 }

@@ -261,7 +261,10 @@ export class MemoryAuthRepository implements AuthRepository {
             kdf_params: null,
             wrapped_dek: null,
             wrapped_dek_recovery: null,
+            wrapped_dek_prev: null,
+            wrapped_dek_recovery_prev: null,
             recovery_kdf_salt: null,
+            dek_proof_tag: null,
             dek_version: 1,
             crypto_initialized_at: null,
             vault_passphrase_required: true,
@@ -280,6 +283,7 @@ export class MemoryAuthRepository implements AuthRepository {
         kdfParams: Record<string, unknown>;
         wrappedDek: Buffer;
         wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
         dekVersion: number;
         cryptoInitializedAt: string;
         vaultPassphraseRequired: boolean;
@@ -291,7 +295,10 @@ export class MemoryAuthRepository implements AuthRepository {
             kdf_params: input.kdfParams,
             wrapped_dek: input.wrappedDek,
             wrapped_dek_recovery: input.wrappedDekRecovery,
+            wrapped_dek_prev: null,
+            wrapped_dek_recovery_prev: null,
             recovery_kdf_salt: null,
+            dek_proof_tag: input.dekProofTag,
             dek_version: input.dekVersion,
             crypto_initialized_at: input.cryptoInitializedAt,
             vault_passphrase_required: input.vaultPassphraseRequired,
@@ -306,15 +313,25 @@ export class MemoryAuthRepository implements AuthRepository {
         userId: number;
         wrappedDek?: Buffer;
         wrappedDekRecovery?: Buffer;
+        kdfSalt?: Buffer;
         dekVersion?: number;
+        dekProofTag?: Buffer;
+        expectedWrappedDek?: Buffer;
+        expectedWrappedDekRecovery?: Buffer;
         updatedAt: string;
     }): Promise<UserCryptoRow | null> {
         const existing = this.userCrypto.get(input.userId);
         if (!existing) return null;
         const next: UserCryptoRow = {
             ...existing,
+            kdf_salt: input.kdfSalt ?? existing.kdf_salt,
+            wrapped_dek_prev: input.wrappedDek ? existing.wrapped_dek : existing.wrapped_dek_prev,
             wrapped_dek: input.wrappedDek ?? existing.wrapped_dek,
+            wrapped_dek_recovery_prev: input.wrappedDekRecovery
+                ? existing.wrapped_dek_recovery
+                : existing.wrapped_dek_recovery_prev,
             wrapped_dek_recovery: input.wrappedDekRecovery ?? existing.wrapped_dek_recovery,
+            dek_proof_tag: input.dekProofTag ?? existing.dek_proof_tag,
             dek_version: input.dekVersion ?? existing.dek_version,
             updated_at: input.updatedAt,
         };

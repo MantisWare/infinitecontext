@@ -2,6 +2,7 @@ import { DEK_BYTES, RECOVERY_KEY_BYTES } from './constants';
 import { encodeRecoveryKey, randomBytes } from './encoding';
 import { wrapDek } from './dek-wrap';
 import { deriveVaultKek, recoveryKeyToKek, serializeKdfParams } from './kdf';
+import { assertVaultPassphrase } from './passphrase-policy';
 
 export type VaultInitMaterial = {
     dek: Uint8Array;
@@ -15,6 +16,7 @@ export type VaultInitMaterial = {
 };
 
 export async function createVaultCryptoMaterial(passphrase: string): Promise<VaultInitMaterial> {
+    assertVaultPassphrase(passphrase);
     const dek = randomBytes(DEK_BYTES);
     const recoveryKeyBytes = randomBytes(RECOVERY_KEY_BYTES);
     const kdfSalt = randomBytes(16);
@@ -36,10 +38,11 @@ export async function createVaultCryptoMaterial(passphrase: string): Promise<Vau
 export async function rewrapDekWithNewPassphrase(input: {
     dek: Uint8Array;
     newPassphrase: string;
-    kdfSalt: Uint8Array;
-}): Promise<Uint8Array> {
-    const kek = await deriveVaultKek(input.newPassphrase, input.kdfSalt);
-    return wrapDek(input.dek, kek);
+    kdfSalt?: Uint8Array;
+}): Promise<{ wrappedDek: Uint8Array; kdfSalt: Uint8Array }> {
+    const kdfSalt = input.kdfSalt ?? randomBytes(16);
+    const kek = await deriveVaultKek(input.newPassphrase, kdfSalt);
+    return { wrappedDek: wrapDek(input.dek, kek), kdfSalt };
 }
 
 export async function rotateRecoveryWrap(input: {

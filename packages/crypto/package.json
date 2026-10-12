@@ -4,11 +4,16 @@
     "private": true,
     "type": "module",
     "exports": {
-        ".": "./src/index.ts"
+        ".": {
+            "types": "./dist/index.d.mts",
+            "import": "./dist/index.mjs",
+            "default": "./dist/index.mjs"
+        }
     },
     "scripts": {
-        "test": "node --import tsx --test src/**/*.test.ts",
-        "check": "tsc --noEmit"
+        "build": "tsdown",
+        "test": "pnpm run build && node --import tsx --test src/**/*.test.ts",
+        "check": "tsc --noEmit && pnpm run build"
     },
     "dependencies": {
         "@noble/ciphers": "^1.3.0",
@@ -17,6 +22,7 @@
     },
     "devDependencies": {
         "@types/node": "^22.18.6",
+        "tsdown": "^0.20.3",
         "tsx": "^4.20.5",
         "typescript": "^5.9.3"
     }

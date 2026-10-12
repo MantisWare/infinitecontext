@@ -325,6 +325,7 @@ export class SupabaseAuthRepository implements AuthRepository {
         kdfParams: Record<string, unknown>;
         wrappedDek: Buffer;
         wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
         dekVersion: number;
         cryptoInitializedAt: string;
         vaultPassphraseRequired: boolean;
@@ -337,6 +338,7 @@ export class SupabaseAuthRepository implements AuthRepository {
                 kdf_params: input.kdfParams,
                 wrapped_dek: input.wrappedDek,
                 wrapped_dek_recovery: input.wrappedDekRecovery,
+                dek_proof_tag: input.dekProofTag,
                 dek_version: input.dekVersion,
                 crypto_initialized_at: input.cryptoInitializedAt,
                 vault_passphrase_required: input.vaultPassphraseRequired,

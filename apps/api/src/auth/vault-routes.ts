@@ -14,9 +14,11 @@ function mapVaultError(error: unknown): { status: 400 | 404 | 409 | 500; message
         const status: 400 | 404 | 409 =
             error.code === 'already_initialized'
                 ? 409
-                : error.code === 'not_initialized' || error.code === 'device_not_found'
-                  ? 404
-                  : 400;
+                : error.code === 'wrap_conflict'
+                  ? 409
+                  : error.code === 'not_initialized' || error.code === 'device_not_found'
+                    ? 404
+                    : 400;
         return { status, message: error.message };
     }
     return { status: 500, message: 'Internal error' };
@@ -48,7 +50,8 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
             const kdfSalt = readBufferField(body as Record<string, unknown>, 'kdf_salt');
             const wrappedDek = readBufferField(body as Record<string, unknown>, 'wrapped_dek');
             const wrappedDekRecovery = readBufferField(body as Record<string, unknown>, 'wrapped_dek_recovery');
-            if (!kdfSalt || !wrappedDek || !wrappedDekRecovery) {
+            const dekProof = readBufferField(body as Record<string, unknown>, 'dek_proof');
+            if (!kdfSalt || !wrappedDek || !wrappedDekRecovery || !dekProof) {
                 throw new VaultError('invalid_payload', 'Missing required crypto fields');
             }
             const kdfParams = (body as Record<string, unknown>).kdf_params;
@@ -64,6 +67,7 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
                 kdfParams: kdfParams as Record<string, unknown>,
                 wrappedDek,
                 wrappedDekRecovery,
+                dekProofTag: dekProof,
                 dekVersion,
                 vaultPassphraseRequired,
             });
@@ -80,8 +84,15 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
         if (!auth) return c.json({ error: 'Unauthorized' }, 401);
         const body = await c.req.json().catch(() => ({}));
         try {
+            const kdfSalt = readBufferField(body as Record<string, unknown>, 'kdf_salt');
             const wrappedDek = readBufferField(body as Record<string, unknown>, 'wrapped_dek');
             const wrappedDekRecovery = readBufferField(body as Record<string, unknown>, 'wrapped_dek_recovery');
+            const expectedWrappedDek = readBufferField(body as Record<string, unknown>, 'expected_wrapped_dek');
+            const expectedWrappedDekRecovery = readBufferField(
+                body as Record<string, unknown>,
+                'expected_wrapped_dek_recovery',
+            );
+            const dekProof = readBufferField(body as Record<string, unknown>, 'dek_proof');
             const dekVersionRaw = (body as Record<string, unknown>).dek_version;
             const dekVersion = dekVersionRaw === undefined ? undefined : Number(dekVersionRaw);
             if (!wrappedDek && !wrappedDekRecovery && dekVersion === undefined) {
@@ -89,9 +100,13 @@ export function registerVaultRoutes(app: HttpApp, authRepo: AuthRepository) {
             }
             const row = await vault.updateWraps({
                 userId: auth.userId,
+                kdfSalt,
                 wrappedDek,
                 wrappedDekRecovery,
                 dekVersion,
+                dekProofTag: dekProof,
+                expectedWrappedDek,
+                expectedWrappedDekRecovery,
             });
             const user = await authRepo.findUserById(auth.userId);
             return c.json(serializeUserCryptoPublic(row, user ?? undefined));

@@ -17,6 +17,9 @@ import {
     rewrapDekWithNewPassphrase,
     unwrapDek,
     wrapDek,
+    computeDekProof,
+    constantTimeEqual,
+    parseDekVersion,
 } from './index';
 
 /** Fixed test vector salt (16 bytes). */
@@ -41,30 +44,40 @@ describe('vault KDF + DEK wrap', () => {
     });
 
     it('fails unwrap with wrong KEK', async () => {
-        const material = await createVaultCryptoMaterial('correct horse');
+        const material = await createVaultCryptoMaterial('correct horse battery 1');
         const wrongKek = await deriveVaultKek('wrong', material.kdfSalt);
         assert.throws(() => unwrapDek(material.wrappedDekPassphrase, wrongKek));
     });
 
     it('password change re-wraps DEK without changing DEK bytes', async () => {
-        const material = await createVaultCryptoMaterial('old-pass');
+        const material = await createVaultCryptoMaterial('old-passphrase1');
         const rewrapped = await rewrapDekWithNewPassphrase({
             dek: material.dek,
-            newPassphrase: 'new-pass',
-            kdfSalt: material.kdfSalt,
+            newPassphrase: 'new-passphrase2',
         });
-        const newKek = await deriveVaultKek('new-pass', material.kdfSalt);
-        const dek2 = unwrapDek(rewrapped, newKek);
+        const newKek = await deriveVaultKek('new-passphrase2', rewrapped.kdfSalt);
+        const dek2 = unwrapDek(rewrapped.wrappedDek, newKek);
         assert.deepEqual(dek2, material.dek);
+        assert.notDeepEqual(rewrapped.kdfSalt, material.kdfSalt);
     });
 });
 
 describe('recovery key codec', () => {
-    it('round-trips 256-bit recovery key encoding', () => {
+    it('round-trips 256-bit recovery key encoding with dashes', () => {
         const raw = randomBytes(32);
         const display = encodeRecoveryKey(raw);
+        assert.ok(display.includes('-'));
         const decoded = decodeRecoveryKey(display);
         assert.deepEqual(decoded, raw);
+    });
+
+    it('rejects tampered recovery checksum', () => {
+        const raw = randomBytes(32);
+        const display = encodeRecoveryKey(raw);
+        const chars = display.replace(/-/g, '').split('');
+        chars[chars.length - 1] = chars[chars.length - 1] === '0' ? '1' : '0';
+        const tampered = chars.join('');
+        assert.throws(() => decodeRecoveryKey(tampered));
     });
 });
 
@@ -72,10 +85,11 @@ describe('node payload AEAD', () => {
     const aadBase = {
         contextId: 'ctx_abc',
         userPublicId: 'usr_xyz',
-        dekVersion: 1,
+        nodePublicId: 'msg_1',
+        nodeIndex: 0,
     };
 
-    it('encrypts and decrypts node content with AAD binding', () => {
+    it('encrypts and decrypts node content with node binding', () => {
         const dek = randomBytes(32);
         const plaintext = { role: 'user', text: 'hello world' };
         const encContent = encryptNodeContent(dek, 1, plaintext, aadBase);
@@ -83,11 +97,17 @@ describe('node payload AEAD', () => {
         assert.deepEqual(dec, plaintext);
     });
 
-    it('detects tampered ciphertext', () => {
+    it('rejects ciphertext swap between messages (AAD binding)', () => {
         const dek = randomBytes(32);
-        const encContent = encryptNodeContent(dek, 1, { a: 1 }, aadBase);
-        const tampered = { ...encContent, ct: String(encContent.ct).slice(0, -2) + 'AA' };
-        assert.throws(() => decryptNodeContent(dek, tampered, aadBase));
+        const enc0 = encryptNodeContent(dek, 1, { text: 'a' }, { ...aadBase, nodePublicId: 'm0', nodeIndex: 0 });
+        const enc1 = encryptNodeContent(dek, 1, { text: 'b' }, { ...aadBase, nodePublicId: 'm1', nodeIndex: 1 });
+        const swapped = { ...enc0, ct: enc1.ct, nonce: enc1.nonce };
+        assert.throws(() => decryptNodeContent(dek, swapped, { ...aadBase, nodePublicId: 'm0', nodeIndex: 0 }));
+    });
+
+    it('rejects plaintext rows when allowPlaintext is false', () => {
+        const dek = randomBytes(32);
+        assert.throws(() => decryptNodeContent(dek, { text: 'plain' }, aadBase));
     });
 
     it('detects wrong AAD (context id mismatch)', () => {
@@ -101,21 +121,30 @@ describe('node payload AEAD', () => {
         const meta = encryptNodeMetadata(
             dek,
             1,
-            { source: 'claude', secret_note: 'hidden', project_path: '/tmp/p' },
+            { source: 'claude', secret_note: 'hidden', project_path: '/tmp/p', ic_root_aad: 'abc' },
             aadBase,
+            { rootMetadata: true },
         );
         assert.equal(meta.source, 'claude');
         assert.equal(meta.project_path, '/tmp/p');
         assert.ok(meta.ic_sensitive);
-        const dec = decryptNodeMetadata(dek, meta, aadBase);
+        const dec = decryptNodeMetadata(dek, meta, { contextId: 'ctx_abc', userPublicId: 'usr_xyz' }, { rootMetadata: true });
         assert.equal(dec.secret_note, 'hidden');
+    });
+
+    it('rejects unknown kid', () => {
+        const dek = randomBytes(32);
+        const enc = encryptNodeContent(dek, 1, { a: 1 }, aadBase);
+        enc.kid = 'dek_v999';
+        assert.throws(() => decryptNodeContent(dek, enc, aadBase));
+        assert.throws(() => parseDekVersion('dek_v'));
     });
 });
 
 describe('multi-device unlock', () => {
     it('recovery wrap matches passphrase wrap', async () => {
-        const material = await createVaultCryptoMaterial('primary-pass');
-        const kekPass = await deriveVaultKek('primary-pass', material.kdfSalt);
+        const material = await createVaultCryptoMaterial('primary-passphrase1');
+        const kekPass = await deriveVaultKek('primary-passphrase1', material.kdfSalt);
         const dekA = unwrapDek(material.wrappedDekPassphrase, kekPass);
         const dekB = unwrapDek(material.wrappedDekRecovery, recoveryKeyToKek(material.recoveryKeyBytes));
         assert.deepEqual(dekA, dekB);
@@ -129,5 +158,14 @@ describe('AEAD primitive vectors', () => {
         const env = encryptAead(key, new TextEncoder().encode('payload'), aad);
         env.ct = env.ct.slice(0, -4) + 'AAAA';
         assert.throws(() => decryptAead(key, env, aad));
+    });
+});
+
+describe('dek proof', () => {
+    it('uses constant-time equality', () => {
+        const dek = randomBytes(32);
+        const proof = computeDekProof(dek);
+        assert.equal(constantTimeEqual(proof, computeDekProof(dek)), true);
+        assert.equal(constantTimeEqual(proof, computeDekProof(randomBytes(32))), false);
     });
 });

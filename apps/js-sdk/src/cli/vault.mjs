@@ -38,6 +38,10 @@ async function promptHidden(question) {
         process.stdin.pause();
         process.stdin.removeListener("data", onData);
         process.stdout.write("\n");
+        if (password.trim().length === 0) {
+          reject(new Error("Passphrase cannot be empty."));
+          return;
+        }
         resolve(password);
         return;
       }
@@ -98,7 +102,8 @@ async function cmdInit(baseUrl, argv) {
   console.log(recoveryKeyDisplay);
   console.log("");
   const typed = await promptVisible("Type the recovery key to confirm you saved it: ");
-  if (typed.replace(/\s+/g, "").toUpperCase() !== recoveryKeyDisplay.replace(/-/g, "").toUpperCase()) {
+  const normalizeRecovery = (value) => value.replace(/[\s-]+/g, "").toUpperCase();
+  if (normalizeRecovery(typed) !== normalizeRecovery(recoveryKeyDisplay)) {
     console.warn("Recovery key confirmation did not match. Vault is initialized; store the key from above.");
   } else {
     console.log("Vault initialized and unlocked.");
@@ -199,7 +204,7 @@ export async function runVaultCli(argv) {
   if (cmd === "recover") return cmdUnlock(baseUrl, [...rest, "--recovery"]);
   if (cmd === "lock") {
     const { accountKey } = await getVaultContext({ baseUrl });
-    lockVault(accountKey);
+    await lockVault(accountKey);
     console.log("Vault locked.");
     return;
   }
