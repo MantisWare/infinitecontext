@@ -7,16 +7,25 @@ import { fileURLToPath } from "node:url";
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const venvDir = path.join(sdkRoot, ".venv");
 const venvPython = path.join(venvDir, "bin", "python");
+const venvPip = path.join(venvDir, "bin", "pip");
 
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, { cwd: sdkRoot, encoding: "utf8", stdio: "inherit", ...opts });
   return res.status ?? 1;
 }
 
+function removePartialVenv() {
+  if (!fs.existsSync(venvDir)) return;
+  if (fs.existsSync(venvPip)) return;
+  fs.rmSync(venvDir, { recursive: true, force: true });
+}
+
 function tryCreateVenv() {
-  if (fs.existsSync(venvPython)) return true;
+  removePartialVenv();
+  if (fs.existsSync(venvPip)) return true;
   const status = run("python3", ["-m", "venv", venvDir], { stdio: "pipe" });
-  if (status === 0 && fs.existsSync(venvPython)) return true;
+  if (status === 0 && fs.existsSync(venvPip)) return true;
+  removePartialVenv();
   console.log(
     "python-sdk: skipping tests (could not create .venv — install python3-venv or create apps/python-sdk/.venv manually).",
   );
@@ -28,6 +37,7 @@ if (!tryCreateVenv()) {
 }
 
 if (run(venvPython, ["-m", "pip", "install", "-e", ".[dev]", "-q"]) !== 0) {
+  removePartialVenv();
   process.exit(1);
 }
 process.exit(run(venvPython, ["-m", "pytest", "-q", ...process.argv.slice(2)]));

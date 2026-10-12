@@ -6,14 +6,16 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { heroArtForWidth } from "@infinitecontext/sync/ui/hero-art";
-import {
+import { importSync } from "../../lib/sync-import.mjs";
+
+const { heroArtForWidth } = await importSync("ui/hero-art");
+const {
   buildOnboardingConfigPatch,
   ONBOARDING_AGENT_OPTIONS,
   ONBOARDING_AGENT_ALL_OPTION,
   ONBOARDING_CAPTURE_OPTIONS,
-} from "@infinitecontext/sync/onboarding-preferences";
-import { discoverRecentProjects } from "@infinitecontext/sync/recent-projects";
+} = await importSync("onboarding-preferences");
+const { discoverRecentProjects } = await importSync("recent-projects");
 import { HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
 
 // agents list rendered in the wizard — "All" shortcut first, then each agent

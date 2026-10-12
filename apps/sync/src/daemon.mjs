@@ -8,9 +8,8 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
-import { KEYS_AND_SERVICES_DOC_URL } from "@infinitecontext/core/doc-urls";
+import { KEYS_AND_SERVICES_DOC_URL } from "./ic-constants.mjs";
 import { resolveBaseUrl } from "./base-url.mjs";
-import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import {
   createBootstrapStateKey,
   normalizeBootstrapMode,
@@ -22,7 +21,7 @@ import { redact } from "./redact.mjs";
 import {
   parseClaudeCodeLine, parseCodexLine, parseGstackLine, parseOpenClawLine,
   parseCursorLine, parseGeminiFile,
-} from "@infinitecontext/parsers";
+} from "./parsers-bundle/index.mjs";
 import { boolFromEnv, expandHome, extractProjectPathFromFile, sha256, toInt } from "./utils.mjs";
 import {
   isPrimaryAgentSourceEnabled,
@@ -160,7 +159,17 @@ function deleteBootstrapState(key) {
 
 // ── exported boot function ──────────────────────────────────────
 
-export async function daemonBoot({ createStore, resolveDbPath }) {
+export async function daemonBoot({
+  createStore,
+  resolveDbPath,
+  createInfiniteContextClient,
+  assertSyncAuth,
+}) {
+  if (typeof createInfiniteContextClient !== "function" || typeof assertSyncAuth !== "function") {
+    throw new Error(
+      "daemonBoot requires createInfiniteContextClient and assertSyncAuth from the host CLI package",
+    );
+  }
   const cfg = {
     apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
     baseUrl: resolveBaseUrl(),
@@ -825,6 +834,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
       log("info", "Appended event to session context", {
         source: sourceName, session_id: normalized.sessionId, context_id: sessionContextId,
         event_type: normalized.eventType, role: normalized.kind, event_id: eventId,
+        ...(cfg.apiKey ? {} : { content: "(redacted — vault/session mode)" }),
       });
     }
   }
@@ -923,7 +933,9 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
       if (cfg.logAppends) {
         for (const { normalized } of sessionEvents) {
-          const msg = (normalized.message ?? "").replace(/[\r\n\t\v\f\x00-\x1f]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 80);
+          const msg = cfg.apiKey
+            ? (normalized.message ?? "").replace(/[\r\n\t\v\f\x00-\x1f]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 80)
+            : "(redacted — vault/session mode)";
           log("info", `[${normalized.eventType}] ${msg}`, {
             source: sourceName, session_id: sessionId,
           });

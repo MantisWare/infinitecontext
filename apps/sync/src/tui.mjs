@@ -8,7 +8,6 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { resolveBaseUrl } from "./base-url.mjs";
-import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 
 import {
@@ -16,7 +15,7 @@ import {
   hasLocalCodexSession,
   writeClaudeSession,
   writeCodexSession,
-} from "@infinitecontext/parsers";
+} from "./parsers-bundle/index.mjs";
 import { MENU_TABS, createInkUiController } from "./ui.mjs";
 import { boolFromEnv, expandHome, toInt } from "./utils.mjs";
 
@@ -55,7 +54,14 @@ function writeConfigKey(key, value) {
 export async function tuiBoot({
   assetsRoot,
   onFatalError,
+  createInfiniteContextClient,
+  assertSyncAuth,
 } = {}) {
+  if (typeof createInfiniteContextClient !== "function" || typeof assertSyncAuth !== "function") {
+    throw new Error(
+      "tuiBoot requires createInfiniteContextClient and assertSyncAuth from the host CLI package",
+    );
+  }
 
 const APP_ROOT = assetsRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OFFLINE_NOTICE = "Daemon offline — status.json stale or missing.";
@@ -186,7 +192,7 @@ function isNewerVersion(latest, current) {
 }
 
 async function checkForUpdateSilent() {
-  const { isUpdateCheckDisabled } = await import("infinitecontext/lib/update-check.mjs");
+  const { isUpdateCheckDisabled } = await import("./update-check.mjs");
   if (isUpdateCheckDisabled()) return;
   if (process.env.INFINITECONTEXT_DEV) return;
   const current = readTuiVersion();

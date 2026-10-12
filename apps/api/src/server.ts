@@ -21,8 +21,13 @@ let mailer;
 if (authConfig) {
     try {
         mailer = await resolveMailer(process.env, 'node');
-    } catch {
-        mailer = undefined;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+            `[infinitecontext-api] FATAL: account auth is enabled but mailer is not configured (${message}). ` +
+                'Configure SMTP/Resend, or set INFINITECONTEXT_ALLOW_CONSOLE_MAILER=true in development.',
+        );
+        process.exit(1);
     }
 }
 const trustProxy = String(process.env.INFINITECONTEXT_TRUSTED_PROXY ?? '').trim() === 'true';

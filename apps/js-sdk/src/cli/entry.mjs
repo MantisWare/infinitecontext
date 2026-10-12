@@ -390,7 +390,8 @@ async function checkForUpdate() {
 // ── launch helpers ──────────────────────────────────────────────
 
 async function launchSyncDaemon() {
-  const { launchDaemon } = await import("@infinitecontext/sync/launcher");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { launchDaemon } = await importSync("launcher");
   await launchDaemon({
     entryPath: fileURLToPath(new URL("./sdk-sync.mjs", import.meta.url)),
     diagnosticsHint: "DAEMON_VERBOSE=1 infinitecontext sync",
@@ -398,14 +399,18 @@ async function launchSyncDaemon() {
 }
 
 async function runCtlSDK() {
-  const { runCtl } = await import("@infinitecontext/sync/ctl");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { runCtl } = await importSync("ctl");
   await runCtl();
 }
 
 async function launchTui() {
-  const { tuiBoot } = await import("@infinitecontext/sync/tui");
+  const { importSync } = await import("../../lib/sync-import.mjs");
+  const { syncHostAuth } = await import("./sync-host.mjs");
+  const { tuiBoot } = await importSync("tui");
   await tuiBoot({
     assetsRoot: path.resolve(__dirname, "..", ".."),
+    ...syncHostAuth,
   });
 }
 

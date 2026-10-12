@@ -6,6 +6,8 @@ venv/
 # build
 dist/
 build/
+apps/js-sdk/vendor/
+apps/sync/src/parsers-bundle/
 *.egg-info/
 *.tsbuildinfo
 

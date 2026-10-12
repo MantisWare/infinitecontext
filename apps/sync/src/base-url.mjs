@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { HOSTED_API_BASE_URL } from "@infinitecontext/core/doc-urls";
+import { HOSTED_API_BASE_URL } from "./ic-constants.mjs";
 
 function expandHome(filePath) {
   if (filePath.startsWith("~/")) {

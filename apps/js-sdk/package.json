@@ -13,9 +13,9 @@
         "build": "pnpm --filter @infinitecontext/crypto run build && node scripts/copy-ic-crypto.mjs && tsdown",
         "dev": "tsdown --watch",
         "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/config-cli.mjs && node --check src/cli/vault.mjs && node --check lib/update-check.mjs && node --check lib/vault-require.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && pnpm run build",
-        "prepack": "pnpm run build",
+        "prepack": "node scripts/prepack-vendor.mjs && pnpm run build",
         "postinstall": "node postinstall.mjs",
-        "test": "node --test --test-concurrency=1 tests/**/*.test.mjs tests/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs tests/npm-pack-offline.test.mjs"
+        "test": "node --test --test-concurrency=1 tests/**/*.test.mjs tests/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs tests/npm-pack-offline.test.mjs && node --test ../../tests/standalone-pack-all.test.mjs"
     },
     "main": "./dist/index.mjs",
     "types": "./dist/index.d.mts",
@@ -67,6 +67,7 @@
     "files": [
         "dist/",
         "lib/",
+        "vendor/",
         "infinitecontext.mjs",
         "postinstall.mjs",
         "assets/",
@@ -77,8 +78,6 @@
         "node-pty": "^1.1.0"
     },
     "dependencies": {
-        "@infinitecontext/core": "workspace:*",
-        "@infinitecontext/sync": "workspace:*",
         "@noble/ciphers": "^1.3.0",
         "@noble/hashes": "^1.8.0",
         "hash-wasm": "^4.12.0",
@@ -89,7 +88,9 @@
         "react": "^19.2.4"
     },
     "devDependencies": {
+        "@infinitecontext/core": "workspace:*",
         "@infinitecontext/parsers": "workspace:*",
+        "@infinitecontext/sync": "workspace:*",
         "tsx": "^4.20.5",
         "tsdown": "^0.20.3",
         "typescript": "^5.9.3"

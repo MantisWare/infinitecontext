@@ -6,7 +6,7 @@ import {
   DOCS_API_BASE_URL_PLACEHOLDER,
   HOSTED_API_BASE_URL,
   KEYS_AND_SERVICES_DOC_URL,
-} from "@infinitecontext/core/doc-urls";
+} from "./doc-urls.mjs";
 
 export { DOCS_API_BASE_URL_PLACEHOLDER, HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL };
 
