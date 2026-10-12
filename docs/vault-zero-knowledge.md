@@ -46,6 +46,8 @@ Until [vault integrity](../design/vault-integrity.md) ships, a **malicious or co
 
 Cleartext **`ic_chain_index` / `ic_chain_link`** fields may appear on older rows from preview builds; they are **ignored** in PR #5 and carry no security guarantee.
 
+**`X-IC-Vault-Migrate-Read`** is rate-limited in memory **per API process** (not cluster-wide). Large migrate-project runs retry on **429**; multi-instance deployments should stagger migrates until [issue #3](https://github.com/MantisWare/infinitecontext/issues/3) adds a distributed limiter.
+
 ## Key recovery (strict zero-knowledge)
 
 See [plan §7.1](/docs/plan/infinitecontext-plan.md).
@@ -67,8 +69,6 @@ infinitecontext vault change-passphrase    # re-wrap DEK only
 infinitecontext vault rotate-recovery-key
 infinitecontext vault migrate-encrypt <ctx-id>   # opt-in plaintext → ciphertext
 infinitecontext vault migrate-project            # encrypt all contexts; prunes old plaintext version heads when done
-
-After large prune operations on self-hosted Postgres, operators may reclaim disk with `VACUUM (ANALYZE)` during a maintenance window (not run automatically by the CLI).
 infinitecontext vault devices list
 infinitecontext vault devices revoke <session-public-id>
 ```

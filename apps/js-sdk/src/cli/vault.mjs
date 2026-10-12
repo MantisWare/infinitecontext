@@ -15,6 +15,7 @@ import {
 } from "../../lib/vault-session.mjs";
 import { fetchDevices, revokeDevice } from "../../lib/vault-api.mjs";
 import { wrapInfiniteContextWithVault } from "../../lib/encrypted-client.mjs";
+import { withRateLimitRetry } from "../../lib/vault-http-retry.mjs";
 import { VAULT_AGENT_DOC } from "../../lib/vault-agent.mjs";
 
 const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
@@ -227,10 +228,13 @@ async function cmdMigrateProject(baseUrl, argv) {
   const report = await migrateProjectEncryption({
     scopeKey: me.id,
     dryRun,
-    listContexts: (opts) => tokenClient.get(opts),
+    listContexts: (opts) => withRateLimitRetry(() => tokenClient.get(opts)),
     encryptContext: (id) => client.migrateEncryptContext(id),
   });
   console.log(JSON.stringify(report, null, 2));
+  if (!dryRun && Array.isArray(report.failed) && report.failed.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runVaultCli(argv) {

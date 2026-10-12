@@ -11,6 +11,28 @@ import {
 } from "./ic-crypto.mjs";
 
 import { randomRootAadNonce } from "./vault-agent.mjs";
+import { sleep, withRateLimitRetry } from "./vault-http-retry.mjs";
+
+const APPEND_CONFLICT_MAX_ATTEMPTS = 6;
+
+function parseHttpErrorCode(error) {
+  if (!error?.bodyText) return null;
+  try {
+    return JSON.parse(String(error.bodyText))?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function appendInputWithoutClientIds(input) {
+  const list = Array.isArray(input) ? input : [input];
+  return list.length === 1
+    ? (() => {
+        const { id: _id, ...rest } = list[0];
+        return rest;
+      })()
+    : list.map(({ id: _id, ...rest }) => rest);
+}
 
 function stableNodeId(row) {
   const fromMeta = row?.metadata?.ic_client_node_id;
@@ -187,6 +209,15 @@ async function encryptAppendBatch(client, contextId, items, ctx) {
   return encrypted;
 }
 
+function appendResponseFromExistingHead(snap, encryptedPayload) {
+  const rows = snap?.data ?? [];
+  const ids = encryptedPayload.map((row) => row.id).filter((id) => typeof id === "string");
+  if (ids.length !== encryptedPayload.length) return null;
+  const matched = ids.map((id) => rows.find((row) => stableNodeId(row) === id));
+  if (matched.some((row) => !row)) return null;
+  return { data: matched, version: snap.version ?? 0 };
+}
+
 export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode = false } = {}) {
   if (!vaultCtx?.dek) return client;
 
@@ -228,30 +259,39 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async append(contextId, input) {
       ctx.contextId = contextId;
-      const doAppend = async () => {
-        const encrypted = await encryptAppendBatch(client, contextId, input, ctx);
-        return client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
-      };
-      let res;
-      try {
-        res = await doAppend();
-      } catch (error) {
-        const status = error?.status;
-        const code = error?.bodyText && (() => {
+      return withRateLimitRetry(async () => {
+        let batchInput = input;
+        for (let attempt = 0; attempt < APPEND_CONFLICT_MAX_ATTEMPTS; attempt += 1) {
+          let encrypted;
           try {
-            return JSON.parse(error.bodyText)?.code;
-          } catch {
-            return null;
+            encrypted = await encryptAppendBatch(client, contextId, batchInput, ctx);
+            const res = await client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
+            return mapGetResponse(res, contextId);
+          } catch (error) {
+            const status = error?.status;
+            const code = parseHttpErrorCode(error);
+            if (status === 409 && code === "vault_migrate_required") {
+              await this.migrateEncryptContext(contextId);
+              batchInput = appendInputWithoutClientIds(input);
+              continue;
+            }
+            if (status === 409) {
+              await client.get(contextId);
+              const snap = await this.get(contextId);
+              if (encrypted) {
+                const deduped = appendResponseFromExistingHead(snap, encrypted);
+                if (deduped) return deduped;
+              }
+              if (attempt >= APPEND_CONFLICT_MAX_ATTEMPTS - 1) throw error;
+              batchInput = appendInputWithoutClientIds(input);
+              await sleep(Math.min(2000, 50 * 2 ** attempt));
+              continue;
+            }
+            throw error;
           }
-        })();
-        if (status === 409 && (code === "vault_migrate_required" || code === "vault_context_conflict")) {
-          await this.migrateEncryptContext(contextId);
-          res = await doAppend();
-        } else {
-          throw error;
         }
-      }
-      return mapGetResponse(res, contextId);
+        throw new Error("Vault append failed after conflict retries");
+      });
     },
 
     async get(idOrOptions, options) {
@@ -271,19 +311,53 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async update(contextId, input, options) {
       ctx.contextId = contextId;
+      const snap = await this.get(contextId);
+      const rows = snap?.data ?? [];
       const rawUpdates = Array.isArray(input) ? input : input?.updates ?? [input];
-      const encrypted = rawUpdates.map((msg) => {
-        const serverTargetId = msg.id ?? (() => {
-          throw new Error("Vault update requires message id");
-        })();
-        const aadNodeId = resolveAadNodeId(msg);
-        if (!aadNodeId || !isClientNodeId(aadNodeId)) {
-          throw new Error("Vault update requires metadata.ic_client_node_id (icn_*)");
+
+      function resolveRow(msg) {
+        if (msg.id !== undefined) return rows.find((row) => row.id === msg.id);
+        if (msg.index !== undefined) {
+          let idx = msg.index;
+          if (idx < 0) idx = rows.length + idx;
+          return rows[idx];
         }
-        const { content, metadata } = encryptMessageFields(msg, ctx, contextId, aadNodeId);
+        throw new Error("Vault update requires message id or index");
+      }
+
+      const encrypted = rawUpdates.map((msg) => {
+        const row = resolveRow(msg);
+        if (!row) throw new Error("Vault update target message not found in current snapshot");
+        const aadNodeId = stableNodeId(row);
+        if (!isClientNodeId(aadNodeId)) {
+          throw new Error("Vault update requires metadata.ic_client_node_id (icn_*) on the stored message");
+        }
+        const {
+          id: _rowId,
+          index: _rowIndex,
+          metadata: existingMeta,
+          decrypt_error: _de,
+          ...existingBody
+        } = row;
+        const {
+          metadata: patchMeta,
+          id: _patchId,
+          index: _patchIndex,
+          ...patchBody
+        } = msg;
+        const mergedMetadata =
+          patchMeta && typeof patchMeta === "object"
+            ? { ...(existingMeta ?? {}), ...patchMeta }
+            : { ...(existingMeta ?? {}) };
+        const mergedMessage = {
+          ...existingBody,
+          ...patchBody,
+          metadata: mergedMetadata,
+        };
+        const { content, metadata } = encryptMessageFields(mergedMessage, ctx, contextId, aadNodeId);
         return {
           ...content,
-          id: serverTargetId,
+          id: row.id,
           ...(msg.index !== undefined ? { index: msg.index } : {}),
           metadata,
         };
@@ -333,7 +407,9 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async migrateEncryptContext(contextId) {
       ctx.contextId = contextId;
-      const beforeHead = await client.get(contextId, { history: true, vaultMigrateRead: true });
+      const beforeHead = await withRateLimitRetry(() =>
+        client.get(contextId, { history: true, vaultMigrateRead: true }),
+      );
       const rows = beforeHead?.data ?? [];
       const plaintextRows = rows.filter((row) => !isEncryptedContent(row));
       if (plaintextRows.length === 0) {
@@ -358,9 +434,9 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       });
       await client.update(contextId, { updates: batchUpdates });
       if (typeof client.prunePlaintextVersions === "function") {
-        await client.prunePlaintextVersions(contextId);
+        await withRateLimitRetry(() => client.prunePlaintextVersions(contextId));
       }
-      const after = await client.get(contextId);
+      const after = await withRateLimitRetry(() => client.get(contextId));
       for (const row of after.data ?? []) {
         const violations = [];
         if (!isEncryptedContent(row)) violations.push("plaintext content");

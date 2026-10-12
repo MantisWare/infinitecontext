@@ -51,6 +51,7 @@ export async function migrateProjectEncryption({
     completed: [...completed],
     encryptedThisRun: [],
     skippedAlreadyEncrypted: [],
+    failed: [],
   };
 
   for (const ctx of contexts) {
@@ -58,14 +59,22 @@ export async function migrateProjectEncryption({
     if (completed.has(id)) continue;
     report.pending.push(id);
     if (dryRun) continue;
-    const result = await encryptContext(id);
-    if (result?.encrypted) {
-      completed.add(id);
-      report.encryptedThisRun.push(id);
-      saveMigrateState(scopeKey, { completedContextIds: [...completed] });
+    try {
+      const result = await encryptContext(id);
+      if (result?.encrypted) {
+        completed.add(id);
+        report.encryptedThisRun.push(id);
+        saveMigrateState(scopeKey, { completedContextIds: [...completed] });
+      }
+    } catch (error) {
+      report.failed.push({
+        id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
   report.completed = [...completed];
+  report.ok = report.failed.length === 0;
   return report;
 }

@@ -54,4 +54,20 @@ describe("vault migrate-project", () => {
     assert.deepEqual(encrypted, ["ctx_new"]);
     assert.deepEqual(report.completed.sort(), ["ctx_done", "ctx_new"].sort());
   });
+
+  it("continues after per-context failures and reports failed ids", async () => {
+    const report = await migrateProjectEncryption({
+      scopeKey: "usr_fail",
+      dryRun: false,
+      listContexts: async () => ({ data: [{ id: "ctx_ok" }, { id: "ctx_bad" }, { id: "ctx_ok2" }] }),
+      encryptContext: async (id) => {
+        if (id === "ctx_bad") throw new Error("simulated migrate failure");
+        return { encrypted: true };
+      },
+    });
+    assert.deepEqual(report.encryptedThisRun.sort(), ["ctx_ok", "ctx_ok2"].sort());
+    assert.equal(report.failed.length, 1);
+    assert.equal(report.failed[0].id, "ctx_bad");
+    assert.equal(report.ok, false);
+  });
 });

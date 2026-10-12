@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -77,7 +78,7 @@ async function setupVaultE2E() {
     assert.ok(googleProject);
     await authRepo.linkUserProject(googleUser.id, googleProject.id);
 
-    return { json, storage, authRepo, accessToken, googleUser, googleProjectId: googleProject.id };
+    return { json, storage, authRepo, accessToken, googleUser, googleProjectId: googleProject.id, app };
 }
 
 function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: string) {
@@ -99,7 +100,7 @@ function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: stri
 
 describe('vault CLI-equivalent e2e', () => {
     it('init, encrypted write/read, lock/unlock, passphrase change, recovery device', async () => {
-        const { json, storage, accessToken } = await setupVaultE2E();
+        const { json, storage, accessToken, app } = await setupVaultE2E();
 
         const material = await createVaultCryptoMaterial('vault-pass-e2e1');
         const init = await json(
@@ -170,6 +171,34 @@ describe('vault CLI-equivalent e2e', () => {
             accessToken,
         );
         assert.equal(patchAgain.res.status, 200);
+
+        const sdkRoot = path.resolve(process.cwd(), '../js-sdk');
+        const { wrapInfiniteContextWithVault } = await import(path.join(sdkRoot, 'lib/encrypted-client.mjs') as string);
+        const { InfiniteContext } = await import(path.join(sdkRoot, 'dist/index.mjs') as string);
+        const vaultClient = wrapInfiniteContextWithVault(
+            new InfiniteContext({
+                baseUrl: 'http://localhost',
+                accessToken,
+                fetch: (input: RequestInfo | URL, init?: RequestInit) => app.request(String(input), init),
+            }),
+            { dek: material.dek, dekVersion: 1, userPublicId },
+        );
+        const fork = await vaultClient.create({ from: contextId, metadata: { source: 'cow-fork' } });
+        const withMeta = await vaultClient.append(fork.id, {
+            role: 'user',
+            text: 'meta-body',
+            metadata: { event_id: 'ev_keep', note: 'keep-me' },
+        });
+        assert.equal(withMeta.data[0]?.metadata?.event_id, 'ev_keep');
+        await vaultClient.update(fork.id, {
+            updates: [{ id: withMeta.data[0]!.id, role: 'user', content: { message: 'updated-only' } }],
+        });
+        const afterMeta = await vaultClient.get(fork.id);
+        const kept = afterMeta.data.find(
+            (row: { metadata?: Record<string, unknown> }) => row.metadata?.event_id === 'ev_keep',
+        );
+        assert.ok(kept, 'expected prior metadata fields to survive content-only update');
+        assert.equal(kept?.metadata?.note, 'keep-me');
 
         const storedNodes = (storage as unknown as { nodes: Array<{ content: Record<string, unknown> }> }).nodes;
         const hasCipher = storedNodes.some((n) => n.content.__ic_enc === 1);

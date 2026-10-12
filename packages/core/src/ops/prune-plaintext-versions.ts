@@ -17,11 +17,13 @@ export async function prunePlaintextVersionHeads(
     storage: StorageAdapter,
     projectId: number,
     contextId: string,
-): Promise<Result<{ pruned: number }>> {
+): Promise<Result<{ pruned: number; plainNodesRemoved: number }>> {
     const root = await storage.findRootContext(projectId, contextId);
     if (!root) return err('not_found', 'Context not found');
 
     let pruned = 0;
+    let plainNodesRemoved = 0;
+
     for (;;) {
         const versions = await getVersions(storage, root.public_id);
         if (versions.length <= 1) break;
@@ -34,32 +36,50 @@ export async function prunePlaintextVersionHeads(
             continue;
         }
 
-        const anyPlain = nodes.some((n) => !contentIsEncrypted(n.content));
-        const anyEnc = nodes.some((n) => contentIsEncrypted(n.content));
-        if (!anyPlain) break;
-        if (anyEnc) {
-            return err(
-                'invalid_input',
-                'Historical version contains mixed plaintext and ciphertext; encrypt or delete that version manually',
-            );
+        const plainNodes = nodes.filter((n) => !contentIsEncrypted(n.content));
+        if (plainNodes.length === 0) break;
+
+        const encNodes = nodes.filter((n) => contentIsEncrypted(n.content));
+        if (encNodes.length === 0) {
+            const deletedHeadId = oldest.head_id;
+            await storage.deleteNodesByContextId(projectId, deletedHeadId);
+            await storage.deleteNodeByPublicId(projectId, deletedHeadId);
+            await rewireOldestHeadPrev(storage, projectId, root.public_id, deletedHeadId);
+            pruned += 1;
+            plainNodesRemoved += plainNodes.length;
+            continue;
         }
 
-        const deletedHeadId = oldest.head_id;
-        await storage.deleteNodesByContextId(projectId, deletedHeadId);
-        await storage.deleteNodeByPublicId(projectId, deletedHeadId);
-
-        const remaining = await getVersions(storage, root.public_id);
-        const newOldest = remaining[0];
-        if (newOldest && newOldest.head_id !== deletedHeadId) {
-            const branches = await storage.findContextBranches(root.public_id);
-            const branch = branches.find((b) => b.public_id === newOldest.head_id);
-            if (branch?.prev_id === deletedHeadId) {
-                await storage.updateNodePrevId(projectId, newOldest.head_id, null);
-            }
+        for (const node of plainNodes) {
+            await storage.deleteNodeByPublicId(projectId, node.public_id);
+            plainNodesRemoved += 1;
         }
 
-        pruned += 1;
+        const remainingMessages = await getOrderedNodes(storage, oldest.head_id);
+        if (remainingMessages.length === 0) {
+            const deletedHeadId = oldest.head_id;
+            await storage.deleteNodeByPublicId(projectId, deletedHeadId);
+            await rewireOldestHeadPrev(storage, projectId, root.public_id, deletedHeadId);
+            pruned += 1;
+        }
     }
 
-    return ok({ pruned });
+    return ok({ pruned, plainNodesRemoved });
+}
+
+async function rewireOldestHeadPrev(
+    storage: StorageAdapter,
+    projectId: number,
+    rootId: string,
+    deletedHeadId: string,
+) {
+    const remaining = await getVersions(storage, rootId);
+    const newOldest = remaining[0];
+    if (newOldest && newOldest.head_id !== deletedHeadId) {
+        const branches = await storage.findContextBranches(rootId);
+        const branch = branches.find((b) => b.public_id === newOldest.head_id);
+        if (branch?.prev_id === deletedHeadId) {
+            await storage.updateNodePrevId(projectId, newOldest.head_id, null);
+        }
+    }
 }
