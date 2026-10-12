@@ -98,10 +98,26 @@ async function loginWithGoogleDevice(baseUrl) {
   }
 }
 
+function generatePkceVerifier() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+async function pkceChallenge(verifier) {
+  const digest = crypto.createHash("sha256").update(verifier).digest();
+  return digest.toString("base64url");
+}
+
+function generateOAuthState() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
 async function loginWithGoogleLocalhost(baseUrl) {
   const redirectUri = `http://127.0.0.1:${LOCAL_CALLBACK_PORT}/callback`;
-  const codePromise = waitForOAuthCallback(LOCAL_CALLBACK_PORT);
-  const authorizeUrl = `${baseUrl}/auth/oauth/google/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`;
+  const expectedState = generateOAuthState();
+  const codeVerifier = generatePkceVerifier();
+  const codeChallenge = await pkceChallenge(codeVerifier);
+  const codePromise = waitForOAuthCallback(LOCAL_CALLBACK_PORT, expectedState);
+  const authorizeUrl = `${baseUrl}/auth/oauth/google/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(expectedState)}&code_challenge=${encodeURIComponent(codeChallenge)}`;
   console.log(`Opening browser flow: ${authorizeUrl}`);
   try {
     const open = (await import("node:child_process")).spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [authorizeUrl], { stdio: "ignore" });
@@ -112,11 +128,11 @@ async function loginWithGoogleLocalhost(baseUrl) {
     console.log("Open the URL above in your browser to continue.");
   }
 
-  const { code, state } = await codePromise;
+  const { code } = await codePromise;
   const body = await postJson(baseUrl, "/auth/oauth/google/callback", {
     code,
-    state,
     redirect_uri: redirectUri,
+    code_verifier: codeVerifier,
     device_id: deviceId(),
     device_name: deviceName(),
   });
@@ -124,7 +140,7 @@ async function loginWithGoogleLocalhost(baseUrl) {
   console.log(`Signed in with Google as ${body.user?.email ?? body.user?.id ?? "account"}`);
 }
 
-function waitForOAuthCallback(port) {
+function waitForOAuthCallback(port, expectedState) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       try {
@@ -139,6 +155,11 @@ function waitForOAuthCallback(port) {
         if (!code || !state) {
           res.writeHead(400);
           res.end("Missing code/state");
+          return;
+        }
+        if (state !== expectedState) {
+          res.writeHead(400);
+          res.end("Invalid OAuth state");
           return;
         }
         res.writeHead(200, { "Content-Type": "text/plain" });

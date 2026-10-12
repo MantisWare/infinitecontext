@@ -57,6 +57,7 @@ export const sessions = pgTable('sessions', {
     public_id: text('public_id').notNull(),
     user_id: bigint('user_id', { mode: 'number' }).notNull(),
     refresh_token_hash: text('refresh_token_hash').notNull(),
+    replaced_refresh_token_hash: text('replaced_refresh_token_hash'),
     device_id: text('device_id'),
     device_name: text('device_name'),
     expires_at: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
@@ -84,17 +85,8 @@ export const oauth_device_flows = pgTable('oauth_device_flows', {
     verification_url: text('verification_url').notNull(),
     expires_at: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
     completed_at: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+    tokens_delivered_at: timestamp('tokens_delivered_at', { withTimezone: true, mode: 'string' }),
     user_id: bigint('user_id', { mode: 'number' }),
-    session_bundle: jsonb('session_bundle').$type<Record<string, unknown>>(),
-    created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
-
-export const oauth_states = pgTable('oauth_states', {
-    state_hash: text('state_hash').primaryKey(),
-    provider: text('provider').notNull(),
-    redirect_uri: text('redirect_uri').notNull(),
-    code_verifier: text('code_verifier').notNull(),
-    expires_at: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
     created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
 
@@ -131,7 +123,6 @@ export const schema = {
     sessions,
     auth_tokens,
     oauth_device_flows,
-    oauth_states,
     user_crypto,
 };
 

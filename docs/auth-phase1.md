@@ -6,7 +6,10 @@ Phase 1 adds **account-based authentication** alongside existing `ic_live_` / `i
 
 | Variable | Purpose |
 |----------|---------|
-| `INFINITECONTEXT_JWT_SECRET` | HS256 secret for access JWTs (required for auth routes) |
+| `INFINITECONTEXT_JWT_SECRET` | HS256 secret for access JWTs (≥32 bytes; required for auth routes) |
+| `INFINITECONTEXT_JWT_ISSUER` / `INFINITECONTEXT_JWT_AUDIENCE` | Access token `iss` / `aud` validation |
+| `INFINITECONTEXT_MAIL_PROVIDER` | `resend` (Workers + Node) or `smtp` (Node only) |
+| `INFINITECONTEXT_ALLOW_CONSOLE_MAILER` | `true` for local dev only (never in production) |
 | `INFINITECONTEXT_ACCESS_TOKEN_TTL_SEC` | Access token lifetime (default `900`) |
 | `INFINITECONTEXT_REFRESH_TOKEN_TTL_SEC` | Refresh/session lifetime (default `604800` = 7 days) |
 | `INFINITECONTEXT_AUTH_PUBLIC_BASE_URL` | Public API URL used in verification/reset links |

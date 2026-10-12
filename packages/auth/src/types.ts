@@ -22,6 +22,7 @@ export type SessionRow = {
     public_id: string;
     user_id: number;
     refresh_token_hash: string;
+    replaced_refresh_token_hash: string | null;
     device_id: string | null;
     device_name: string | null;
     expires_at: string;
@@ -49,17 +50,8 @@ export type OAuthDeviceFlowRow = {
     verification_url: string;
     expires_at: string;
     completed_at: string | null;
+    tokens_delivered_at: string | null;
     user_id: number | null;
-    session_bundle: Record<string, unknown> | null;
-    created_at: string;
-};
-
-export type OAuthStateRow = {
-    state_hash: string;
-    provider: string;
-    redirect_uri: string;
-    code_verifier: string;
-    expires_at: string;
     created_at: string;
 };
 
@@ -98,8 +90,16 @@ export type AuthRepository = {
     }): Promise<SessionRow>;
 
     findSessionByRefreshTokenHash(hash: string): Promise<SessionRow | null>;
+    findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null>;
     findSessionById(id: number): Promise<SessionRow | null>;
     revokeSession(id: number, revokedAt: string): Promise<void>;
+    revokeAllSessionsForUser(userId: number, revokedAt: string): Promise<void>;
+    rotateSessionRefreshToken(input: {
+        sessionId: number;
+        newRefreshTokenHash: string;
+        previousRefreshTokenHash: string;
+        lastUsedAt: string;
+    }): Promise<void>;
     touchSession(id: number, lastUsedAt: string): Promise<void>;
 
     insertAuthToken(input: {
@@ -121,10 +121,8 @@ export type AuthRepository = {
     }): Promise<OAuthDeviceFlowRow>;
 
     findOAuthDeviceFlowByHash(deviceCodeHash: string): Promise<OAuthDeviceFlowRow | null>;
-    completeOAuthDeviceFlow(id: number, input: { userId: number; sessionBundle: Record<string, unknown> }): Promise<void>;
-
-    insertOAuthState(input: OAuthStateRow): Promise<void>;
-    consumeOAuthState(stateHash: string, now: string): Promise<OAuthStateRow | null>;
+    completeOAuthDeviceFlow(id: number, input: { userId: number; completedAt: string }): Promise<void>;
+    markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean>;
 };
 
 export type AuthTokenPair = {
@@ -145,6 +143,8 @@ export type AccessTokenClaims = {
 
 export type AuthRuntimeConfig = {
     jwtSecret: string;
+    jwtIssuer: string;
+    jwtAudience: string;
     accessTokenTtlSec: number;
     refreshTokenTtlSec: number;
     publicBaseUrl: string;

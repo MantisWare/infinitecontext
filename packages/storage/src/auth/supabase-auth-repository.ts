@@ -5,7 +5,6 @@ import type {
     AuthTokenRow,
     IdentityRow,
     OAuthDeviceFlowRow,
-    OAuthStateRow,
     SessionRow,
     UserRow,
 } from '@infinitecontext/auth';
@@ -143,6 +142,16 @@ export class SupabaseAuthRepository implements AuthRepository {
         return (data as SessionRow) ?? null;
     }
 
+    async findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        const { data, error } = await this.client
+            .from('sessions')
+            .select()
+            .eq('replaced_refresh_token_hash', hash)
+            .maybeSingle();
+        if (error) throw error;
+        return (data as SessionRow) ?? null;
+    }
+
     async findSessionById(id: number): Promise<SessionRow | null> {
         const { data, error } = await this.client.from('sessions').select().eq('id', id).maybeSingle();
         if (error) throw error;
@@ -151,6 +160,28 @@ export class SupabaseAuthRepository implements AuthRepository {
 
     async revokeSession(id: number, revokedAt: string): Promise<void> {
         const { error } = await this.client.from('sessions').update({ revoked_at: revokedAt }).eq('id', id);
+        if (error) throw error;
+    }
+
+    async revokeAllSessionsForUser(userId: number, revokedAt: string): Promise<void> {
+        const { error } = await this.client.from('sessions').update({ revoked_at: revokedAt }).eq('user_id', userId);
+        if (error) throw error;
+    }
+
+    async rotateSessionRefreshToken(input: {
+        sessionId: number;
+        newRefreshTokenHash: string;
+        previousRefreshTokenHash: string;
+        lastUsedAt: string;
+    }): Promise<void> {
+        const { error } = await this.client
+            .from('sessions')
+            .update({
+                refresh_token_hash: input.newRefreshTokenHash,
+                replaced_refresh_token_hash: input.previousRefreshTokenHash,
+                last_used_at: input.lastUsedAt,
+            })
+            .eq('id', input.sessionId);
         if (error) throw error;
     }
 
@@ -229,34 +260,25 @@ export class SupabaseAuthRepository implements AuthRepository {
         return (data as OAuthDeviceFlowRow) ?? null;
     }
 
-    async completeOAuthDeviceFlow(id: number, input: { userId: number; sessionBundle: Record<string, unknown> }): Promise<void> {
+    async completeOAuthDeviceFlow(id: number, input: { userId: number; completedAt: string }): Promise<void> {
         const { error } = await this.client
             .from('oauth_device_flows')
             .update({
-                completed_at: new Date().toISOString(),
+                completed_at: input.completedAt,
                 user_id: input.userId,
-                session_bundle: input.sessionBundle,
             })
             .eq('id', id);
         if (error) throw error;
     }
 
-    async insertOAuthState(input: OAuthStateRow): Promise<void> {
-        const { error } = await this.client.from('oauth_states').insert(input);
-        if (error) throw error;
-    }
-
-    async consumeOAuthState(stateHash: string, now: string): Promise<OAuthStateRow | null> {
+    async markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean> {
         const { data, error } = await this.client
-            .from('oauth_states')
-            .select()
-            .eq('state_hash', stateHash)
-            .gt('expires_at', now)
-            .maybeSingle();
+            .from('oauth_device_flows')
+            .update({ tokens_delivered_at: deliveredAt })
+            .eq('id', id)
+            .is('tokens_delivered_at', null)
+            .select('id');
         if (error) throw error;
-        if (!data) return null;
-        const { error: deleteError } = await this.client.from('oauth_states').delete().eq('state_hash', stateHash);
-        if (deleteError) throw deleteError;
-        return data as OAuthStateRow;
+        return (data?.length ?? 0) > 0;
     }
 }

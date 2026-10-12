@@ -3,7 +3,6 @@ import type {
     AuthTokenRow,
     IdentityRow,
     OAuthDeviceFlowRow,
-    OAuthStateRow,
     SessionRow,
     UserRow,
 } from '../types';
@@ -14,7 +13,6 @@ export class MemoryAuthRepository implements AuthRepository {
     private sessions: SessionRow[] = [];
     private authTokens: AuthTokenRow[] = [];
     private deviceFlows: OAuthDeviceFlowRow[] = [];
-    private oauthStates: OAuthStateRow[] = [];
     private userProjects = new Map<number, number>();
 
     private userSeq = 0;
@@ -114,6 +112,7 @@ export class MemoryAuthRepository implements AuthRepository {
             public_id: input.publicId,
             user_id: input.userId,
             refresh_token_hash: input.refreshTokenHash,
+            replaced_refresh_token_hash: null,
             device_id: input.deviceId ?? null,
             device_name: input.deviceName ?? null,
             expires_at: input.expiresAt,
@@ -129,6 +128,10 @@ export class MemoryAuthRepository implements AuthRepository {
         return this.sessions.find((s) => s.refresh_token_hash === hash) ?? null;
     }
 
+    async findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        return this.sessions.find((s) => s.replaced_refresh_token_hash === hash) ?? null;
+    }
+
     async findSessionById(id: number): Promise<SessionRow | null> {
         return this.sessions.find((s) => s.id === id) ?? null;
     }
@@ -136,6 +139,25 @@ export class MemoryAuthRepository implements AuthRepository {
     async revokeSession(id: number, revokedAt: string): Promise<void> {
         const session = this.sessions.find((s) => s.id === id);
         if (session) session.revoked_at = revokedAt;
+    }
+
+    async revokeAllSessionsForUser(userId: number, revokedAt: string): Promise<void> {
+        for (const session of this.sessions) {
+            if (session.user_id === userId) session.revoked_at = revokedAt;
+        }
+    }
+
+    async rotateSessionRefreshToken(input: {
+        sessionId: number;
+        newRefreshTokenHash: string;
+        previousRefreshTokenHash: string;
+        lastUsedAt: string;
+    }): Promise<void> {
+        const session = this.sessions.find((s) => s.id === input.sessionId);
+        if (!session) return;
+        session.replaced_refresh_token_hash = input.previousRefreshTokenHash;
+        session.refresh_token_hash = input.newRefreshTokenHash;
+        session.last_used_at = input.lastUsedAt;
     }
 
     async touchSession(id: number, lastUsedAt: string): Promise<void> {
@@ -188,8 +210,8 @@ export class MemoryAuthRepository implements AuthRepository {
             verification_url: input.verificationUrl,
             expires_at: input.expiresAt,
             completed_at: null,
+            tokens_delivered_at: null,
             user_id: null,
-            session_bundle: null,
             created_at: new Date().toISOString(),
         };
         this.deviceFlows.push(row);
@@ -200,22 +222,17 @@ export class MemoryAuthRepository implements AuthRepository {
         return this.deviceFlows.find((f) => f.device_code_hash === deviceCodeHash) ?? null;
     }
 
-    async completeOAuthDeviceFlow(id: number, input: { userId: number; sessionBundle: Record<string, unknown> }): Promise<void> {
+    async completeOAuthDeviceFlow(id: number, input: { userId: number; completedAt: string }): Promise<void> {
         const row = this.deviceFlows.find((f) => f.id === id);
         if (!row) return;
-        row.completed_at = new Date().toISOString();
+        row.completed_at = input.completedAt;
         row.user_id = input.userId;
-        row.session_bundle = input.sessionBundle;
     }
 
-    async insertOAuthState(input: OAuthStateRow): Promise<void> {
-        this.oauthStates.push(input);
-    }
-
-    async consumeOAuthState(stateHash: string, now: string): Promise<OAuthStateRow | null> {
-        const idx = this.oauthStates.findIndex((s) => s.state_hash === stateHash && Date.parse(s.expires_at) > Date.parse(now));
-        if (idx < 0) return null;
-        const [row] = this.oauthStates.splice(idx, 1);
-        return row ?? null;
+    async markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean> {
+        const row = this.deviceFlows.find((f) => f.id === id);
+        if (!row || row.tokens_delivered_at) return false;
+        row.tokens_delivered_at = deliveredAt;
+        return true;
     }
 }

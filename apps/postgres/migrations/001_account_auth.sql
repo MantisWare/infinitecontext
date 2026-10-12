@@ -1,5 +1,4 @@
--- Incremental migration for existing databases (idempotent).
--- Full fresh installs use init.sql; run via infinitecontext-db-migrate.sh
+-- Account auth (Phase 1). Login passwords are separate from vault KEK (Phase 2+).
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
@@ -33,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   public_id TEXT NOT NULL UNIQUE,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   refresh_token_hash TEXT NOT NULL UNIQUE,
+  replaced_refresh_token_hash TEXT UNIQUE,
   device_id TEXT,
   device_name TEXT,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_replaced_refresh ON sessions (replaced_refresh_token_hash);
 
 CREATE TABLE IF NOT EXISTS auth_tokens (
   id BIGSERIAL PRIMARY KEY,
@@ -64,20 +65,12 @@ CREATE TABLE IF NOT EXISTS oauth_device_flows (
   verification_url TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   completed_at TIMESTAMPTZ,
+  tokens_delivered_at TIMESTAMPTZ,
   user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-  session_bundle JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS oauth_states (
-  state_hash TEXT PRIMARY KEY,
-  provider TEXT NOT NULL,
-  redirect_uri TEXT NOT NULL,
-  code_verifier TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
+-- Phase 2+ zero-knowledge crypto metadata (empty until client encryption ships)
 CREATE TABLE IF NOT EXISTS user_crypto (
   user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   kdf_salt BYTEA,

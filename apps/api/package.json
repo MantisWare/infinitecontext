@@ -15,6 +15,7 @@
         "@modelcontextprotocol/sdk": "^1.27.1",
         "dotenv": "^17.2.3",
         "hono": "^4.10.7",
+        "nodemailer": "^7.0.6",
         "infinitecontext-mcp-server": "workspace:*",
         "zod": "^3.25.76"
     },

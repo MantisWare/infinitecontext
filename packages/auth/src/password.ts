@@ -9,6 +9,15 @@ export const AUTH_PASSWORD_ARGON2 = {
     saltLength: 16,
 } as const;
 
+const DUMMY_PASSWORD = '__infinitecontext_timing_dummy__';
+let dummyHashPromise: Promise<string> | null = null;
+
+/** Constant-time fill for unknown-account login attempts. */
+export function getDummyAuthPasswordHash(): Promise<string> {
+    dummyHashPromise ??= hashAuthPassword(DUMMY_PASSWORD);
+    return dummyHashPromise;
+}
+
 export async function hashAuthPassword(password: string): Promise<string> {
     const salt = crypto.getRandomValues(new Uint8Array(AUTH_PASSWORD_ARGON2.saltLength));
     return argon2id({

@@ -5,10 +5,13 @@ import { MemoryStorage } from '@infinitecontext/core/testing';
 
 import { createMockGoogleOAuthClient } from './google-oauth';
 import { AuthService } from './service';
+import { hashRefreshToken } from './tokens';
 import { MemoryAuthRepository } from './testing/memory-auth-repository';
 
 const config = {
-    jwtSecret: 'test-jwt-secret-value-1234567890',
+    jwtSecret: 'test-jwt-secret-value-1234567890123456',
+    jwtIssuer: 'http://127.0.0.1:8787',
+    jwtAudience: 'infinitecontext-api',
     accessTokenTtlSec: 900,
     refreshTokenTtlSec: 604800,
     publicBaseUrl: 'http://127.0.0.1:8787',
@@ -36,6 +39,29 @@ describe('AuthService', () => {
         assert.ok(projectId);
     });
 
+    it('rotates refresh tokens and revokes session on reuse', async () => {
+        const authRepo = new MemoryAuthRepository();
+        const storage = new MemoryStorage();
+        const service = new AuthService({
+            authRepo,
+            storage,
+            config,
+            mailer: { async sendVerificationEmail() {}, async sendPasswordResetEmail() {} },
+        });
+
+        await service.registerWithPassword({ email: 'rotate@example.com', password: 'password1234' });
+        const { tokens } = await service.loginWithPassword({
+            email: 'rotate@example.com',
+            password: 'password1234',
+        });
+
+        const firstRefresh = tokens.refreshToken;
+        const rotated = await service.refresh(firstRefresh);
+        assert.notEqual(rotated.refreshToken, firstRefresh);
+
+        await assert.rejects(() => service.refresh(firstRefresh), /reuse/i);
+    });
+
     it('registers Google users without auth password hash', async () => {
         const authRepo = new MemoryAuthRepository();
         const storage = new MemoryStorage();
@@ -53,5 +79,6 @@ describe('AuthService', () => {
         if (result.status !== 'complete') return;
         assert.equal(result.user.password_hash, null);
         assert.ok(result.tokens.refreshToken);
+        assert.ok(await hashRefreshToken(result.tokens.refreshToken));
     });
 });

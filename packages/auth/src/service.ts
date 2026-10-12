@@ -1,7 +1,9 @@
 import type { StorageAdapter } from '@infinitecontext/core';
 
+import type { GoogleOAuthClient, GoogleUserInfo } from './google-oauth';
 import { signAccessToken } from './jwt';
-import { hashAuthPassword, verifyAuthPassword } from './password';
+import { getDummyAuthPasswordHash, hashAuthPassword, verifyAuthPassword } from './password';
+import { assertPasswordLength } from './password-policy';
 import { generateUserPublicId, generateSessionPublicId } from './public-ids';
 import {
     generateOpaqueToken,
@@ -14,9 +16,9 @@ import type {
     AuthRuntimeConfig,
     AuthTokenPair,
     Mailer,
+    OAuthDeviceFlowRow,
     UserRow,
 } from './types';
-import type { GoogleOAuthClient, GoogleUserInfo } from './google-oauth';
 
 export type AuthServiceDeps = {
     authRepo: AuthRepository;
@@ -41,11 +43,18 @@ export class AuthService {
         deviceName?: string;
     }): Promise<{ user: UserRow; tokens: AuthTokenPair; verificationToken?: string }> {
         const email = normalizeEmail(input.email);
-        if (!email) throw new AuthError('invalid_email', 'Invalid email address');
-        if (input.password.length < 8) throw new AuthError('weak_password', 'Password must be at least 8 characters');
+        if (!email) throw new AuthError('registration_failed', 'Unable to register with these credentials');
+        try {
+            assertPasswordLength(input.password);
+        } catch {
+            throw new AuthError('registration_failed', 'Unable to register with these credentials');
+        }
 
         const existing = await this.deps.authRepo.findUserByEmail(email);
-        if (existing) throw new AuthError('email_taken', 'Email is already registered');
+        if (existing) {
+            await verifyAuthPassword(input.password, await getDummyAuthPasswordHash());
+            throw new AuthError('registration_failed', 'Unable to register with these credentials');
+        }
 
         const passwordHash = await hashAuthPassword(input.password);
         const user = await this.deps.authRepo.createUser({
@@ -81,10 +90,17 @@ export class AuthService {
     }): Promise<{ user: UserRow; tokens: AuthTokenPair }> {
         const email = normalizeEmail(input.email);
         const user = email ? await this.deps.authRepo.findUserByEmail(email) : null;
-        if (!user?.password_hash) throw new AuthError('invalid_credentials', 'Invalid email or password');
+        const hashToVerify = user?.password_hash ?? (await getDummyAuthPasswordHash());
+        try {
+            assertPasswordLength(input.password);
+        } catch {
+            throw new AuthError('invalid_credentials', 'Invalid email or password');
+        }
 
-        const ok = await verifyAuthPassword(input.password, user.password_hash);
-        if (!ok) throw new AuthError('invalid_credentials', 'Invalid email or password');
+        const ok = await verifyAuthPassword(input.password, hashToVerify);
+        if (!user?.password_hash || !ok) {
+            throw new AuthError('invalid_credentials', 'Invalid email or password');
+        }
 
         await this.ensureUserProject(user.id);
         const tokens = await this.issueSession(user, input.deviceId, input.deviceName);
@@ -93,8 +109,17 @@ export class AuthService {
 
     async refresh(refreshToken: string): Promise<AuthTokenPair> {
         const hash = await hashRefreshToken(refreshToken);
-        const session = await this.deps.authRepo.findSessionByRefreshTokenHash(hash);
-        if (!session) throw new AuthError('invalid_refresh', 'Invalid refresh token');
+        let session = await this.deps.authRepo.findSessionByRefreshTokenHash(hash);
+
+        if (!session) {
+            const reused = await this.deps.authRepo.findSessionByReplacedRefreshTokenHash(hash);
+            if (reused) {
+                await this.deps.authRepo.revokeSession(reused.id, this.now().toISOString());
+                throw new AuthError('invalid_refresh', 'Refresh token reuse detected');
+            }
+            throw new AuthError('invalid_refresh', 'Invalid refresh token');
+        }
+
         if (session.revoked_at) throw new AuthError('invalid_refresh', 'Session revoked');
         if (Date.parse(session.expires_at) <= this.now().getTime()) {
             throw new AuthError('invalid_refresh', 'Refresh token expired');
@@ -103,7 +128,16 @@ export class AuthService {
         const user = await this.deps.authRepo.findUserById(session.user_id);
         if (!user) throw new AuthError('invalid_refresh', 'User not found');
 
-        await this.deps.authRepo.touchSession(session.id, this.now().toISOString());
+        const newRefreshToken = generateRefreshToken();
+        const newHash = await hashRefreshToken(newRefreshToken);
+        await this.deps.authRepo.rotateSessionRefreshToken({
+            sessionId: session.id,
+            newRefreshTokenHash: newHash,
+            previousRefreshTokenHash: session.refresh_token_hash,
+            lastUsedAt: this.now().toISOString(),
+        });
+
+        session = (await this.deps.authRepo.findSessionById(session.id)) ?? session;
         const projectId = await this.ensureUserProject(user.id);
         const access = await signAccessToken(this.deps.config, {
             sub: user.public_id,
@@ -114,7 +148,7 @@ export class AuthService {
 
         return {
             accessToken: access.token,
-            refreshToken,
+            refreshToken: newRefreshToken,
             accessTokenExpiresAt: access.expiresAt,
             refreshTokenExpiresAt: session.expires_at,
             tokenType: 'Bearer',
@@ -155,12 +189,17 @@ export class AuthService {
     }
 
     async resetPassword(token: string, newPassword: string): Promise<void> {
-        if (newPassword.length < 8) throw new AuthError('weak_password', 'Password must be at least 8 characters');
+        try {
+            assertPasswordLength(newPassword);
+        } catch {
+            throw new AuthError('weak_password', 'Password must be between 8 and 256 characters');
+        }
         const hash = await hashOpaqueToken(token);
         const row = await this.deps.authRepo.consumeAuthToken('password_reset', hash, this.now().toISOString());
         if (!row) throw new AuthError('invalid_token', 'Reset link is invalid or expired');
         const passwordHash = await hashAuthPassword(newPassword);
         await this.deps.authRepo.updateUserPassword(row.user_id, passwordHash);
+        await this.deps.authRepo.revokeAllSessionsForUser(row.user_id, this.now().toISOString());
     }
 
     async startGoogleDeviceFlow(): Promise<{
@@ -193,19 +232,26 @@ export class AuthService {
     async pollGoogleDeviceFlow(deviceCode: string, deviceId?: string, deviceName?: string): Promise<
         | { status: 'pending' }
         | { status: 'complete'; user: UserRow; tokens: AuthTokenPair }
+        | { status: 'expired' }
     > {
         const google = this.requireGoogle();
         const deviceCodeHash = await hashOpaqueToken(deviceCode);
         const row = await this.deps.authRepo.findOAuthDeviceFlowByHash(deviceCodeHash);
         if (!row) throw new AuthError('invalid_device_code', 'Unknown device authorization request');
-        if (row.completed_at && row.user_id && row.session_bundle) {
+        if (Date.parse(row.expires_at) <= this.now().getTime()) {
+            return { status: 'expired' };
+        }
+
+        if (row.completed_at && row.user_id) {
+            if (row.tokens_delivered_at) {
+                return { status: 'pending' };
+            }
+            const delivered = await this.deps.authRepo.markOAuthDeviceFlowTokensDelivered(row.id, this.now().toISOString());
+            if (!delivered) return { status: 'pending' };
             const user = await this.deps.authRepo.findUserById(row.user_id);
             if (!user) throw new AuthError('invalid_device_code', 'Session incomplete');
-            return {
-                status: 'complete',
-                user,
-                tokens: row.session_bundle as unknown as AuthTokenPair,
-            };
+            const tokens = await this.issueSession(user, deviceId, deviceName);
+            return { status: 'complete', user, tokens };
         }
 
         const poll = await google.pollDeviceToken(row.provider_device_code);
@@ -215,8 +261,10 @@ export class AuthService {
         const result = await this.loginOrRegisterGoogle(profile, deviceId, deviceName);
         await this.deps.authRepo.completeOAuthDeviceFlow(row.id, {
             userId: result.user.id,
-            sessionBundle: result.tokens as unknown as Record<string, unknown>,
+            completedAt: this.now().toISOString(),
         });
+        const delivered = await this.deps.authRepo.markOAuthDeviceFlowTokensDelivered(row.id, this.now().toISOString());
+        if (!delivered) return { status: 'pending' };
         return { status: 'complete', ...result };
     }
 
@@ -241,6 +289,14 @@ export class AuthService {
         return this.deps.authRepo.findUserById(id);
     }
 
+    async isSessionActive(sessionId: number): Promise<boolean> {
+        const session = await this.deps.authRepo.findSessionById(sessionId);
+        if (!session) return false;
+        if (session.revoked_at) return false;
+        if (Date.parse(session.expires_at) <= this.now().getTime()) return false;
+        return true;
+    }
+
     private requireGoogle(): GoogleOAuthClient {
         if (!this.deps.google) {
             throw new AuthError('google_not_configured', 'Google sign-in is not configured on this server');
@@ -263,14 +319,15 @@ export class AuthService {
         }
 
         const email = profile.email ? normalizeEmail(profile.email) : null;
-        if (!user && email) {
-            user = await this.deps.authRepo.findUserByEmail(email);
+        const trustedEmail = profile.email_verified ? email : null;
+        if (!user && trustedEmail) {
+            user = await this.deps.authRepo.findUserByEmail(trustedEmail);
         }
 
         if (!user) {
             user = await this.deps.authRepo.createUser({
                 publicId: generateUserPublicId(),
-                email: email ?? `${sub}@users.google.infinitecontext.local`,
+                email: trustedEmail ?? `${sub}@users.google.infinitecontext.local`,
                 passwordHash: null,
                 emailVerifiedAt: profile.email_verified ? this.now().toISOString() : null,
             });
@@ -284,7 +341,7 @@ export class AuthService {
                 userId: user.id,
                 provider: 'google',
                 providerUserId: sub,
-                email,
+                email: trustedEmail,
             });
         }
 
@@ -353,4 +410,8 @@ function normalizeEmail(email: string): string | null {
 
 function addSeconds(date: Date, seconds: number): Date {
     return new Date(date.getTime() + seconds * 1000);
+}
+
+export function isOAuthDeviceFlowExpired(row: OAuthDeviceFlowRow, nowMs: number): boolean {
+    return Date.parse(row.expires_at) <= nowMs;
 }

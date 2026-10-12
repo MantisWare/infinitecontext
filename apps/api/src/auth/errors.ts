@@ -8,8 +8,10 @@ export function authErrorStatus(code: string): ContentfulStatusCode {
             return 400;
         case 'invalid_credentials':
             return 401;
-        case 'email_taken':
-            return 409;
+        case 'registration_failed':
+            return 400;
+        case 'rate_limited':
+            return 429;
         case 'invalid_refresh':
         case 'invalid_token':
         case 'invalid_device_code':

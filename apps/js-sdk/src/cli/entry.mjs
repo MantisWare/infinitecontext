@@ -48,7 +48,7 @@ Commands:
   help          Show this help message
 
 Environment:
-  INFINITECONTEXT_API_KEY   Optional legacy API key (or run `infinitecontext login`)
+  INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
   INFINITECONTEXT_BASE_URL  API base URL (default: https://api.infinitecontext.ai)
 `);
 }

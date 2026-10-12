@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 
 import { buildAuthRuntimeConfig } from '@infinitecontext/auth';
 
+import { resolveMailer } from './auth/mailer';
 import { createApp } from './app';
 import { getApiConfig } from './config.node';
 import { createAuthRepository, createStorageAdapter } from '@infinitecontext/storage';
@@ -12,7 +13,8 @@ const config = getApiConfig();
 const storage = createStorageAdapter(config);
 const authConfig = buildAuthRuntimeConfig(process.env);
 const authRepo = authConfig ? createAuthRepository(config) : undefined;
-const app = createApp({ config, storage, authConfig, authRepo });
+const mailer = authConfig ? await resolveMailer(process.env, 'node') : undefined;
+const app = createApp({ config, storage, authConfig, authRepo, mailer });
 const port = Number(process.env.PORT ?? 8787);
 
 serve({ fetch: app.fetch, port });

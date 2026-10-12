@@ -5,7 +5,6 @@ import type {
     AuthTokenRow,
     IdentityRow,
     OAuthDeviceFlowRow,
-    OAuthStateRow,
     SessionRow,
     UserRow,
 } from '@infinitecontext/auth';
@@ -14,7 +13,6 @@ import {
     auth_tokens,
     identities,
     oauth_device_flows,
-    oauth_states,
     sessions,
     user_projects,
     users,
@@ -134,6 +132,11 @@ export class DrizzleAuthRepository implements AuthRepository {
         return (rows[0] as SessionRow) ?? null;
     }
 
+    async findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        const rows = await this.db.select().from(sessions).where(eq(sessions.replaced_refresh_token_hash, hash)).limit(1);
+        return (rows[0] as SessionRow) ?? null;
+    }
+
     async findSessionById(id: number): Promise<SessionRow | null> {
         const rows = await this.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
         return (rows[0] as SessionRow) ?? null;
@@ -141,6 +144,26 @@ export class DrizzleAuthRepository implements AuthRepository {
 
     async revokeSession(id: number, revokedAt: string): Promise<void> {
         await this.db.update(sessions).set({ revoked_at: revokedAt }).where(eq(sessions.id, id));
+    }
+
+    async revokeAllSessionsForUser(userId: number, revokedAt: string): Promise<void> {
+        await this.db.update(sessions).set({ revoked_at: revokedAt }).where(eq(sessions.user_id, userId));
+    }
+
+    async rotateSessionRefreshToken(input: {
+        sessionId: number;
+        newRefreshTokenHash: string;
+        previousRefreshTokenHash: string;
+        lastUsedAt: string;
+    }): Promise<void> {
+        await this.db
+            .update(sessions)
+            .set({
+                refresh_token_hash: input.newRefreshTokenHash,
+                replaced_refresh_token_hash: input.previousRefreshTokenHash,
+                last_used_at: input.lastUsedAt,
+            })
+            .where(eq(sessions.id, input.sessionId));
     }
 
     async touchSession(id: number, lastUsedAt: string): Promise<void> {
@@ -215,30 +238,22 @@ export class DrizzleAuthRepository implements AuthRepository {
         return (rows[0] as OAuthDeviceFlowRow) ?? null;
     }
 
-    async completeOAuthDeviceFlow(id: number, input: { userId: number; sessionBundle: Record<string, unknown> }): Promise<void> {
+    async completeOAuthDeviceFlow(id: number, input: { userId: number; completedAt: string }): Promise<void> {
         await this.db
             .update(oauth_device_flows)
             .set({
-                completed_at: new Date().toISOString(),
+                completed_at: input.completedAt,
                 user_id: input.userId,
-                session_bundle: input.sessionBundle,
             })
             .where(eq(oauth_device_flows.id, id));
     }
 
-    async insertOAuthState(input: OAuthStateRow): Promise<void> {
-        await this.db.insert(oauth_states).values(input);
-    }
-
-    async consumeOAuthState(stateHash: string, now: string): Promise<OAuthStateRow | null> {
+    async markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean> {
         const rows = await this.db
-            .select()
-            .from(oauth_states)
-            .where(and(eq(oauth_states.state_hash, stateHash), gt(oauth_states.expires_at, now)))
-            .limit(1);
-        const row = rows[0] as OAuthStateRow | undefined;
-        if (!row) return null;
-        await this.db.delete(oauth_states).where(eq(oauth_states.state_hash, stateHash));
-        return row;
+            .update(oauth_device_flows)
+            .set({ tokens_delivered_at: deliveredAt })
+            .where(and(eq(oauth_device_flows.id, id), isNull(oauth_device_flows.tokens_delivered_at)))
+            .returning({ id: oauth_device_flows.id });
+        return rows.length > 0;
     }
 }

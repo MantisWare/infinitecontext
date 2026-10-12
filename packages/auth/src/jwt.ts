@@ -14,6 +14,8 @@ export async function signAccessToken(
     const token = await new SignJWT({ ...claims, typ: 'access' satisfies AccessTokenClaims['typ'] })
         .setProtectedHeader({ alg: 'HS256' })
         .setSubject(claims.sub)
+        .setIssuer(config.jwtIssuer)
+        .setAudience(config.jwtAudience)
         .setIssuedAt()
         .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
         .sign(secretKey(config.jwtSecret));
@@ -25,6 +27,8 @@ export async function verifyAccessToken(config: AuthRuntimeConfig, token: string
     try {
         const { payload } = await jwtVerify(token, secretKey(config.jwtSecret), {
             algorithms: ['HS256'],
+            issuer: config.jwtIssuer,
+            audience: config.jwtAudience,
         });
         if (payload.typ !== 'access') return null;
         const uid = Number(payload.uid);

@@ -48,7 +48,7 @@ if [[ -d "$MIGRATIONS_DIR" ]]; then
   while IFS= read -r migration_file; do
     echo "Applying migration $(basename "$migration_file")..."
     docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" < "$migration_file"
-  done < <(find "$MIGRATIONS_DIR" -maxdepth 1 -name '*.sql' | sort)
+  done < <(find "$MIGRATIONS_DIR" -maxdepth 1 -name '*.sql' ! -name '*.down.sql' | sort)
 fi
 
 echo "Migration complete."

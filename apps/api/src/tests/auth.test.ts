@@ -10,7 +10,9 @@ import { createApp } from '../app';
 import type { ApiConfig } from '../types/api';
 
 const TEST_AUTH_CONFIG = {
-    jwtSecret: 'test-jwt-secret-should-be-long-enough',
+    jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes-long',
+    jwtIssuer: 'http://127.0.0.1:8787',
+    jwtAudience: 'infinitecontext-api',
     accessTokenTtlSec: 900,
     refreshTokenTtlSec: 60 * 60 * 24 * 7,
     publicBaseUrl: 'http://127.0.0.1:8787',
@@ -22,7 +24,7 @@ const TEST_CONFIG: ApiConfig = {
     INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
 };
 
-async function setupAuthApp() {
+async function setupAuthApp(googleOAuth = createMockGoogleOAuthClient()) {
     const storage = new MemoryStorage();
     const authRepo = new MemoryAuthRepository();
     const app = createApp({
@@ -30,7 +32,7 @@ async function setupAuthApp() {
         storage,
         authConfig: TEST_AUTH_CONFIG,
         authRepo,
-        googleOAuth: createMockGoogleOAuthClient(),
+        googleOAuth,
         mailer: {
             async sendVerificationEmail() {},
             async sendPasswordResetEmail() {},
@@ -59,7 +61,7 @@ async function setupAuthApp() {
 }
 
 describe('account auth', () => {
-    it('registers, logs in, refreshes, and accesses contexts with JWT', async () => {
+    it('registers, logs in, refreshes with rotation, and accesses contexts with JWT', async () => {
         const { json } = await setupAuthApp();
 
         const register = await json('POST', '/auth/register', {
@@ -91,12 +93,24 @@ describe('account auth', () => {
         const refreshed = await json('POST', '/auth/refresh', { refresh_token: refreshToken });
         assert.equal(refreshed.res.status, 200);
         assert.ok(refreshed.body.access_token);
+        assert.notEqual(refreshed.body.refresh_token, refreshToken);
 
-        const logout = await json('POST', '/auth/logout', { refresh_token: refreshToken });
+        const reuseOld = await json('POST', '/auth/refresh', { refresh_token: refreshToken });
+        assert.equal(reuseOld.res.status, 401);
+
+        const logout = await json('POST', '/auth/logout', { refresh_token: String(refreshed.body.refresh_token) });
         assert.equal(logout.res.status, 200);
 
-        const refreshAfterLogout = await json('POST', '/auth/refresh', { refresh_token: refreshToken });
-        assert.equal(refreshAfterLogout.res.status, 401);
+        const meAfterLogout = await json('GET', '/auth/me', undefined, String(refreshed.body.access_token));
+        assert.equal(meAfterLogout.res.status, 401);
+    });
+
+    it('does not reveal whether registration email already exists', async () => {
+        const { json } = await setupAuthApp();
+        await json('POST', '/auth/register', { email: 'hidden@example.com', password: 'password123' });
+        const dup = await json('POST', '/auth/register', { email: 'hidden@example.com', password: 'password123' });
+        assert.equal(dup.res.status, 400);
+        assert.match(String(dup.body.error), /Unable to register/i);
     });
 
     it('still accepts ic_ API keys alongside JWT auth', async () => {
@@ -111,7 +125,7 @@ describe('account auth', () => {
         assert.equal(create.res.status, 201);
     });
 
-    it('completes mocked Google device flow', async () => {
+    it('completes mocked Google device flow once and hides tokens afterward', async () => {
         const { json } = await setupAuthApp();
 
         const start = await json('POST', '/auth/oauth/google/device/start');
@@ -123,39 +137,43 @@ describe('account auth', () => {
         assert.equal(poll.body.status, 'complete');
         assert.ok(poll.body.access_token);
 
-        const accessToken = String(poll.body.access_token);
-        const me = await json('GET', '/auth/me', undefined, accessToken);
-        assert.equal(me.res.status, 200);
-        assert.equal(me.body.email, 'test@example.com');
+        const pollAgain = await json('POST', '/auth/oauth/google/device/poll', { device_code: deviceCode });
+        assert.equal(pollAgain.res.status, 202);
+        assert.equal(pollAgain.body.status, 'pending');
+        assert.equal(pollAgain.body.access_token, undefined);
     });
 
-    it('verifies email and resets password via opaque tokens', async () => {
+    it('does not link Google account by unverified email', async () => {
+        const { authRepo, json } = await setupAuthApp(
+            createMockGoogleOAuthClient({
+                async fetchUserInfo() {
+                    return {
+                        sub: 'google-attacker',
+                        email: 'victim@example.com',
+                        email_verified: false,
+                    };
+                },
+            }),
+        );
+
+        await authRepo.createUser({
+            publicId: 'usr_victim',
+            email: 'victim@example.com',
+            passwordHash: 'x',
+            emailVerifiedAt: null,
+        });
+
+        const start = await json('POST', '/auth/oauth/google/device/start');
+        const poll = await json('POST', '/auth/oauth/google/device/poll', { device_code: start.body.device_code });
+        assert.equal(poll.body.user?.email, 'google-attacker@users.google.infinitecontext.local');
+    });
+
+    it('revokes sessions after password reset', async () => {
         const { json, authRepo } = await setupAuthApp();
-
-        const register = await json('POST', '/auth/register', {
-            email: 'bob@example.com',
-            password: 'oldpassword1',
-        });
-        assert.equal(register.res.status, 200);
-
-        const user = await authRepo.findUserByEmail('bob@example.com');
+        const register = await json('POST', '/auth/register', { email: 'reset@example.com', password: 'password123' });
+        const accessToken = String(register.body.access_token);
+        const user = await authRepo.findUserByEmail('reset@example.com');
         assert.ok(user);
-        assert.equal(user!.email_verified_at, null);
-
-        // capture verification token from in-memory mailer substitute via direct service is hard;
-        // use request-password-reset + manual token insert is easier for verify — call verify through repo token
-        const tokens = await authRepo.insertAuthToken({
-            userId: user!.id,
-            tokenHash: await (await import('@infinitecontext/auth')).hashOpaqueToken('manual-verify-token'),
-            kind: 'email_verify',
-            expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        });
-        assert.ok(tokens.id);
-
-        const verify = await json('POST', '/auth/verify-email', { token: 'manual-verify-token' });
-        assert.equal(verify.res.status, 200);
-        const updated = await authRepo.findUserById(user!.id);
-        assert.ok(updated?.email_verified_at);
 
         const resetToken = 'manual-reset-token';
         await authRepo.insertAuthToken({
@@ -165,22 +183,23 @@ describe('account auth', () => {
             expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         });
 
-        const reset = await json('POST', '/auth/reset-password', {
-            token: resetToken,
-            password: 'newpassword2',
-        });
+        const reset = await json('POST', '/auth/reset-password', { token: resetToken, password: 'newpassword2' });
         assert.equal(reset.res.status, 200);
 
-        const badLogin = await json('POST', '/auth/login', {
-            email: 'bob@example.com',
-            password: 'oldpassword1',
-        });
-        assert.equal(badLogin.res.status, 401);
+        const me = await json('GET', '/auth/me', undefined, accessToken);
+        assert.equal(me.res.status, 401);
+    });
 
-        const goodLogin = await json('POST', '/auth/login', {
-            email: 'bob@example.com',
-            password: 'newpassword2',
-        });
-        assert.equal(goodLogin.res.status, 200);
+    it('returns 429 when auth rate limits are exceeded', async () => {
+        const { json } = await setupAuthApp();
+        let limited = false;
+        for (let i = 0; i < 40; i++) {
+            const res = await json('POST', '/auth/login', { email: 'none@example.com', password: 'bad-password' });
+            if (res.res.status === 429) {
+                limited = true;
+                break;
+            }
+        }
+        assert.equal(limited, true);
     });
 });

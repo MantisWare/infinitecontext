@@ -1,5 +1,5 @@
 import { hashToken, verifyKeyHash } from '@infinitecontext/core';
-import { looksLikeApiKey, verifyAccessToken, type AuthRuntimeConfig } from '@infinitecontext/auth';
+import { looksLikeApiKey, verifyAccessToken, type AuthRepository, type AuthRuntimeConfig } from '@infinitecontext/auth';
 
 import type { KeyCache } from '../cache/types';
 import type { HttpApp, HttpContext, HttpMiddleware } from '../types/http';
@@ -41,18 +41,31 @@ function bearerAuthMiddleware(verify: (token: string, c: HttpContext) => Promise
     };
 }
 
-function sessionAuthMiddleware(authConfig: AuthRuntimeConfig): HttpMiddleware {
-    return bearerAuthMiddleware(async (token, c) => {
-        const claims = await verifyAccessToken(authConfig, token);
-        if (!claims) return false;
-        c.set('auth', {
-            kind: 'user_session',
-            userId: claims.uid,
-            projectId: claims.pid,
-            sessionId: claims.sid,
-        });
-        return true;
+async function verifyActiveSession(authRepo: AuthRepository, sessionId: number): Promise<boolean> {
+    const session = await authRepo.findSessionById(sessionId);
+    if (!session) return false;
+    if (session.revoked_at) return false;
+    if (Date.parse(session.expires_at) <= Date.now()) return false;
+    return true;
+}
+
+async function verifyUserAccessToken(
+    authConfig: AuthRuntimeConfig,
+    authRepo: AuthRepository,
+    token: string,
+    c: HttpContext,
+): Promise<boolean> {
+    const claims = await verifyAccessToken(authConfig, token);
+    if (!claims) return false;
+    const active = await verifyActiveSession(authRepo, claims.sid);
+    if (!active) return false;
+    c.set('auth', {
+        kind: 'user_session',
+        userId: claims.uid,
+        projectId: claims.pid,
+        sessionId: claims.sid,
     });
+    return true;
 }
 
 // -- token verification -------------------------------------------------------
@@ -90,22 +103,18 @@ function createTokenVerifier(keyCache?: KeyCache) {
     };
 }
 
-function createCombinedContextVerifier(authConfig: AuthRuntimeConfig | null, keyCache?: KeyCache) {
+function createCombinedContextVerifier(
+    authConfig: AuthRuntimeConfig | null,
+    authRepo: AuthRepository | null,
+    keyCache?: KeyCache,
+) {
     const verifyApiKey = createTokenVerifier(keyCache);
     return async function verifyContextToken(token: string, c: HttpContext) {
         if (looksLikeApiKey(token)) {
             return verifyApiKey(token, c);
         }
-        if (!authConfig) return false;
-        const claims = await verifyAccessToken(authConfig, token);
-        if (!claims) return false;
-        c.set('auth', {
-            kind: 'user_session',
-            userId: claims.uid,
-            projectId: claims.pid,
-            sessionId: claims.sid,
-        });
-        return true;
+        if (!authConfig || !authRepo) return false;
+        return verifyUserAccessToken(authConfig, authRepo, token, c);
     };
 }
 
@@ -120,17 +129,27 @@ async function verifyAdminToken(token: string, c: HttpContext) {
 export type AuthOptions = {
     keyCache?: KeyCache;
     authConfig?: AuthRuntimeConfig | null;
+    authRepo?: AuthRepository | null;
 };
 
 export function registerAuthMiddleware(app: HttpApp, options?: AuthOptions) {
-    const verifyContextToken = createCombinedContextVerifier(options?.authConfig ?? null, options?.keyCache);
+    const verifyContextToken = createCombinedContextVerifier(
+        options?.authConfig ?? null,
+        options?.authRepo ?? null,
+        options?.keyCache,
+    );
 
     app.use('/contexts', bearerAuthMiddleware(verifyContextToken));
     app.use('/contexts/*', bearerAuthMiddleware(verifyContextToken));
     app.use('/mcp', bearerAuthMiddleware(verifyContextToken));
     app.use('/v1/keys', bearerAuthMiddleware(verifyAdminToken));
 
-    if (options?.authConfig) {
-        app.use('/auth/me', sessionAuthMiddleware(options.authConfig));
+    if (options?.authConfig && options.authRepo) {
+        app.use(
+            '/auth/me',
+            bearerAuthMiddleware(async (token, c) =>
+                verifyUserAccessToken(options.authConfig!, options.authRepo!, token, c),
+            ),
+        );
     }
 }

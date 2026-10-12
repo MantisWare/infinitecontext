@@ -25,6 +25,11 @@ export function loadCredentials() {
 export function saveCredentials(credentials) {
   const dir = infinitecontextHome();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // best effort on platforms without chmod semantics
+  }
   const filePath = credentialsPath();
   const payload = {
     version: CREDENTIALS_VERSION,
