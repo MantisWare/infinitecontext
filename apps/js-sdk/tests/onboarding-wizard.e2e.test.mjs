@@ -129,10 +129,24 @@ function chars(str) { return [...str]; }
 
 const DEFAULT_URL = "http://127.0.0.1:8787";
 
+const AFTER_WELCOME =
+  /Where should InfiniteContext connect|How do you want to authenticate|Context API base URL/;
+
 async function goWelcome(w) {
   await w.waitFor(/Welcome to InfiniteContext/);
-  await w.send(KEY.enter);
-  await w.waitFor(/Where should InfiniteContext connect|How do you want to authenticate|Context API base URL/);
+  await w.waitFor(/enter to continue/);
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    if (AFTER_WELCOME.test(w.buffer())) return;
+    await w.send(KEY.enter);
+    try {
+      await w.waitFor(AFTER_WELCOME, { timeoutMs: 400 });
+      return;
+    } catch {
+      // Ink may not have attached input yet — retry Enter
+    }
+  }
+  throw new Error(`failed to leave welcome — buffer tail:\n${w.buffer().slice(-500)}`);
 }
 
 async function goHostingHosted(w) {

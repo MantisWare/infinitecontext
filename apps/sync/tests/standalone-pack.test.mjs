@@ -6,13 +6,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
+import { packSyncFromStaging } from "../scripts/pack-from-staging.mjs";
+
 const syncRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("sync standalone pack", () => {
   it("installs packed sync alone and loads store without infinitecontext", () => {
-    execSync("pnpm run prepack", { cwd: syncRoot, stdio: "inherit" });
-    const packOutput = execSync("pnpm pack --silent", { cwd: syncRoot, encoding: "utf8" }).trim();
-    const tgz = path.join(syncRoot, packOutput.split("\n").pop());
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-out-"));
+    const tgz = packSyncFromStaging({ packDestination: outDir });
     assert.ok(fs.existsSync(tgz));
 
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-standalone-"));

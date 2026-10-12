@@ -1,5 +1,6 @@
 /**
  * Simulates fresh clone: workspace #parsers imports (no parsers-bundle), build, infinitecontext sync from source.
+ * Uses a detached git worktree so pnpm install never touches the live checkout.
  */
 import assert from "node:assert/strict";
 import { execSync, spawn } from "node:child_process";
@@ -12,13 +13,35 @@ import { describe, it, afterEach } from "node:test";
 import { startMockContextApi } from "../apps/sync/tests/helpers/mock-api-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const syncRoot = path.join(repoRoot, "apps/sync");
-const cliEntry = path.join(repoRoot, "apps/js-sdk/src/cli/entry.mjs");
-const parsersBundle = path.join(syncRoot, "src/parsers-bundle");
+
+function addDetachedWorktree() {
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fresh-clone-wt-"));
+  execSync(`git worktree add --detach ${JSON.stringify(wt)} HEAD`, {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+  return wt;
+}
+
+function removeWorktree(wt) {
+  try {
+    execSync(`git worktree remove --force ${JSON.stringify(wt)}`, {
+      cwd: repoRoot,
+      stdio: "pipe",
+    });
+  } catch {
+    try {
+      fs.rmSync(wt, { recursive: true, force: true });
+      execSync(`git worktree prune`, { cwd: repoRoot, stdio: "pipe" });
+    } catch {}
+  }
+}
 
 describe("fresh clone sync from source", () => {
   /** @type {string[]} */
   const homes = [];
+  /** @type {string[]} */
+  const worktrees = [];
 
   afterEach(() => {
     for (const home of homes.splice(0)) {
@@ -26,15 +49,25 @@ describe("fresh clone sync from source", () => {
         fs.rmSync(home, { recursive: true, force: true });
       } catch {}
     }
+    for (const wt of worktrees.splice(0)) {
+      removeWorktree(wt);
+    }
   });
 
   it("runs infinitecontext sync after install+build without parsers-bundle", async () => {
+    const wt = addDetachedWorktree();
+    worktrees.push(wt);
+
+    const syncRoot = path.join(wt, "apps/sync");
+    const cliEntry = path.join(wt, "apps/js-sdk/src/cli/entry.mjs");
+    const parsersBundle = path.join(syncRoot, "src/parsers-bundle");
+
     if (fs.existsSync(parsersBundle)) {
       fs.rmSync(parsersBundle, { recursive: true, force: true });
     }
 
-    execSync("pnpm install", { cwd: repoRoot, stdio: "inherit" });
-    execSync("pnpm -r --if-present run build", { cwd: repoRoot, stdio: "inherit" });
+    execSync("pnpm install", { cwd: wt, stdio: "inherit" });
+    execSync("pnpm -r --if-present run build", { cwd: wt, stdio: "inherit" });
 
     assert.equal(fs.existsSync(parsersBundle), false);
     execSync("node --check src/daemon.mjs", { cwd: syncRoot, stdio: "inherit" });

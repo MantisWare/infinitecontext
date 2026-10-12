@@ -7,14 +7,13 @@
     "#parsers/utils": "@infinitecontext/parsers/utils"
   },
   "scripts": {
-    "prepack": "node scripts/prepack-vendor.mjs",
-    "postpack": "node scripts/postpack-restore.mjs",
+    "pack:standalone": "node scripts/pack-from-staging.mjs",
     "start": "node src/index.mjs",
     "stop": "node -e \"import('./src/ctl.mjs').then(m => { process.argv[2]='stop'; m.runCtl(); })\"",
     "dev": "node src/dev.mjs",
     "dev:daemon": "node --watch src/index.mjs",
     "dev:tui": "node --watch -e \"await import('./src/env.mjs'); const {tuiBoot} = await import('./src/tui.mjs'); const {resolveHostAuthHooks}=await import('./src/host-auth.mjs'); tuiBoot({...(await resolveHostAuthHooks())});\"",
-    "check": "node --check src/index.mjs && node --check src/boot-daemon.mjs && node --check src/host-auth.mjs && node --check src/api-key-host-auth.mjs && node --check src/daemon.mjs && node --check src/tui.mjs && node --check src/base-url.mjs && node --check src/ic-constants.mjs && node --check src/update-check.mjs && node --check src/store.mjs && node --check src/ctl.mjs && node --check src/launcher.mjs && node --check src/lock.mjs && node --check src/env.mjs && node --check src/utils.mjs && node --check src/protocol.mjs && node --check src/redact.mjs && node --check src/onboarding-preferences.mjs && node --check src/recent-projects.mjs",
+    "check": "node scripts/check-syntax.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "exports": {

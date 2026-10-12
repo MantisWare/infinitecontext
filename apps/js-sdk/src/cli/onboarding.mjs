@@ -436,7 +436,9 @@ function Onboarding({ onDone }) {
       { flexDirection: "column" },
       React.createElement(Text, { color: "white", bold: true }, "Welcome to InfiniteContext"),
       React.createElement(Box, { height: 1 }),
-      React.createElement(Text, { color: "white" }, "Press Enter to begin setup...")
+      React.createElement(Text, { color: "white" }, "Press Enter to begin setup..."),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "enter to continue")
     );
   }
 

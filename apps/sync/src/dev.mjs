@@ -1,7 +1,9 @@
 // dev entry — boots daemon in background + TUI in foreground (mirrors prod)
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,10 +20,6 @@ const daemon = spawn("node", ["--watch", path.join(__dirname, "index.mjs")], {
 daemon.unref();
 
 // boot TUI in foreground (wait until daemon lock or status file appears)
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 await import("./env.mjs");
 const statusFile = path.join(os.homedir(), ".infinitecontext", "status.json");
 const lockFile = path.join(os.homedir(), ".infinitecontext", "daemon.lock");
