@@ -80,7 +80,7 @@ async function setupVaultE2E() {
 }
 
 function encryptedMessage(dek: Uint8Array, userPublicId: string, contextId: string) {
-    const aad = { contextId, userPublicId, nodePublicId: 'msg_test_1', nodeIndex: 0 };
+    const aad = { contextId, userPublicId, nodeIndex: 0 };
     const content = encryptNodeContent(dek, 1, { role: 'user', text: 'secret payload' }, aad);
     const metadata = encryptNodeMetadata(dek, 1, { source: 'cli-test', note: 'hidden' }, aad);
     return { ...content, metadata };

@@ -2,6 +2,7 @@ import {
     contextRootMetadata,
     deleteBodyMetadata,
     extractMessageWrites,
+    isEncryptedContent,
     isEncryptedWritePayload,
     metadataHasSensitivePlaintext,
 } from '@infinitecontext/crypto';
@@ -73,6 +74,36 @@ export async function validateVaultContextWrite(
     mode: 'create_root' | 'messages',
 ): Promise<Response | null> {
     return validateInitializedVaultWrites(c, deps, body, mode);
+}
+
+export async function validateVaultHistoricalRead(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    query: { version?: string; at?: string; before?: string },
+    body: { data?: Array<Record<string, unknown>> },
+): Promise<Response | null> {
+    const isHistorical = query.version !== undefined || query.at !== undefined || query.before !== undefined;
+    if (!isHistorical) return null;
+
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session') return null;
+
+    const user = await deps.authRepo.findUserById(auth.userId);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
+    if (!policy.initialized) return null;
+
+    for (const row of body.data ?? []) {
+        if (!isEncryptedContent(row)) {
+            return reject(
+                c,
+                422,
+                'Historical plaintext context versions are not available for encrypted vault accounts.',
+            );
+        }
+    }
+    return null;
 }
 
 export async function validateVaultDeleteWrite(

@@ -1,5 +1,8 @@
 import { AEAD_ALG } from './constants';
+import { base64ToBytes } from './encoding';
 import { ENCRYPTED_CONTENT_MARKER, isEncryptedContent } from './node-payload';
+
+const NONCE_BYTES = 24;
 
 const ALLOWED_ENVELOPE_KEYS = new Set(['__ic_enc', 'kid', 'v', 'alg', 'nonce', 'ct']);
 
@@ -24,6 +27,15 @@ export function assertStrictEncryptedEnvelope(value: unknown, label: string): vo
     }
     if (typeof rec.nonce !== 'string' || typeof rec.ct !== 'string') {
         throw new Error(`${label} has invalid nonce or ciphertext`);
+    }
+    let nonceBytes: Uint8Array;
+    try {
+        nonceBytes = base64ToBytes(rec.nonce);
+    } catch {
+        throw new Error(`${label} has invalid nonce encoding`);
+    }
+    if (nonceBytes.length !== NONCE_BYTES) {
+        throw new Error(`${label} nonce must be ${NONCE_BYTES} bytes`);
     }
 }
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { isEncryptedContent } from "@infinitecontext/crypto";
+import { isEncryptedContent } from "./ic-crypto.mjs";
 
 import { infinitecontextHome } from "./credentials.mjs";
 

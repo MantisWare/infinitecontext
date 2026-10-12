@@ -15,15 +15,13 @@ export type NodeCryptoAad = {
 };
 
 export function buildNodeAad(parts: NodeCryptoAad): Uint8Array {
-    const nodeId = parts.nodePublicId ?? '';
     const nodeIndex = parts.nodeIndex === undefined ? '' : String(parts.nodeIndex);
     const canonical = [
-        'v2',
+        'v3',
         parts.userPublicId,
         parts.contextId,
         String(parts.dekVersion),
         parts.field,
-        nodeId,
         nodeIndex,
     ].join('|');
     return new TextEncoder().encode(canonical);
@@ -52,10 +50,8 @@ export function encryptNodeContent(
     aadParts: Omit<NodeCryptoAad, 'field' | 'dekVersion'>,
     options?: EncryptNodeOptions,
 ): Record<string, unknown> {
-    if (options?.requireNodeBinding !== false) {
-        if (!aadParts.nodePublicId || aadParts.nodeIndex === undefined) {
-            throw new Error('nodePublicId and nodeIndex are required for message content encryption');
-        }
+    if (options?.requireNodeBinding !== false && aadParts.nodeIndex === undefined) {
+        throw new Error('nodeIndex is required for message content encryption');
     }
     const json = new TextEncoder().encode(JSON.stringify(plaintext));
     const aad = buildNodeAad({ ...aadParts, field: 'content', dekVersion });
@@ -128,7 +124,6 @@ export function encryptNodeMetadata(
         contextId,
         field,
         dekVersion,
-        nodePublicId: field === ROOT_METADATA_AAD_FIELD ? aadParts.contextId : aadParts.nodePublicId,
         nodeIndex: field === ROOT_METADATA_AAD_FIELD ? undefined : aadParts.nodeIndex,
     });
     const envelope = encryptAead(dek, json, aad);
@@ -177,7 +172,6 @@ export function decryptNodeMetadata(
         contextId,
         field,
         dekVersion,
-        nodePublicId: field === ROOT_METADATA_AAD_FIELD ? aadParts.contextId : aadParts.nodePublicId,
         nodeIndex: field === ROOT_METADATA_AAD_FIELD ? undefined : aadParts.nodeIndex,
     });
     const pt = decryptAead(dek, wrap as AeadEnvelope, aad);

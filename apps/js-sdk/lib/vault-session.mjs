@@ -10,7 +10,7 @@ import {
   rotateRecoveryWrap,
   unwrapDek,
   randomBytes,
-} from "@infinitecontext/crypto";
+} from "./ic-crypto.mjs";
 
 import {
   clearVaultKeychainCache,

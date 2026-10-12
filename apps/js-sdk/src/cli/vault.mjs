@@ -14,6 +14,7 @@ import {
 } from "../../lib/vault-session.mjs";
 import { fetchDevices, revokeDevice } from "../../lib/vault-api.mjs";
 import { wrapInfiniteContextWithVault } from "../../lib/encrypted-client.mjs";
+import { VAULT_AGENT_DOC } from "../../lib/vault-agent.mjs";
 
 const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
 
@@ -81,6 +82,8 @@ Commands:
     --dry-run          List contexts that still need encryption
   devices list         List signed-in devices
   devices revoke <id>  Revoke another device session
+
+${VAULT_AGENT_DOC}
 
 ${DATA_LOSS_WARNING}
 `);

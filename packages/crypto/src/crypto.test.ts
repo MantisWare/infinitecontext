@@ -85,7 +85,6 @@ describe('node payload AEAD', () => {
     const aadBase = {
         contextId: 'ctx_abc',
         userPublicId: 'usr_xyz',
-        nodePublicId: 'msg_1',
         nodeIndex: 0,
     };
 
@@ -99,10 +98,10 @@ describe('node payload AEAD', () => {
 
     it('rejects ciphertext swap between messages (AAD binding)', () => {
         const dek = randomBytes(32);
-        const enc0 = encryptNodeContent(dek, 1, { text: 'a' }, { ...aadBase, nodePublicId: 'm0', nodeIndex: 0 });
-        const enc1 = encryptNodeContent(dek, 1, { text: 'b' }, { ...aadBase, nodePublicId: 'm1', nodeIndex: 1 });
+        const enc0 = encryptNodeContent(dek, 1, { text: 'a' }, { ...aadBase, nodeIndex: 0 });
+        const enc1 = encryptNodeContent(dek, 1, { text: 'b' }, { ...aadBase, nodeIndex: 1 });
         const swapped = { ...enc0, ct: enc1.ct, nonce: enc1.nonce };
-        assert.throws(() => decryptNodeContent(dek, swapped, { ...aadBase, nodePublicId: 'm0', nodeIndex: 0 }));
+        assert.throws(() => decryptNodeContent(dek, swapped, { ...aadBase, nodeIndex: 0 }));
     });
 
     it('rejects plaintext rows when allowPlaintext is false', () => {

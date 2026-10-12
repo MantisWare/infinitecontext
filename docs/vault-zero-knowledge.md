@@ -8,7 +8,7 @@ InfiniteContext encrypts **all context node payloads on the client** before they
 |-------|-----------|--------|
 | Vault passphrase → KEK | Argon2id (64 MiB, t=3, p=4) | Per-user salt in `user_crypto`; **not** the server login password hash |
 | Data encryption (DEK) | Random 256-bit DEK | One DEK per user account |
-| Node payloads | XChaCha20-Poly1305 (`XC20P`) | `@noble/ciphers`; AAD binds user id, context id, dek version, field |
+| Node payloads | XChaCha20-Poly1305 (`XC20P`) | `@noble/ciphers`; AAD v3 binds user id, context id, dek version, field, and **message index** (not server-assigned node id) |
 | DEK wrap | XChaCha20-Poly1305 | Dual wrap: vault passphrase KEK + recovery key KEK |
 
 Envelope stored in `nodes.content` / sensitive metadata:
@@ -53,7 +53,7 @@ See [plan §7.1](/docs/plan/infinitecontext-plan.md).
 
 ```bash
 infinitecontext vault init                 # creates DEK + dual wrap; shows recovery key once
-infinitecontext vault unlock               # passphrase → cache DEK (OS keychain when available)
+infinitecontext vault unlock               # passphrase → cache DEK (OS keychain when available; else background vault-agent)
 infinitecontext vault unlock --recovery    # recovery key unlock (new device)
 infinitecontext vault lock
 infinitecontext vault change-passphrase    # re-wrap DEK only
@@ -65,7 +65,7 @@ infinitecontext vault devices revoke <session-public-id>
 
 Cached unlock TTL defaults to 15 minutes (`INFINITECONTEXT_VAULT_TTL_SEC` overrides).
 
-When OS keychain (`keytar`) is unavailable, the DEK stays **in process memory only** for that CLI/daemon lifetime. An optional `vault-cache.enc` file holds only ciphertext sealed by an in-memory session key (never a plaintext DEK on disk). `vault lock` wipes memory, keychain entries, and cache files.
+When OS keychain (`keytar`) is unavailable, `vault unlock` starts a **detached background vault-agent** (Unix socket + PID under `~/.infinitecontext/`, mode `0600`) that holds the DEK until idle timeout or `infinitecontext vault lock`. Sync and other CLIs talk to that agent so they keep working after the unlock command exits. An optional `vault-cache.enc` file holds only ciphertext sealed by an in-memory session key (never a plaintext DEK on disk). `vault lock` stops the agent and wipes memory, keychain entries, and cache files.
 
 ## Threat model (summary)
 

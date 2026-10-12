@@ -23,9 +23,14 @@ export function metadataHasSensitivePlaintext(metadata: Record<string, unknown>)
     return false;
 }
 
+function stripWriteSelectors(content: Record<string, unknown>): Record<string, unknown> {
+    const { id: _id, index: _index, ...rest } = content;
+    return rest;
+}
+
 export function isEncryptedWritePayload(content: Record<string, unknown>, metadata: Record<string, unknown>): boolean {
     try {
-        validateEncryptedWriteShape(content, metadata);
+        validateEncryptedWriteShape(stripWriteSelectors(content), metadata);
         return true;
     } catch {
         return false;
@@ -49,7 +54,7 @@ export function extractMessageWrites(body: unknown): Array<{ content: Record<str
             for (const update of rec.updates) pushOne(update);
             return;
         }
-        const { metadata, ...content } = rec;
+        const { metadata, id: _id, index: _index, ...content } = rec;
         items.push({
             content: content as Record<string, unknown>,
             metadata: (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>,

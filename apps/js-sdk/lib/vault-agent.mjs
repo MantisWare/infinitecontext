@@ -1,119 +1,24 @@
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { infinitecontextHome } from "./credentials.mjs";
 
 const SOCKET_NAME = "vault-agent.sock";
+const PID_NAME = "vault-agent.pid";
 const DEFAULT_IDLE_MS = 15 * 60 * 1000;
 
-/** @type {Map<string, { dek: Buffer, expiresAt: number }>} */
-const unlocked = new Map();
-
-let server = null;
-let idleTimer = null;
+const SERVE_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "vault-agent-serve.mjs");
 
 function socketPath() {
   return path.join(infinitecontextHome(), SOCKET_NAME);
 }
 
-function scheduleIdleShutdown(idleMs) {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => {
-    unlocked.clear();
-    try {
-      server?.close();
-    } catch {
-      // ignore
-    }
-    server = null;
-    try {
-      fs.unlinkSync(socketPath());
-    } catch {
-      // ignore
-    }
-  }, idleMs);
-}
-
-function writeResponse(socket, payload) {
-  socket.write(`${JSON.stringify(payload)}\n`);
-}
-
-function handleConnection(socket) {
-  let buffer = "";
-  socket.on("data", (chunk) => {
-    buffer += String(chunk);
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        writeResponse(socket, { ok: false, error: "invalid_json" });
-        continue;
-      }
-      const { cmd, accountKey, dekB64, ttlMs } = msg ?? {};
-      if (cmd === "ping") {
-        writeResponse(socket, { ok: true, pong: true });
-        continue;
-      }
-      if (cmd === "store" && accountKey && dekB64) {
-        const ttl = Number(ttlMs ?? DEFAULT_IDLE_MS);
-        unlocked.set(String(accountKey), {
-          dek: Buffer.from(String(dekB64), "base64"),
-          expiresAt: Date.now() + ttl,
-        });
-        scheduleIdleShutdown(ttl);
-        writeResponse(socket, { ok: true });
-        continue;
-      }
-      if (cmd === "get" && accountKey) {
-        const row = unlocked.get(String(accountKey));
-        if (!row || row.expiresAt <= Date.now()) {
-          writeResponse(socket, { ok: true, dekB64: null });
-          continue;
-        }
-        writeResponse(socket, { ok: true, dekB64: row.dek.toString("base64"), expiresAt: row.expiresAt });
-        continue;
-      }
-      if (cmd === "clear" && accountKey) {
-        unlocked.delete(String(accountKey));
-        writeResponse(socket, { ok: true });
-        continue;
-      }
-      writeResponse(socket, { ok: false, error: "unknown_command" });
-    }
-  });
-}
-
-async function ensureAgentServer({ idleMs = DEFAULT_IDLE_MS } = {}) {
-  if (server) return;
-  const dir = infinitecontextHome();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const sock = socketPath();
-  try {
-    fs.unlinkSync(sock);
-  } catch {
-    // ignore
-  }
-  await new Promise((resolve, reject) => {
-    server = net.createServer(handleConnection);
-    server.on("error", reject);
-    server.listen(sock, () => {
-      try {
-        fs.chmodSync(sock, 0o600);
-      } catch {
-        // ignore
-      }
-      resolve(undefined);
-    });
-  });
-  scheduleIdleShutdown(idleMs);
+function pidPath() {
+  return path.join(infinitecontextHome(), PID_NAME);
 }
 
 function agentRequest(payload, { timeoutMs = 3000 } = {}) {
@@ -147,8 +52,32 @@ function agentRequest(payload, { timeoutMs = 3000 } = {}) {
   });
 }
 
+async function pingAgent() {
+  try {
+    const res = await agentRequest({ cmd: "ping" }, { timeoutMs: 500 });
+    return Boolean(res?.ok);
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureDetachedVaultAgent() {
+  if (await pingAgent()) return;
+  const child = spawn(process.execPath, [SERVE_SCRIPT], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
+  for (let i = 0; i < 20; i += 1) {
+    if (await pingAgent()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("Failed to start background vault agent");
+}
+
 export async function vaultAgentStore(accountKey, dekBytes, { ttlMs = DEFAULT_IDLE_MS } = {}) {
-  await ensureAgentServer({ idleMs: ttlMs });
+  await ensureDetachedVaultAgent();
   const res = await agentRequest({
     cmd: "store",
     accountKey,
@@ -188,3 +117,6 @@ export function vaultAgentAvailable() {
 export function randomRootAadNonce() {
   return crypto.randomBytes(16).toString("hex");
 }
+
+export const VAULT_AGENT_DOC =
+  "When OS keychain is unavailable, unlock starts a background vault-agent (0600 Unix socket under ~/.infinitecontext/) that holds your DEK until idle timeout or `infinitecontext vault lock`.";

@@ -18,6 +18,7 @@ import type { AuthRepository } from '@infinitecontext/auth';
 import {
     validateVaultContextWrite,
     validateVaultDeleteWrite,
+    validateVaultHistoricalRead,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
@@ -135,6 +136,12 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
 
         const result = await getContext(storage, projectId, contextPublicId, opts);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
+
+        if (vaultDeps) {
+            const denied = await validateVaultHistoricalRead(c, vaultDeps, opts, result.data);
+            if (denied) return denied;
+        }
+
         return c.json(result.data);
     });
 

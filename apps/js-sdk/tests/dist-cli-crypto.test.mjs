@@ -1,25 +1,26 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const sdkRoot = path.resolve(here, "..");
+const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-describe("built CLI loads bundled crypto", () => {
-  it("dist entry resolves @infinitecontext/crypto without tsx", () => {
-    const script = `
-      import { isEncryptedContent } from '@infinitecontext/crypto';
-      if (!isEncryptedContent({ __ic_enc: 1, kid: 'dek_v1', v: 1, alg: 'XC20P', nonce: 'abc', ct: 'def' })) {
-        process.exit(2);
-      }
-      console.log('ok');
-    `;
-    const res = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-      cwd: sdkRoot,
-      env: { ...process.env, NODE_PATH: path.join(sdkRoot, "dist") },
-    });
-    assert.equal(res.status, 0, res.stderr?.toString() ?? res.stdout?.toString());
+describe("built CLI bundled crypto", () => {
+  it("lib/ic-crypto.mjs exists after build and validates envelopes", async () => {
+    const cryptoPath = path.join(sdkRoot, "lib/ic-crypto.mjs");
+    assert.ok(fs.existsSync(cryptoPath), "run pnpm run build first");
+    const { isEncryptedContent } = await import(`file://${cryptoPath}`);
+    assert.equal(
+      isEncryptedContent({
+        __ic_enc: 1,
+        kid: "dek_v1",
+        v: 1,
+        alg: "XC20P",
+        nonce: "AAAAAAAAAAAAAAAAAAAAAA==",
+        ct: "AA==",
+      }),
+      true,
+    );
   });
 });

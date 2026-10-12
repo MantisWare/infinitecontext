@@ -14,7 +14,6 @@ describe('plaintext policy', () => {
     const binding = {
         contextId: 'ctx_1',
         userPublicId: 'usr_1',
-        nodePublicId: 'msg_1',
         nodeIndex: 0,
     };
 
@@ -27,6 +26,13 @@ describe('plaintext policy', () => {
         const dek = randomBytes(32);
         const content = encryptNodeContent(dek, 1, { text: 'hello' }, binding);
         assert.equal(isEncryptedWritePayload(content as Record<string, unknown>, { source: 'claude' }), true);
+    });
+
+    it('rejects invalid nonce length', () => {
+        const dek = randomBytes(32);
+        const content = encryptNodeContent(dek, 1, { text: 'hello' }, binding);
+        (content as Record<string, unknown>).nonce = Buffer.from('short').toString('base64');
+        assert.equal(isEncryptedWritePayload(content as Record<string, unknown>, {}), false);
     });
 
     it('rejects envelopes with extra plaintext fields', () => {
@@ -48,6 +54,15 @@ describe('plaintext policy', () => {
 
     it('deleteBodyMetadata reads delete metadata', () => {
         assert.deepEqual(deleteBodyMetadata({ ids: ['a'], metadata: { note: 'x' } }), { note: 'x' });
+    });
+
+    it('allows patch updates with index selector beside envelope fields', () => {
+        const dek = randomBytes(32);
+        const content = encryptNodeContent(dek, 1, { text: 'hello' }, binding);
+        assert.equal(
+            isEncryptedWritePayload({ index: 2, ...(content as Record<string, unknown>) }, {}),
+            true,
+        );
     });
 
     it('rejects plaintext message bodies for initialized vaults', () => {
