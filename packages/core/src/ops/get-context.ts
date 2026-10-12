@@ -27,7 +27,12 @@ type VersionEntry = {
     metadata?: Record<string, unknown>;
 };
 
-type GetContextResult = { data: MessageView[]; version: number; versions?: VersionEntry[] };
+type GetContextResult = {
+    data: MessageView[];
+    version: number;
+    metadata?: Record<string, unknown>;
+    versions?: VersionEntry[];
+};
 
 // -- op -----------------------------------------------------------------------
 
@@ -50,6 +55,7 @@ export async function getContext(
     // root must exist within this project
     const root = await storage.findRootContext(projectId, contextId);
     if (!root) return err('not_found', 'Context not found');
+    const rootMetadata = (root.metadata ?? {}) as Record<string, unknown>;
 
     // collect all version heads under the root
     const versions = await getVersions(storage, root.public_id);
@@ -75,7 +81,7 @@ export async function getContext(
     }
 
     // no head → empty context at version 0
-    if (!head) return ok({ data: [], version: 0 });
+    if (!head) return ok({ data: [], version: 0, metadata: rootMetadata });
 
     // ordered messages under the head, optionally filtered by the before cutoff
     let orderedNodes = await getOrderedNodes(storage, head.public_id);
@@ -106,7 +112,12 @@ export async function getContext(
             index: i,
             metadata: n.metadata,
         }));
-        return ok({ data: sliced, version: currentVersion, ...(versionsResponse && { versions: versionsResponse }) });
+        return ok({
+            data: sliced,
+            version: currentVersion,
+            metadata: rootMetadata,
+            ...(versionsResponse && { versions: versionsResponse }),
+        });
     }
 
     // default: all ordered messages
@@ -117,5 +128,10 @@ export async function getContext(
         metadata: n.metadata,
     }));
 
-    return ok({ data: result, version: currentVersion, ...(versionsResponse && { versions: versionsResponse }) });
+    return ok({
+        data: result,
+        version: currentVersion,
+        metadata: rootMetadata,
+        ...(versionsResponse && { versions: versionsResponse }),
+    });
 }

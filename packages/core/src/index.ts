@@ -43,6 +43,11 @@ export type { GetContextOptions } from './ops/get-context';
 
 export { appendMessages } from './ops/append-messages';
 
+export { prunePlaintextVersionHeads } from './ops/prune-plaintext-versions';
+
+export { getContextEncryptionState } from './ops/context-encryption-state';
+export type { ContextEncryptionState } from './ops/context-encryption-state';
+
 export { updateMessages } from './ops/update-messages';
 
 export { deleteContextPermanent } from './ops/delete-context';

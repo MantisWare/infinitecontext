@@ -6,6 +6,8 @@ export type NodeInsertInput = {
     content: Record<string, unknown>;
     metadata: Record<string, unknown>;
     parent_id?: string | null;
+    /** When set (vault client node id), stored verbatim as public_id for messages. */
+    clientPublicId?: string;
 };
 
 export type VersionInfo = {
@@ -46,7 +48,11 @@ export function orderNodes<T extends { public_id: string; prev_id: string | null
 }
 
 export function buildNodeInsertRecords(nodesToInsert: NodeInsertInput[], projectId: number, contextId: string, startingPrevId: string | null = null) {
-    const publicIds = nodesToInsert.map((n) => (n.type === 'context' ? generatePublicId('context') : generatePublicId('msg')));
+    const publicIds = nodesToInsert.map((n) => {
+        if (n.type === 'context') return generatePublicId('context');
+        if (typeof n.clientPublicId === 'string' && n.clientPublicId.length > 0) return n.clientPublicId;
+        return generatePublicId('msg');
+    });
 
     return nodesToInsert.map((node, idx) => ({
         public_id: publicIds[idx],

@@ -1,5 +1,6 @@
 import {
     appendMessages,
+    prunePlaintextVersionHeads,
     createContext,
     deleteContextPermanent,
     deleteManyContexts,
@@ -13,6 +14,18 @@ import {
     type ErrorCode,
 } from '@infinitecontext/core';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AuthRepository } from '@infinitecontext/auth';
+
+import {
+    applyVaultMigrateReadGate,
+    validateVaultContextWrite,
+    validateVaultDeleteWrite,
+    validateVaultEncryptedMessageWriteToContext,
+    validateVaultHistoricalRead,
+    validateVaultMessageRead,
+    validateVaultPrunePlaintextVersions,
+    type VaultEncryptionDeps,
+} from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
@@ -21,12 +34,19 @@ const status = (code: ErrorCode) => resultStatus(code) as ContentfulStatusCode;
 
 // -- routes -------------------------------------------------------------------
 
-export function registerContextRoutes(app: HttpApp) {
+export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthRepository | null }) {
+    const vaultDeps: VaultEncryptionDeps | null = options?.authRepo ? { authRepo: options.authRepo } : null;
+
     // create context — parse body (default {} on bad JSON), call core, map Result
     app.post('/contexts', async (c) => {
         const { projectId } = c.get('auth');
         const storage = c.get('storage');
         const body = await c.req.json().catch(() => ({}));
+
+        if (vaultDeps) {
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'create_root');
+            if (denied) return denied;
+        }
 
         const result = await createContext(storage, projectId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
@@ -96,9 +116,33 @@ export function registerContextRoutes(app: HttpApp) {
         const contextPublicId = c.req.param('id');
         const body = await c.req.json();
 
+        if (vaultDeps) {
+            const denied =
+                (await validateVaultContextWrite(c, vaultDeps, body, 'messages', {
+                    newMessageIdsOnly: true,
+                })) ??
+                (await validateVaultEncryptedMessageWriteToContext(c, vaultDeps, storage, projectId, contextPublicId));
+            if (denied) return denied;
+        }
+
         const result = await appendMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         return c.json(result.data, 201);
+    });
+
+    app.post('/contexts/:id/prune-plaintext-versions', async (c) => {
+        const { projectId } = c.get('auth');
+        const storage = c.get('storage');
+        const contextPublicId = c.req.param('id');
+
+        if (vaultDeps) {
+            const denied = await validateVaultPrunePlaintextVersions(c, vaultDeps, storage, projectId, contextPublicId);
+            if (denied) return denied;
+        }
+
+        const result = await prunePlaintextVersionHeads(storage, projectId, contextPublicId);
+        if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        return c.json(result.data);
     });
 
     // get context — parse query selectors, call core, map Result
@@ -116,6 +160,18 @@ export function registerContextRoutes(app: HttpApp) {
 
         const result = await getContext(storage, projectId, contextPublicId, opts);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
+
+        if (vaultDeps) {
+            const migrateGate = applyVaultMigrateReadGate(c);
+            if (migrateGate.denied) return migrateGate.denied;
+            const denied =
+                (await validateVaultHistoricalRead(c, vaultDeps, opts, result.data, migrateGate.allowLegacyMigrateRead)) ??
+                (await validateVaultMessageRead(c, vaultDeps, result.data, {
+                    allowLegacyMigrateRead: migrateGate.allowLegacyMigrateRead,
+                }));
+            if (denied) return denied;
+        }
+
         return c.json(result.data);
     });
 
@@ -127,6 +183,11 @@ export function registerContextRoutes(app: HttpApp) {
         const body = await c.req.json().catch(() => null);
 
         if (body === null) return c.json({ error: 'Invalid JSON body' }, 400);
+
+        if (vaultDeps) {
+            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages');
+            if (denied) return denied;
+        }
 
         const result = await updateMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
@@ -182,6 +243,11 @@ export function registerContextRoutes(app: HttpApp) {
         if (!isPlainObject(body)) return c.json({ error: 'Request body must be a JSON object' }, 400);
         if (!hasIds) {
             return c.json({ error: 'Body must contain "ids" (delete messages) or {"permanent": true} (delete entire context)' }, 400);
+        }
+
+        if (vaultDeps) {
+            const denied = await validateVaultDeleteWrite(c, vaultDeps, body);
+            if (denied) return denied;
         }
 
         // message delete — pass ids + optional metadata to core (core validates shapes)

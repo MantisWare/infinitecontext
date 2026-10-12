@@ -11,6 +11,7 @@ import type { StorageAdapter } from '@infinitecontext/core';
 
 import { type ClientIpReaderOptions } from './auth/rate-limit';
 import { registerAuthRoutes, resolveGoogleClient } from './auth/routes';
+import { registerVaultRoutes } from './auth/vault-routes';
 import type { KeyCache } from './cache/types';
 import { registerAuthMiddleware } from './middleware/auth';
 import { corsMiddleware } from './middleware/cors';
@@ -48,7 +49,7 @@ export function createApp(options: AppOptions) {
     });
     registerRootRoutes(app);
     registerKeyRoutes(app);
-    registerContextRoutes(app);
+    registerContextRoutes(app, { authRepo: options.authRepo ?? null });
     registerMcpRoutes(app);
 
     if (options.authConfig && options.authRepo) {
@@ -65,6 +66,7 @@ export function createApp(options: AppOptions) {
             rateLimiters: createAuthRateLimiters(),
             clientIpOptions: options.clientIpOptions ?? { trustProxy: false, runtime: 'node' },
         });
+        registerVaultRoutes(app, options.authRepo);
     }
 
     return app;

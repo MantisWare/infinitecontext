@@ -58,7 +58,7 @@ export class SupabaseAdapter implements StorageAdapter {
     async findRootContext(projectId: number, publicId: string) {
         const { data, error } = await this.client
             .from('nodes')
-            .select('public_id')
+            .select('public_id, metadata')
             .eq('project_id', projectId)
             .eq('public_id', publicId)
             .eq('type', 'context')
@@ -80,6 +80,18 @@ export class SupabaseAdapter implements StorageAdapter {
             .limit(1)
             .single();
         if (error && error.code === 'PGRST116') return null;
+        if (error) throw error;
+        return data;
+    }
+
+    async findNodeByPublicId(projectId: number, publicId: string) {
+        const { data, error } = await this.client
+            .from('nodes')
+            .select('public_id')
+            .eq('project_id', projectId)
+            .eq('public_id', publicId)
+            .limit(1)
+            .maybeSingle();
         if (error) throw error;
         return data;
     }
@@ -135,6 +147,15 @@ export class SupabaseAdapter implements StorageAdapter {
         const { error } = await this.client
             .from('nodes')
             .delete()
+            .eq('project_id', projectId)
+            .eq('public_id', publicId);
+        if (error) throw error;
+    }
+
+    async updateNodePrevId(projectId: number, publicId: string, prevId: string | null) {
+        const { error } = await this.client
+            .from('nodes')
+            .update({ prev_id: prevId })
             .eq('project_id', projectId)
             .eq('public_id', publicId);
         if (error) throw error;

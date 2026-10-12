@@ -108,10 +108,43 @@ export async function updateMessages(
         return err('internal', message);
     }
 
-    // build updated node copies — copy-on-write, merging changes onto targets
+    const isEncryptedEnvelope = (value: Record<string, unknown>) =>
+        value.__ic_enc === 1 && typeof value.kid === 'string';
+
+    const envelopeOnly = (value: Record<string, unknown>): Record<string, unknown> => {
+        const out: Record<string, unknown> = {};
+        for (const key of ['__ic_enc', 'kid', 'v', 'alg', 'nonce', 'ct'] as const) {
+            if (value[key] !== undefined) out[key] = value[key];
+        }
+        return out;
+    };
+
+    // build updated node copies — copy-on-write; encrypted vault payloads replace content/metadata outright
     const newNodes = orderedNodes.map((n) => {
         const update = updateMap.get(n.public_id);
-        const { id: _id, ...changes } = update ?? { id: null };
+        const {
+            id: _writeId,
+            index: _writeIndex,
+            metadata: updateMetadata,
+            ...contentChanges
+        } = (update ?? {}) as {
+            id?: string;
+            index?: number;
+            metadata?: Record<string, unknown>;
+            [key: string]: unknown;
+        };
+        let content = n.content as Record<string, unknown>;
+        let metadata = n.metadata as Record<string, unknown>;
+        if (update) {
+            if (Object.keys(contentChanges).length > 0) {
+                content = isEncryptedEnvelope(contentChanges)
+                    ? envelopeOnly(contentChanges)
+                    : { ...content, ...contentChanges };
+            }
+            if (updateMetadata !== undefined && typeof updateMetadata === 'object' && !Array.isArray(updateMetadata)) {
+                metadata = updateMetadata as Record<string, unknown>;
+            }
+        }
         return {
             public_id: generatePublicId('msg'),
             project_id: projectId,
@@ -119,8 +152,8 @@ export async function updateMessages(
             context_id: newHeadId,
             parent_id: n.public_id,
             prev_id: null as string | null,
-            content: update ? { ...n.content, ...changes } : n.content,
-            metadata: n.metadata,
+            content,
+            metadata,
         };
     });
 

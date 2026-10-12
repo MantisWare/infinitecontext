@@ -145,11 +145,13 @@ export function registerAuthMiddleware(app: HttpApp, options?: AuthOptions) {
     app.use('/v1/keys', bearerAuthMiddleware(verifyAdminToken));
 
     if (options?.authConfig && options.authRepo) {
-        app.use(
-            '/auth/me',
-            bearerAuthMiddleware(async (token, c) =>
-                verifyUserAccessToken(options.authConfig!, options.authRepo!, token, c),
-            ),
-        );
+        const verifyUser = async (token: string, c: HttpContext) =>
+            verifyUserAccessToken(options.authConfig!, options.authRepo!, token, c);
+
+        app.use('/auth/me', bearerAuthMiddleware(verifyUser));
+        app.use('/auth/crypto', bearerAuthMiddleware(verifyUser));
+        app.use('/auth/crypto/*', bearerAuthMiddleware(verifyUser));
+        app.use('/auth/devices', bearerAuthMiddleware(verifyUser));
+        app.use('/auth/devices/*', bearerAuthMiddleware(verifyUser));
     }
 }

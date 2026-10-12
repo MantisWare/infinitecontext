@@ -25,3 +25,4 @@ export function createStorageAdapter(config: StorageConfig): StorageAdapter {
 export type { StorageAdapter } from '@infinitecontext/core';
 export { DrizzleAdapter } from './drizzle';
 export { SupabaseAdapter } from './supabase';
+export { createAuthRepository } from './auth';

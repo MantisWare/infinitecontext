@@ -58,14 +58,19 @@ export interface StorageAdapter {
     findContextBranches(contextId: string): Promise<Pick<NodeRow, 'public_id' | 'prev_id' | 'created_at'>[]>;
     findVersions(contextId: string): Promise<Pick<NodeRow, 'public_id' | 'created_at' | 'metadata'>[]>;
     findNonContextNodes(contextId: string): Promise<NodeRow[]>;
-    findRootContext(projectId: number, publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
+    findRootContext(
+        projectId: number,
+        publicId: string,
+    ): Promise<Pick<NodeRow, 'public_id' | 'metadata'> | null>;
     findRootContextByPublicId(publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
+    findNodeByPublicId(projectId: number, publicId: string): Promise<Pick<NodeRow, 'public_id'> | null>;
     listRootContexts(projectId: number, limit: number, filters?: ContextFilters): Promise<Pick<NodeRow, 'public_id' | 'metadata' | 'created_at'>[]>;
 
     // nodes — mutations
     insertNodes(values: NodeInsertRow | NodeInsertRow[]): Promise<Partial<NodeRow>[]>;
     deleteNodesByContextId(projectId: number, contextId: string): Promise<void>;
     deleteNodeByPublicId(projectId: number, publicId: string): Promise<void>;
+    updateNodePrevId(projectId: number, publicId: string, prevId: string | null): Promise<void>;
     clearParentReferences(projectId: number, parentId: string): Promise<void>;
     // batch-clear parent_id for all nodes whose parent_id is any of parentIds (single query)
     clearParentReferencesBulk(projectId: number, parentIds: string[]): Promise<void>;

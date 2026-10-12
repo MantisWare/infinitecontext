@@ -29,6 +29,7 @@ export default defineConfig([
       "figlet",
       "fast-glob",
       "infinitecontext",
+      "keytar",
     ],
   },
 ]);

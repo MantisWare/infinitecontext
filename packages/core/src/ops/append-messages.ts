@@ -2,6 +2,7 @@
 // APPEND MESSAGES — append messages to a context (ported from POST /contexts/:id)
 // =============================================================================
 
+import { appendErrorCode } from './append-errors';
 import { buildNodeInsertRecords, findHead, findTail, getOrderedNodes, getVersions } from '../context-chain';
 import type { MessageView } from '../message-view';
 import type { StorageAdapter } from '../storage';
@@ -12,7 +13,11 @@ import { ok, err, type Result } from '../result';
 // or an error marker carrying the original HTTP status, resolved to a Result
 // once the tx completes.
 
-type AppendOutcome = { data: MessageView[]; version: number } | { code: 'not_found' | 'internal'; message: string };
+type AppendOutcome =
+    | { data: MessageView[]; version: number }
+    | { code: 'not_found' | 'internal' | 'conflict' | 'invalid_input'; message: string };
+
+const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
 
 // -- op -----------------------------------------------------------------------
 
@@ -43,10 +48,35 @@ export async function appendMessages(
 
             // split metadata out of each message; the rest is content
             const nodeInputs = items.map((msg) => {
-                const { metadata, ...content } = msg as Record<string, unknown>;
-                return { type: 'message', content, metadata: (metadata ?? {}) as Record<string, unknown> };
+                const { metadata, id, ...content } = msg as Record<string, unknown>;
+                const clientPublicId = typeof id === 'string' ? id : undefined;
+                if (clientPublicId !== undefined && !CLIENT_NODE_ID_PATTERN.test(clientPublicId)) {
+                    return { invalidId: true as const };
+                }
+                return {
+                    type: 'message',
+                    content: content as Record<string, unknown>,
+                    metadata: (metadata ?? {}) as Record<string, unknown>,
+                    clientPublicId,
+                };
             });
-            const insertRecords = buildNodeInsertRecords(nodeInputs, projectId, head.public_id, tailPublicId);
+            if (nodeInputs.some((n) => 'invalidId' in n)) {
+                return { code: 'invalid_input', message: 'Message id must be icn_ followed by 24 lowercase hex digits' };
+            }
+            const typedInputs = nodeInputs as Array<{
+                type: string;
+                content: Record<string, unknown>;
+                metadata: Record<string, unknown>;
+                clientPublicId?: string;
+            }>;
+            for (const input of typedInputs) {
+                if (!input.clientPublicId) continue;
+                const existing = await tx.findNodeByPublicId(projectId, input.clientPublicId);
+                if (existing) {
+                    return { code: 'conflict', message: 'Client node id is already in use for this account' };
+                }
+            }
+            const insertRecords = buildNodeInsertRecords(typedInputs, projectId, head.public_id, tailPublicId);
 
             // append the new message nodes after the tail
             const createdNodes = await tx.insertNodes(insertRecords);
@@ -65,8 +95,11 @@ export async function appendMessages(
 
             return { data, version: currentVersion };
         }, { isolationLevel: 'serializable' });
-    } catch {
-        // any tx failure collapses to a single internal error
+    } catch (error) {
+        const mapped = appendErrorCode(error);
+        if (mapped === 'conflict') {
+            return err('conflict', 'Concurrent append or client node id conflict; retry or run vault migrate-project');
+        }
         return err('internal', 'Failed to append messages');
     }
 

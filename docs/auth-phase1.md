@@ -21,7 +21,7 @@ Email verification and password reset use a pluggable mailer. In dev/test, enabl
 
 ## Database
 
-Auth tables live in Postgres (`users`, `identities`, `sessions`, `auth_tokens`, OAuth helper tables, and a placeholder `user_crypto` row set for Phase 2). Apply via:
+Auth tables live in Postgres (`users`, `identities`, `sessions`, `auth_tokens`, OAuth helper tables, and `user_crypto` for client-side vault metadata). Phase 2–3 encryption is documented in [vault-zero-knowledge.md](/docs/vault-zero-knowledge.md). Apply via:
 
 ```bash
 pnpm infinitecontext:db:migrate

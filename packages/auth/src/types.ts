@@ -43,6 +43,23 @@ export type AuthTokenRow = {
     created_at: string;
 };
 
+export type UserCryptoRow = {
+    user_id: number;
+    kdf_salt: Buffer | null;
+    kdf_params: Record<string, unknown> | null;
+    wrapped_dek: Buffer | null;
+    wrapped_dek_recovery: Buffer | null;
+    wrapped_dek_prev: Buffer | null;
+    wrapped_dek_recovery_prev: Buffer | null;
+    recovery_kdf_salt: Buffer | null;
+    dek_proof_tag: Buffer | null;
+    dek_version: number;
+    crypto_initialized_at: string | null;
+    vault_passphrase_required: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
 export type OAuthDeviceFlowRow = {
     id: number;
     provider: string;
@@ -127,6 +144,34 @@ export type AuthRepository = {
     findOAuthDeviceFlowByHash(deviceCodeHash: string): Promise<OAuthDeviceFlowRow | null>;
     completeOAuthDeviceFlow(id: number, input: { userId: number; completedAt: string }): Promise<void>;
     markOAuthDeviceFlowTokensDelivered(id: number, deliveredAt: string): Promise<boolean>;
+
+    findUserCrypto(userId: number): Promise<UserCryptoRow | null>;
+    ensureVaultPassphraseRequired(userId: number): Promise<void>;
+    upsertUserCrypto(input: {
+        userId: number;
+        kdfSalt: Buffer;
+        kdfParams: Record<string, unknown>;
+        wrappedDek: Buffer;
+        wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
+        dekVersion: number;
+        cryptoInitializedAt: string;
+        vaultPassphraseRequired: boolean;
+    }): Promise<UserCryptoRow>;
+    updateUserCryptoWraps(input: {
+        userId: number;
+        kdfSalt?: Buffer;
+        wrappedDek?: Buffer;
+        wrappedDekRecovery?: Buffer;
+        dekVersion?: number;
+        dekProofTag?: Buffer;
+        expectedWrappedDek?: Buffer;
+        expectedWrappedDekRecovery?: Buffer;
+        updatedAt: string;
+    }): Promise<UserCryptoRow | null>;
+
+    listSessionsForUser(userId: number): Promise<SessionRow[]>;
+    revokeSessionByPublicId(userId: number, sessionPublicId: string, revokedAt: string): Promise<boolean>;
 };
 
 export type AuthTokenPair = {

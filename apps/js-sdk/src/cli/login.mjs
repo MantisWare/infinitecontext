@@ -116,6 +116,11 @@ async function postJson(baseUrl, path, body) {
   return parsed;
 }
 
+async function afterLoginVaultGate(baseUrl, { google = false } = {}) {
+  const { runInteractiveVaultInitIfRequired } = await import("../../lib/vault-require.mjs");
+  await runInteractiveVaultInitIfRequired({ baseUrl, googleAccount: google });
+}
+
 function persistTokens(baseUrl, body, extra = {}) {
   saveCredentials({
     baseUrl,
@@ -139,6 +144,7 @@ async function loginWithPassword({ baseUrl, email, passwordStdin }) {
   });
   persistTokens(baseUrl, body, { email: resolvedEmail });
   console.log(`Signed in as ${resolvedEmail}`);
+  await afterLoginVaultGate(baseUrl, { google: false });
 }
 
 async function loginWithGoogleDevice(baseUrl) {
@@ -158,6 +164,7 @@ async function loginWithGoogleDevice(baseUrl) {
     if (!res.ok) throw new Error(String(body.error ?? `Google device poll failed (${res.status})`));
     persistTokens(baseUrl, body, { email: body.user?.email ?? null });
     console.log(`Signed in with Google as ${body.user?.email ?? body.user?.id ?? "account"}`);
+    await afterLoginVaultGate(baseUrl, { google: true });
     return;
   }
 }
@@ -202,6 +209,7 @@ async function loginWithGoogleLocalhost(baseUrl) {
   });
   persistTokens(baseUrl, body, { email: body.user?.email ?? null });
   console.log(`Signed in with Google as ${body.user?.email ?? body.user?.id ?? "account"}`);
+  await afterLoginVaultGate(baseUrl, { google: true });
 }
 
 function waitForOAuthCallback(port, expectedState) {

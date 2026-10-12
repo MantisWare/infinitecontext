@@ -37,11 +37,16 @@ export class MemoryStorage implements StorageAdapter {
         const n = this.nodes.find(
             (n) => n.project_id === projectId && n.public_id === publicId && n.type === 'context' && n.context_id === null
         );
-        return n ? { public_id: n.public_id } : null;
+        return n ? { public_id: n.public_id, metadata: n.metadata } : null;
     }
 
     async findRootContextByPublicId(publicId: string) {
         const n = this.nodes.find((n) => n.public_id === publicId && n.type === 'context' && n.context_id === null);
+        return n ? { public_id: n.public_id } : null;
+    }
+
+    async findNodeByPublicId(projectId: number, publicId: string) {
+        const n = this.nodes.find((n) => n.project_id === projectId && n.public_id === publicId);
         return n ? { public_id: n.public_id } : null;
     }
 
@@ -86,6 +91,11 @@ export class MemoryStorage implements StorageAdapter {
 
     async deleteNodeByPublicId(projectId: number, publicId: string) {
         this.nodes = this.nodes.filter((n) => !(n.project_id === projectId && n.public_id === publicId));
+    }
+
+    async updateNodePrevId(projectId: number, publicId: string, prevId: string | null) {
+        const node = this.nodes.find((n) => n.project_id === projectId && n.public_id === publicId);
+        if (node) node.prev_id = prevId;
     }
 
     async clearParentReferences(projectId: number, parentId: string) {

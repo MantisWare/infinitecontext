@@ -1,0 +1,47 @@
+/** Vault passphrase → KEK (client-only; separate from server login password hashing). */
+export const VAULT_KDF_PARAMS = {
+    algorithm: 'argon2id' as const,
+    memorySizeKiB: 65536,
+    iterations: 3,
+    parallelism: 4,
+    hashLength: 32,
+    saltLength: 16,
+};
+
+export const RECOVERY_KEY_BYTES = 32;
+
+export const DEK_BYTES = 32;
+
+export const ENVELOPE_VERSION = 1 as const;
+
+export const AEAD_ALG = 'XC20P' as const;
+
+export const WRAP_ALG = 'XC20P' as const;
+
+/** Metadata keys kept in cleartext for server-side list filters (plan §3.2). */
+export const CLEARTEXT_METADATA_KEYS = [
+    'source',
+    'user_id',
+    'host',
+    'project_path',
+    'session_id',
+    /** Stable cleartext nonce binding encrypted root metadata AAD (per context). */
+    'ic_root_aad',
+    /** Stable client-chosen id for AAD binding (survives message COW). */
+    'ic_client_node_id',
+    /** Legacy preview field; ignored by clients (integrity deferred). */
+    'ic_chain_index',
+    /** Legacy preview field; ignored by clients (integrity deferred). */
+    'ic_chain_link',
+] as const;
+
+/** Client-chosen message ids stored verbatim as node public_id (vault writes). */
+export const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
+
+/** Server-assigned message ids (updates/deletes by existing row). */
+export const SERVER_MSG_ID_PATTERN = /^msg_[0-9a-f]{24}$/;
+
+/** AAD field for encrypting context root metadata (not message bodies). */
+export const ROOT_METADATA_AAD_FIELD = 'context_root' as const;
+
+export type CleartextMetadataKey = (typeof CLEARTEXT_METADATA_KEYS)[number];

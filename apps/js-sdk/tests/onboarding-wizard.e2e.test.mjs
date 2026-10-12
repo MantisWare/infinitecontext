@@ -9,7 +9,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import pty from "node-pty";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+let pty;
+try {
+  pty = require("node-pty");
+} catch {
+  pty = null;
+}
+
+const describeOnboarding = pty ? describe : describe.skip;
 
 // ── keystroke sequences the wizard expects ───────────────────────
 
@@ -119,7 +129,7 @@ function chars(str) { return [...str]; }
 
 // ── tests ────────────────────────────────────────────────────────
 
-describe("onboarding wizard e2e (real CLI, real pty)", () => {
+describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
   it("self-host + all defaults writes full-capture config", async () => {
     const w = spawnWizard();
 

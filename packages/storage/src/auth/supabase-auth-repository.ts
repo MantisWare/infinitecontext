@@ -6,6 +6,7 @@ import type {
     IdentityRow,
     OAuthDeviceFlowRow,
     SessionRow,
+    UserCryptoRow,
     UserRow,
 } from '@infinitecontext/auth';
 
@@ -296,6 +297,93 @@ export class SupabaseAuthRepository implements AuthRepository {
             .update({ tokens_delivered_at: deliveredAt })
             .eq('id', id)
             .is('tokens_delivered_at', null)
+            .select('id');
+        if (error) throw error;
+        return (data?.length ?? 0) > 0;
+    }
+
+    async ensureVaultPassphraseRequired(userId: number): Promise<void> {
+        const now = new Date().toISOString();
+        const { error } = await this.client.from('user_crypto').upsert({
+            user_id: userId,
+            vault_passphrase_required: true,
+            updated_at: now,
+            dek_version: 1,
+        });
+        if (error) throw error;
+    }
+
+    async findUserCrypto(userId: number): Promise<UserCryptoRow | null> {
+        const { data, error } = await this.client.from('user_crypto').select().eq('user_id', userId).maybeSingle();
+        if (error) throw error;
+        return (data as UserCryptoRow) ?? null;
+    }
+
+    async upsertUserCrypto(input: {
+        userId: number;
+        kdfSalt: Buffer;
+        kdfParams: Record<string, unknown>;
+        wrappedDek: Buffer;
+        wrappedDekRecovery: Buffer;
+        dekProofTag: Buffer;
+        dekVersion: number;
+        cryptoInitializedAt: string;
+        vaultPassphraseRequired: boolean;
+    }): Promise<UserCryptoRow> {
+        const { data, error } = await this.client
+            .from('user_crypto')
+            .upsert({
+                user_id: input.userId,
+                kdf_salt: input.kdfSalt,
+                kdf_params: input.kdfParams,
+                wrapped_dek: input.wrappedDek,
+                wrapped_dek_recovery: input.wrappedDekRecovery,
+                dek_proof_tag: input.dekProofTag,
+                dek_version: input.dekVersion,
+                crypto_initialized_at: input.cryptoInitializedAt,
+                vault_passphrase_required: input.vaultPassphraseRequired,
+                updated_at: input.cryptoInitializedAt,
+            })
+            .select()
+            .single();
+        if (error) throw error;
+        return data as UserCryptoRow;
+    }
+
+    async updateUserCryptoWraps(input: {
+        userId: number;
+        wrappedDek?: Buffer;
+        wrappedDekRecovery?: Buffer;
+        dekVersion?: number;
+        updatedAt: string;
+    }): Promise<UserCryptoRow | null> {
+        const patch: Record<string, unknown> = { updated_at: input.updatedAt };
+        if (input.wrappedDek) patch.wrapped_dek = input.wrappedDek;
+        if (input.wrappedDekRecovery) patch.wrapped_dek_recovery = input.wrappedDekRecovery;
+        if (input.dekVersion !== undefined) patch.dek_version = input.dekVersion;
+
+        const { data, error } = await this.client
+            .from('user_crypto')
+            .update(patch)
+            .eq('user_id', input.userId)
+            .select()
+            .maybeSingle();
+        if (error) throw error;
+        return (data as UserCryptoRow) ?? null;
+    }
+
+    async listSessionsForUser(userId: number): Promise<SessionRow[]> {
+        const { data, error } = await this.client.from('sessions').select().eq('user_id', userId);
+        if (error) throw error;
+        return (data as SessionRow[]) ?? [];
+    }
+
+    async revokeSessionByPublicId(userId: number, sessionPublicId: string, revokedAt: string): Promise<boolean> {
+        const { data, error } = await this.client
+            .from('sessions')
+            .update({ revoked_at: revokedAt })
+            .eq('user_id', userId)
+            .eq('public_id', sessionPublicId)
             .select('id');
         if (error) throw error;
         return (data?.length ?? 0) > 0;
