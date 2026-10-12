@@ -7,7 +7,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { InfiniteContext } from "infinitecontext";
+import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import { normalizeBootstrapMode } from "./protocol.mjs";
 
 import {
@@ -1654,16 +1654,14 @@ function buildUiSnapshot() {
   return snapshot;
 }
 
-function validateConfig() {
-  if (!cfg.apiKey) {
-    throw new Error("Missing INFINITECONTEXT_API_KEY");
-  }
+async function validateConfig() {
+  await assertSyncAuth(cfg);
 }
 
 // ── main entry ──────────────────────────────────────────────────
 
 async function tuiMain() {
-  validateConfig();
+  await validateConfig();
 
   if (!process.stdout.isTTY) {
     throw new Error("TUI mode requires a TTY.");
@@ -1678,7 +1676,7 @@ async function tuiMain() {
     // ignore config persistence startup issues
   }
 
-  const uc = new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+  const uc = createInfiniteContextClient(cfg);
   runtime.uc = uc;
 
   await uc.get({ limit: 1 });

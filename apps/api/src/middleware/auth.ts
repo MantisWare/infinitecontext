@@ -1,4 +1,6 @@
 import { hashToken, verifyKeyHash } from '@infinitecontext/core';
+import { looksLikeApiKey, verifyAccessToken, type AuthRuntimeConfig } from '@infinitecontext/auth';
+
 import type { KeyCache } from '../cache/types';
 import type { HttpApp, HttpContext, HttpMiddleware } from '../types/http';
 
@@ -39,31 +41,41 @@ function bearerAuthMiddleware(verify: (token: string, c: HttpContext) => Promise
     };
 }
 
+function sessionAuthMiddleware(authConfig: AuthRuntimeConfig): HttpMiddleware {
+    return bearerAuthMiddleware(async (token, c) => {
+        const claims = await verifyAccessToken(authConfig, token);
+        if (!claims) return false;
+        c.set('auth', {
+            kind: 'user_session',
+            userId: claims.uid,
+            projectId: claims.pid,
+            sessionId: claims.sid,
+        });
+        return true;
+    });
+}
+
 // -- token verification -------------------------------------------------------
 
 function createTokenVerifier(keyCache?: KeyCache) {
     return async function verifyToken(token: string, c: HttpContext) {
-        // hash once — reused for cache lookup, storage verify, and cache put
         const { prefix, hash } = await hashToken(token);
 
-        // check cache first
         if (keyCache) {
             const cached = await keyCache.get(prefix);
             if (cached && cached.keyHash === hash) {
-                c.set('auth', { apiKeyId: cached.apiKeyId, projectId: cached.projectId });
+                c.set('auth', { kind: 'api_key', apiKeyId: cached.apiKeyId, projectId: cached.projectId });
                 await recordApiKeyUse(c, cached.apiKeyId);
                 return true;
             }
         }
 
-        // fallback to storage with the precomputed prefix+hash (no re-hash)
         const storage = c.get('storage');
         const verified = await verifyKeyHash(storage, prefix, hash);
         if (!verified) return false;
 
-        c.set('auth', { apiKeyId: verified.apiKeyId, projectId: verified.projectId });
+        c.set('auth', { kind: 'api_key', apiKeyId: verified.apiKeyId, projectId: verified.projectId });
 
-        // populate cache on success
         if (keyCache) {
             await keyCache.put(prefix, {
                 keyHash: hash,
@@ -78,6 +90,25 @@ function createTokenVerifier(keyCache?: KeyCache) {
     };
 }
 
+function createCombinedContextVerifier(authConfig: AuthRuntimeConfig | null, keyCache?: KeyCache) {
+    const verifyApiKey = createTokenVerifier(keyCache);
+    return async function verifyContextToken(token: string, c: HttpContext) {
+        if (looksLikeApiKey(token)) {
+            return verifyApiKey(token, c);
+        }
+        if (!authConfig) return false;
+        const claims = await verifyAccessToken(authConfig, token);
+        if (!claims) return false;
+        c.set('auth', {
+            kind: 'user_session',
+            userId: claims.uid,
+            projectId: claims.pid,
+            sessionId: claims.sid,
+        });
+        return true;
+    };
+}
+
 async function verifyAdminToken(token: string, c: HttpContext) {
     const expected = c.get('config').INFINITECONTEXT_ADMIN_KEY;
     if (!expected) return false;
@@ -88,13 +119,18 @@ async function verifyAdminToken(token: string, c: HttpContext) {
 
 export type AuthOptions = {
     keyCache?: KeyCache;
+    authConfig?: AuthRuntimeConfig | null;
 };
 
 export function registerAuthMiddleware(app: HttpApp, options?: AuthOptions) {
-    const verifyToken = createTokenVerifier(options?.keyCache);
+    const verifyContextToken = createCombinedContextVerifier(options?.authConfig ?? null, options?.keyCache);
 
-    app.use('/contexts', bearerAuthMiddleware(verifyToken));
-    app.use('/contexts/*', bearerAuthMiddleware(verifyToken));
-    app.use('/mcp', bearerAuthMiddleware(verifyToken));
+    app.use('/contexts', bearerAuthMiddleware(verifyContextToken));
+    app.use('/contexts/*', bearerAuthMiddleware(verifyContextToken));
+    app.use('/mcp', bearerAuthMiddleware(verifyContextToken));
     app.use('/v1/keys', bearerAuthMiddleware(verifyAdminToken));
+
+    if (options?.authConfig) {
+        app.use('/auth/me', sessionAuthMiddleware(options.authConfig));
+    }
 }

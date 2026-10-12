@@ -8,7 +8,7 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
-import { InfiniteContext } from "infinitecontext";
+import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import {
   createBootstrapStateKey,
   normalizeBootstrapMode,
@@ -693,9 +693,9 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
   // ── validation ──
 
-  function validateConfig() {
-    if (!cfg.apiKey) throw new Error("Missing INFINITECONTEXT_API_KEY. Run `infinitecontext config` to set up your API key.");
-    if (!cfg.apiKey.startsWith("ic_live_") && !cfg.apiKey.startsWith("ic_test_")) {
+  async function validateConfig() {
+    await assertSyncAuth(cfg);
+    if (cfg.apiKey && !cfg.apiKey.startsWith("ic_live_") && !cfg.apiKey.startsWith("ic_test_")) {
       log("warn", "INFINITECONTEXT_API_KEY format looks unusual", { key_prefix: cfg.apiKey.slice(0, 8), key_len: cfg.apiKey.length });
     }
   }
@@ -1113,7 +1113,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
   // ── main loop ──
 
   async function daemonMain() {
-    validateConfig();
+    await validateConfig();
     printVerboseBanner();
 
     const store = createStore({ dbPath: cfg.dbFile });
@@ -1141,7 +1141,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
 
     runtime.lockHandle = await acquireFileLock({ lockPath: cfg.lockFile, userId: cfg.userId, host: cfg.host });
 
-    const uc = new InfiniteContext({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
+    const uc = createInfiniteContextClient(cfg);
     runtime.uc = uc;
 
     // connectivity check

@@ -41,4 +41,6 @@ export type ApiConfig =
           INFINITECONTEXT_ADMIN_KEY: string;
       };
 
-export type Auth = { apiKeyId: number; projectId: number };
+export type Auth =
+    | { kind: 'api_key'; apiKeyId: number; projectId: number }
+    | { kind: 'user_session'; userId: number; projectId: number; sessionId: number };

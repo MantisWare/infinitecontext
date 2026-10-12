@@ -1,14 +1,18 @@
 import { serve } from '@hono/node-server';
 
+import { buildAuthRuntimeConfig } from '@infinitecontext/auth';
+
 import { createApp } from './app';
 import { getApiConfig } from './config.node';
-import { createStorageAdapter } from '@infinitecontext/storage';
+import { createAuthRepository, createStorageAdapter } from '@infinitecontext/storage';
 
 // -- Node.js entrypoint -------------------------------------------------------
 
 const config = getApiConfig();
 const storage = createStorageAdapter(config);
-const app = createApp({ config, storage });
+const authConfig = buildAuthRuntimeConfig(process.env);
+const authRepo = authConfig ? createAuthRepository(config) : undefined;
+const app = createApp({ config, storage, authConfig, authRepo });
 const port = Number(process.env.PORT ?? 8787);
 
 serve({ fetch: app.fetch, port });
