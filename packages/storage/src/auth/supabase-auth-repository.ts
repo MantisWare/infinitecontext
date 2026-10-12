@@ -152,6 +152,16 @@ export class SupabaseAuthRepository implements AuthRepository {
         return (data as SessionRow) ?? null;
     }
 
+    async findSessionByPriorReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        const { data, error } = await this.client
+            .from('sessions')
+            .select()
+            .eq('prior_replaced_refresh_token_hash', hash)
+            .maybeSingle();
+        if (error) throw error;
+        return (data as SessionRow) ?? null;
+    }
+
     async findSessionById(id: number): Promise<SessionRow | null> {
         const { data, error } = await this.client.from('sessions').select().eq('id', id).maybeSingle();
         if (error) throw error;
@@ -173,12 +183,18 @@ export class SupabaseAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
+        refreshGraceExpiresAt: string;
     }): Promise<boolean> {
+        const current = await this.findSessionById(input.sessionId);
+        if (!current || current.refresh_token_hash !== input.previousRefreshTokenHash) return false;
+
         const { data, error } = await this.client
             .from('sessions')
             .update({
                 refresh_token_hash: input.newRefreshTokenHash,
+                prior_replaced_refresh_token_hash: current.replaced_refresh_token_hash,
                 replaced_refresh_token_hash: input.previousRefreshTokenHash,
+                refresh_grace_expires_at: input.refreshGraceExpiresAt,
                 last_used_at: input.lastUsedAt,
             })
             .eq('id', input.sessionId)

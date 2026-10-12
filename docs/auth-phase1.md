@@ -30,12 +30,15 @@ pnpm infinitecontext:db:migrate
 ## CLI
 
 ```bash
-infinitecontext login                      # email + password
+infinitecontext login                      # email + password (hidden prompt)
+infinitecontext login --password-stdin     # read password from stdin (no echo)
 infinitecontext login --google             # Google device authorization flow
 infinitecontext login --google --localhost # Google OAuth via http://127.0.0.1:53682/callback
 infinitecontext logout
 infinitecontext whoami
 ```
+
+`INFINITECONTEXT_LOGIN_PASSWORD`, when set, overrides both `--password-stdin` and interactive password prompts (useful for automation only; avoid in shared shells).
 
 Session tokens are stored in `~/.infinitecontext/credentials.json` with file mode `0600`. The sync daemon accepts either a saved session or `INFINITECONTEXT_API_KEY`.
 

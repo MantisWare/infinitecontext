@@ -113,6 +113,8 @@ export class MemoryAuthRepository implements AuthRepository {
             user_id: input.userId,
             refresh_token_hash: input.refreshTokenHash,
             replaced_refresh_token_hash: null,
+            prior_replaced_refresh_token_hash: null,
+            refresh_grace_expires_at: null,
             device_id: input.deviceId ?? null,
             device_name: input.deviceName ?? null,
             expires_at: input.expiresAt,
@@ -130,6 +132,10 @@ export class MemoryAuthRepository implements AuthRepository {
 
     async findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
         return this.sessions.find((s) => s.replaced_refresh_token_hash === hash) ?? null;
+    }
+
+    async findSessionByPriorReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        return this.sessions.find((s) => s.prior_replaced_refresh_token_hash === hash) ?? null;
     }
 
     async findSessionById(id: number): Promise<SessionRow | null> {
@@ -152,11 +158,14 @@ export class MemoryAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
+        refreshGraceExpiresAt: string;
     }): Promise<boolean> {
         const session = this.sessions.find((s) => s.id === input.sessionId);
         if (!session || session.refresh_token_hash !== input.previousRefreshTokenHash) return false;
+        session.prior_replaced_refresh_token_hash = session.replaced_refresh_token_hash;
         session.replaced_refresh_token_hash = input.previousRefreshTokenHash;
         session.refresh_token_hash = input.newRefreshTokenHash;
+        session.refresh_grace_expires_at = input.refreshGraceExpiresAt;
         session.last_used_at = input.lastUsedAt;
         return true;
     }

@@ -137,6 +137,15 @@ export class DrizzleAuthRepository implements AuthRepository {
         return (rows[0] as SessionRow) ?? null;
     }
 
+    async findSessionByPriorReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null> {
+        const rows = await this.db
+            .select()
+            .from(sessions)
+            .where(eq(sessions.prior_replaced_refresh_token_hash, hash))
+            .limit(1);
+        return (rows[0] as SessionRow) ?? null;
+    }
+
     async findSessionById(id: number): Promise<SessionRow | null> {
         const rows = await this.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
         return (rows[0] as SessionRow) ?? null;
@@ -155,12 +164,18 @@ export class DrizzleAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
+        refreshGraceExpiresAt: string;
     }): Promise<boolean> {
+        const current = await this.findSessionById(input.sessionId);
+        if (!current || current.refresh_token_hash !== input.previousRefreshTokenHash) return false;
+
         const rows = await this.db
             .update(sessions)
             .set({
                 refresh_token_hash: input.newRefreshTokenHash,
+                prior_replaced_refresh_token_hash: current.replaced_refresh_token_hash,
                 replaced_refresh_token_hash: input.previousRefreshTokenHash,
+                refresh_grace_expires_at: input.refreshGraceExpiresAt,
                 last_used_at: input.lastUsedAt,
             })
             .where(

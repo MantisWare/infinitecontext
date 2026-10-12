@@ -61,9 +61,36 @@ describe('AuthService', () => {
 
         const reusedSession = await authRepo.findSessionByReplacedRefreshTokenHash(await hashRefreshToken(firstRefresh));
         assert.ok(reusedSession);
-        reusedSession.last_used_at = new Date(Date.now() - 31_000).toISOString();
+        reusedSession.refresh_grace_expires_at = new Date(Date.now() - 1000).toISOString();
 
         await assert.rejects(() => service.refresh(firstRefresh), /reuse/i);
+    });
+
+    it('revokes the session when a refresh token two generations old is replayed', async () => {
+        const authRepo = new MemoryAuthRepository();
+        const storage = new MemoryStorage();
+        const service = new AuthService({
+            authRepo,
+            storage,
+            config,
+            mailer: { async sendVerificationEmail() {}, async sendPasswordResetEmail() {} },
+        });
+
+        await service.registerWithPassword({ email: 'gen@example.com', password: 'password1234' });
+        const { tokens } = await service.loginWithPassword({
+            email: 'gen@example.com',
+            password: 'password1234',
+        });
+
+        const gen0 = tokens.refreshToken;
+        const gen1Pair = await service.refresh(gen0);
+        await service.refresh(gen1Pair.refreshToken);
+
+        await assert.rejects(() => service.refresh(gen0), /reuse/i);
+        const session = await authRepo.findSessionByReplacedRefreshTokenHash(await hashRefreshToken(gen0));
+        assert.equal(session, null);
+        const priorSession = await authRepo.findSessionByPriorReplacedRefreshTokenHash(await hashRefreshToken(gen0));
+        assert.ok(priorSession?.revoked_at);
     });
 
     it('returns expired for stale Google device flows', async () => {

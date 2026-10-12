@@ -23,6 +23,8 @@ export type SessionRow = {
     user_id: number;
     refresh_token_hash: string;
     replaced_refresh_token_hash: string | null;
+    prior_replaced_refresh_token_hash: string | null;
+    refresh_grace_expires_at: string | null;
     device_id: string | null;
     device_name: string | null;
     expires_at: string;
@@ -91,6 +93,7 @@ export type AuthRepository = {
 
     findSessionByRefreshTokenHash(hash: string): Promise<SessionRow | null>;
     findSessionByReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null>;
+    findSessionByPriorReplacedRefreshTokenHash(hash: string): Promise<SessionRow | null>;
     findSessionById(id: number): Promise<SessionRow | null>;
     revokeSession(id: number, revokedAt: string): Promise<void>;
     revokeAllSessionsForUser(userId: number, revokedAt: string): Promise<void>;
@@ -99,6 +102,7 @@ export type AuthRepository = {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
+        refreshGraceExpiresAt: string;
     }): Promise<boolean>;
     touchSession(id: number, lastUsedAt: string): Promise<void>;
 

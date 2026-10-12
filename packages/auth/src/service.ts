@@ -112,11 +112,16 @@ export class AuthService {
         let session = await this.deps.authRepo.findSessionByRefreshTokenHash(hash);
 
         if (!session) {
+            const stale = await this.deps.authRepo.findSessionByPriorReplacedRefreshTokenHash(hash);
+            if (stale) {
+                await this.deps.authRepo.revokeSession(stale.id, this.now().toISOString());
+                throw new AuthError('invalid_refresh', 'Refresh token reuse detected');
+            }
+
             const reused = await this.deps.authRepo.findSessionByReplacedRefreshTokenHash(hash);
             if (reused) {
-                const graceMs = 30_000;
-                const lastUsedMs = reused.last_used_at ? Date.parse(reused.last_used_at) : 0;
-                const withinGrace = lastUsedMs > 0 && this.now().getTime() - lastUsedMs <= graceMs;
+                const graceEndMs = reused.refresh_grace_expires_at ? Date.parse(reused.refresh_grace_expires_at) : 0;
+                const withinGrace = graceEndMs > this.now().getTime();
                 if (!withinGrace) {
                     await this.deps.authRepo.revokeSession(reused.id, this.now().toISOString());
                     throw new AuthError('invalid_refresh', 'Refresh token reuse detected');
@@ -135,11 +140,19 @@ export class AuthService {
 
         const newRefreshToken = generateRefreshToken();
         const newHash = await hashRefreshToken(newRefreshToken);
+        const now = this.now();
+        const nowMs = now.getTime();
+        const existingGraceEndMs = session.refresh_grace_expires_at ? Date.parse(session.refresh_grace_expires_at) : 0;
+        const refreshGraceExpiresAt =
+            existingGraceEndMs > nowMs
+                ? session.refresh_grace_expires_at!
+                : addSeconds(now, 30).toISOString();
         const rotated = await this.deps.authRepo.rotateSessionRefreshToken({
             sessionId: session.id,
             newRefreshTokenHash: newHash,
             previousRefreshTokenHash: session.refresh_token_hash,
-            lastUsedAt: this.now().toISOString(),
+            lastUsedAt: now.toISOString(),
+            refreshGraceExpiresAt,
         });
         if (!rotated) {
             throw new AuthError('invalid_refresh', 'Invalid refresh token');

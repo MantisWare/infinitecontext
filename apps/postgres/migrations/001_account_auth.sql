@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   refresh_token_hash TEXT NOT NULL UNIQUE,
   replaced_refresh_token_hash TEXT UNIQUE,
+  prior_replaced_refresh_token_hash TEXT UNIQUE,
+  refresh_grace_expires_at TIMESTAMPTZ,
   device_id TEXT,
   device_name TEXT,
   expires_at TIMESTAMPTZ NOT NULL,

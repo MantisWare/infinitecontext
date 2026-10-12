@@ -6,9 +6,11 @@ type Bucket = {
 };
 
 const DEFAULT_MAX_BUCKETS = 10_000;
+const EVICT_INTERVAL_MS = 10_000;
 
 export class MemoryRateLimiter {
     private readonly buckets = new Map<string, Bucket>();
+    private lastEvictMs = 0;
 
     constructor(
         private readonly limit: number,
@@ -20,7 +22,10 @@ export class MemoryRateLimiter {
         const normalized = key.trim().toLowerCase();
         if (!normalized) return { allowed: true };
 
-        this.evictExpired(nowMs);
+        if (nowMs - this.lastEvictMs >= EVICT_INTERVAL_MS) {
+            this.evictExpired(nowMs);
+            this.lastEvictMs = nowMs;
+        }
 
         const existing = this.buckets.get(normalized);
         if (!existing || existing.resetAtMs <= nowMs) {

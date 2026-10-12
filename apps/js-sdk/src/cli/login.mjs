@@ -50,6 +50,7 @@ async function readPasswordFromStdin() {
 }
 
 async function promptHidden(question) {
+  // INFINITECONTEXT_LOGIN_PASSWORD overrides --password-stdin and interactive prompts.
   if (process.env.INFINITECONTEXT_LOGIN_PASSWORD) return process.env.INFINITECONTEXT_LOGIN_PASSWORD;
   if (!process.stdin.isTTY) {
     return readPasswordFromStdin();
@@ -62,24 +63,31 @@ async function promptHidden(question) {
     process.stdin.setEncoding("utf8");
 
     let password = "";
+    const finish = (value) => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdin.removeListener("data", onData);
+      process.stdout.write("\n");
+      resolve(value);
+    };
+
     const onData = (chunk) => {
-      const ch = String(chunk);
-      if (ch === "\n" || ch === "\r" || ch === "\u0004") {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdin.removeListener("data", onData);
-        process.stdout.write("\n");
-        resolve(password);
+      const input = String(chunk);
+      if (input.includes("\n") || input.includes("\r") || input.includes("\u0004")) {
+        const pasted = input.split(/\r\n|\n|\r|\u0004/)[0] ?? "";
+        finish(password + pasted);
         return;
       }
-      if (ch === "\u0003") {
+      if (input === "\u0003") {
         process.exit(130);
       }
-      if (ch === "\u007f" || ch === "\b") {
-        password = password.slice(0, -1);
-        return;
+      for (const ch of input) {
+        if (ch === "\u007f" || ch === "\b") {
+          password = password.slice(0, -1);
+          continue;
+        }
+        password += ch;
       }
-      password += ch;
     };
 
     process.stdin.on("data", onData);

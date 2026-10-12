@@ -58,6 +58,8 @@ export const sessions = pgTable('sessions', {
     user_id: bigint('user_id', { mode: 'number' }).notNull(),
     refresh_token_hash: text('refresh_token_hash').notNull(),
     replaced_refresh_token_hash: text('replaced_refresh_token_hash'),
+    prior_replaced_refresh_token_hash: text('prior_replaced_refresh_token_hash'),
+    refresh_grace_expires_at: timestamp('refresh_grace_expires_at', { withTimezone: true, mode: 'string' }),
     device_id: text('device_id'),
     device_name: text('device_name'),
     expires_at: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
