@@ -8,15 +8,27 @@ import {
     isEncryptedWritePayload,
     metadataHasSensitivePlaintext,
 } from '@infinitecontext/crypto';
+import { getContextEncryptionState } from '@infinitecontext/core';
+import type { StorageAdapter } from '@infinitecontext/core';
 import type { AuthRepository } from '@infinitecontext/auth';
 
+import { noteVaultMigrateRead } from './vault-migrate-read';
 import type { HttpContext } from '../types/http';
 
 export type VaultEncryptionDeps = {
     authRepo: AuthRepository;
 };
 
-async function loadVaultPolicy(authRepo: AuthRepository, userId: number, passwordHash: string | null) {
+export type VaultPolicy = {
+    initialized: boolean;
+    setupRequired: boolean;
+};
+
+export async function loadVaultPolicy(
+    authRepo: AuthRepository,
+    userId: number,
+    passwordHash: string | null,
+): Promise<VaultPolicy> {
     const crypto = await authRepo.findUserCrypto(userId);
     const initialized = Boolean(crypto?.crypto_initialized_at);
     const setupRequired =
@@ -25,8 +37,15 @@ async function loadVaultPolicy(authRepo: AuthRepository, userId: number, passwor
     return { initialized, setupRequired };
 }
 
-function reject(c: HttpContext, status: 403 | 422, message: string) {
-    return c.json({ error: message, code: status === 403 ? 'vault_setup_required' : 'plaintext_forbidden' }, status);
+function reject(
+    c: HttpContext,
+    status: 403 | 422 | 409 | 429,
+    message: string,
+    code?: string,
+) {
+    const defaultCode =
+        status === 403 ? 'vault_setup_required' : status === 409 ? 'vault_context_conflict' : 'plaintext_forbidden';
+    return c.json({ error: message, code: code ?? defaultCode }, status);
 }
 
 async function validateInitializedVaultWrites(
@@ -89,6 +108,66 @@ async function validateInitializedVaultWrites(
     return null;
 }
 
+export async function validateVaultEncryptedMessageWriteToContext(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    storage: StorageAdapter,
+    projectId: number,
+    contextId: string,
+): Promise<Response | null> {
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session') return null;
+
+    const user = await deps.authRepo.findUserById(auth.userId);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
+    if (!policy.initialized) return null;
+
+    const state = await getContextEncryptionState(storage, projectId, contextId);
+    if (state === 'not_found') return null;
+    if (state === 'all_encrypted' || state === 'empty') return null;
+
+    return reject(
+        c,
+        409,
+        'Context still has plaintext messages. Run `infinitecontext vault migrate-project` (or migrate-encrypt for this context) before appending encrypted messages.',
+        'vault_migrate_required',
+    );
+}
+
+export async function validateVaultPrunePlaintextVersions(
+    c: HttpContext,
+    deps: VaultEncryptionDeps,
+    storage: StorageAdapter,
+    projectId: number,
+    contextId: string,
+): Promise<Response | null> {
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session') return null;
+
+    const user = await deps.authRepo.findUserById(auth.userId);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
+    if (!policy.initialized) {
+        return reject(c, 403, 'Vault prune is only available for initialized vault accounts.');
+    }
+
+    const state = await getContextEncryptionState(storage, projectId, contextId);
+    if (state === 'not_found') return null;
+    if (state !== 'all_encrypted' && state !== 'empty') {
+        return reject(
+            c,
+            409,
+            'Context must be fully encrypted at the current head before pruning plaintext version history.',
+            'vault_migrate_required',
+        );
+    }
+
+    return null;
+}
+
 export async function validateVaultMessageRead(
     c: HttpContext,
     deps: VaultEncryptionDeps,
@@ -108,9 +187,7 @@ export async function validateVaultMessageRead(
     if (rows.length === 0) return null;
 
     const encryptedCount = rows.filter((row) => isEncryptedContent(row)).length;
-    if (allowLegacyMigrateRead && encryptedCount === 0) {
-        return null;
-    }
+    if (allowLegacyMigrateRead) return null;
     if (encryptedCount !== rows.length) {
         return reject(
             c,
@@ -122,6 +199,26 @@ export async function validateVaultMessageRead(
     }
 
     return null;
+}
+
+export function applyVaultMigrateReadGate(c: HttpContext): { allowLegacyMigrateRead: boolean; denied: Response | null } {
+    const header = c.req.header('x-ic-vault-migrate-read') === '1';
+    if (!header) return { allowLegacyMigrateRead: false, denied: null };
+
+    const auth = c.get('auth');
+    if (auth.kind !== 'user_session') {
+        return { allowLegacyMigrateRead: false, denied: null };
+    }
+
+    const { allowed } = noteVaultMigrateRead(auth.userId);
+    if (!allowed) {
+        return {
+            allowLegacyMigrateRead: false,
+            denied: reject(c, 429, 'Too many vault migrate read requests; slow down and retry.', 'rate_limited'),
+        };
+    }
+
+    return { allowLegacyMigrateRead: true, denied: null };
 }
 
 export async function validateVaultContextWrite(
@@ -139,6 +236,7 @@ export async function validateVaultHistoricalRead(
     deps: VaultEncryptionDeps,
     query: { version?: string; at?: string; before?: string },
     body: { data?: Array<Record<string, unknown>> },
+    allowLegacyMigrateRead: boolean,
 ): Promise<Response | null> {
     const isHistorical = query.version !== undefined || query.at !== undefined || query.before !== undefined;
     if (!isHistorical) return null;
@@ -152,7 +250,6 @@ export async function validateVaultHistoricalRead(
     const policy = await loadVaultPolicy(deps.authRepo, auth.userId, user.password_hash);
     if (!policy.initialized) return null;
 
-    const allowLegacyMigrateRead = c.req.header('x-ic-vault-migrate-read') === '1';
     return validateVaultMessageRead(c, deps, body, { allowLegacyMigrateRead });
 }
 

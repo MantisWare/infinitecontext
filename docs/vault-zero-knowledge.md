@@ -66,6 +66,9 @@ infinitecontext vault lock
 infinitecontext vault change-passphrase    # re-wrap DEK only
 infinitecontext vault rotate-recovery-key
 infinitecontext vault migrate-encrypt <ctx-id>   # opt-in plaintext → ciphertext
+infinitecontext vault migrate-project            # encrypt all contexts; prunes old plaintext version heads when done
+
+After large prune operations on self-hosted Postgres, operators may reclaim disk with `VACUUM (ANALYZE)` during a maintenance window (not run automatically by the CLI).
 infinitecontext vault devices list
 infinitecontext vault devices revoke <session-public-id>
 ```

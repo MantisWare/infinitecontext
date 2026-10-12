@@ -152,6 +152,15 @@ export class SupabaseAdapter implements StorageAdapter {
         if (error) throw error;
     }
 
+    async updateNodePrevId(projectId: number, publicId: string, prevId: string | null) {
+        const { error } = await this.client
+            .from('nodes')
+            .update({ prev_id: prevId })
+            .eq('project_id', projectId)
+            .eq('public_id', publicId);
+        if (error) throw error;
+    }
+
     async clearParentReferences(projectId: number, parentId: string) {
         const { error } = await this.client
             .from('nodes')

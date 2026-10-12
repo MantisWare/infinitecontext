@@ -7,6 +7,9 @@ PR #5 ships **confidentiality only**: ciphertext on the wire and at rest, with *
 - Drop messages from responses
 - Reorder messages within a version head
 - Roll back a client to an older version head that omits newer messages
+- Roll back or omit **individual messages** within a version (single-message rollback) while leaving the version index unchanged
+
+Legacy **`ic_chain_index` / `ic_chain_link`** metadata from preview builds is **inert** in PR #5 and must not be interpreted as integrity guarantees.
 
 ## Target design (follow-up PR)
 

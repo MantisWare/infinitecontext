@@ -68,8 +68,14 @@ async function setupLiveApp() {
         },
     });
 
-    async function json(method: string, urlPath: string, body?: unknown, token?: string) {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    async function json(
+        method: string,
+        urlPath: string,
+        body?: unknown,
+        token?: string,
+        extraHeaders?: Record<string, string>,
+    ) {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(extraHeaders ?? {}) };
         if (token) headers.Authorization = `Bearer ${token}`;
         const init: RequestInit = { method, headers };
         if (body !== undefined) init.body = JSON.stringify(body);
@@ -307,6 +313,78 @@ describe('vault postgres live e2e', () => {
         }
     });
 
+    it('blocks encrypted append until migrate and allows migrate-read on legacy plaintext', async (t) => {
+        if (!postgresReady) t.skip();
+        const { json, material } = await setupLiveApp();
+        const register = await json('POST', '/auth/register', {
+            email: `legacy-append-${Date.now()}@example.com`,
+            password: 'password123456',
+        });
+        const token = String(register.body.access_token ?? '');
+        const ctx = await json('POST', '/contexts', { metadata: { source: 'legacy-append' } }, token);
+        const contextId = String(ctx.body.id);
+        await json('POST', `/contexts/${contextId}`, { role: 'user', text: 'legacy-plain' }, token);
+
+        await json(
+            'PUT',
+            '/auth/crypto',
+            {
+                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+                kdf_params: material.kdfParams,
+                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                dek_version: material.dekVersion,
+                vault_passphrase_required: false,
+            },
+            token,
+        );
+
+        const me = await json('GET', '/auth/me', undefined, token);
+        const crypto = await import('@infinitecontext/crypto');
+        const nodeId = crypto.generateClientNodeId();
+        const aad = { contextId, userPublicId: String(me.body.id), nodePublicId: nodeId };
+        const enc = {
+            id: nodeId,
+            ...crypto.encryptNodeContent(material.dek, 1, { role: 'user', text: 'enc' }, aad),
+            metadata: crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: nodeId }, aad),
+        };
+
+        const blocked = await json('POST', `/contexts/${contextId}`, enc, token);
+        assert.equal(blocked.res.status, 409);
+
+        const noMigrateHeader = await json('GET', `/contexts/${contextId}`, undefined, token);
+        assert.equal(noMigrateHeader.res.status, 422);
+
+        const migrateRead = await json('GET', `/contexts/${contextId}`, undefined, token, {
+            'X-IC-Vault-Migrate-Read': '1',
+        });
+        assert.equal(migrateRead.res.status, 200);
+    });
+
+    it('concurrent duplicate icn appends return 409 not 500', async (t) => {
+        if (!postgresReady) t.skip();
+        const { json, vaultClient, accessToken, material, userPublicId } = await setupLiveApp();
+        const created = await vaultClient.create({ metadata: { source: 'concurrent-append' } });
+        const crypto = await import('@infinitecontext/crypto');
+        const nodeId = crypto.generateClientNodeId();
+        const aad = { contextId: created.id, userPublicId, nodePublicId: nodeId };
+        const enc = {
+            id: nodeId,
+            ...crypto.encryptNodeContent(material.dek, 1, { role: 'user', text: 'race' }, aad),
+            metadata: crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: nodeId }, aad),
+        };
+
+        const statuses: number[] = await Promise.all(
+            Array.from({ length: 12 }, () =>
+                json('POST', `/contexts/${created.id}`, enc, accessToken).then((r) => r.res.status as number),
+            ),
+        );
+        assert.equal(statuses.filter((s) => s === 201).length, 1);
+        assert.ok(statuses.every((s) => s === 201 || s === 409), statuses.join(','));
+        assert.ok(statuses.every((s) => Number(s) !== 500), 'concurrent appends must not 500');
+    });
+
     it('rejects historical plaintext version reads', async (t) => {
         if (!postgresReady) t.skip();
         const { json, accessToken } = await setupLiveApp();
@@ -365,10 +443,18 @@ describe('vault postgres live e2e', () => {
             }),
             { dek: material.dek, dekVersion: 1, userPublicId: String(me.body.id) },
         );
+        const legacyHead = await json('GET', `/contexts/${contextId}?version=0`, undefined, token);
+        assert.equal(legacyHead.res.status, 422);
+
         await vaultClient.append(contextId, { role: 'user', text: 'encrypted-new' });
 
-        const hist = await json('GET', `/contexts/${contextId}?version=0`, undefined, token);
-        assert.equal(hist.res.status, 422);
+        const after = await json('GET', `/contexts/${contextId}`, undefined, token);
+        assert.equal(after.res.status, 200);
+        const rows = (after.body.data ?? []) as Record<string, unknown>[];
+        assert.ok(rows.length >= 2);
+        for (const row of rows) {
+            assert.equal(row.__ic_enc, 1);
+        }
     });
 });
 

@@ -17,10 +17,13 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AuthRepository } from '@infinitecontext/auth';
 
 import {
+    applyVaultMigrateReadGate,
     validateVaultContextWrite,
     validateVaultDeleteWrite,
+    validateVaultEncryptedMessageWriteToContext,
     validateVaultHistoricalRead,
     validateVaultMessageRead,
+    validateVaultPrunePlaintextVersions,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
 import type { HttpApp } from '../types/http';
@@ -114,9 +117,11 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         const body = await c.req.json();
 
         if (vaultDeps) {
-            const denied = await validateVaultContextWrite(c, vaultDeps, body, 'messages', {
-                newMessageIdsOnly: true,
-            });
+            const denied =
+                (await validateVaultContextWrite(c, vaultDeps, body, 'messages', {
+                    newMessageIdsOnly: true,
+                })) ??
+                (await validateVaultEncryptedMessageWriteToContext(c, vaultDeps, storage, projectId, contextPublicId));
             if (denied) return denied;
         }
 
@@ -129,6 +134,11 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         const { projectId } = c.get('auth');
         const storage = c.get('storage');
         const contextPublicId = c.req.param('id');
+
+        if (vaultDeps) {
+            const denied = await validateVaultPrunePlaintextVersions(c, vaultDeps, storage, projectId, contextPublicId);
+            if (denied) return denied;
+        }
 
         const result = await prunePlaintextVersionHeads(storage, projectId, contextPublicId);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
@@ -152,10 +162,13 @@ export function registerContextRoutes(app: HttpApp, options?: { authRepo?: AuthR
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
 
         if (vaultDeps) {
-            const allowLegacyMigrateRead = c.req.header('x-ic-vault-migrate-read') === '1';
+            const migrateGate = applyVaultMigrateReadGate(c);
+            if (migrateGate.denied) return migrateGate.denied;
             const denied =
-                (await validateVaultHistoricalRead(c, vaultDeps, opts, result.data)) ??
-                (await validateVaultMessageRead(c, vaultDeps, result.data, { allowLegacyMigrateRead }));
+                (await validateVaultHistoricalRead(c, vaultDeps, opts, result.data, migrateGate.allowLegacyMigrateRead)) ??
+                (await validateVaultMessageRead(c, vaultDeps, result.data, {
+                    allowLegacyMigrateRead: migrateGate.allowLegacyMigrateRead,
+                }));
             if (denied) return denied;
         }
 

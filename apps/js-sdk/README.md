@@ -165,6 +165,10 @@ response = generate_text(model=model, messages=uc.get(ctx["id"])["data"])
 
 [![Star History Chart](https://api.star-history.com/svg?repos=infinitecontext/infinitecontext-node&type=date&legend=top-left)](https://www.star-history.com/#infinitecontext/infinitecontext-node&type=date&legend=top-left)
 
+## Development notes
+
+The onboarding wizard e2e test uses optional **`node-pty`** native bindings. Install with `pnpm install` (see root `pnpm.onlyBuiltDependencies`). On Linux you may need build tools (`build-essential`, `python3`) so `node-gyp` can compile `node-pty`.
+
 ## Documentation
 
 - [Quickstart](https://infinitecontext.ai/docs/quickstart) — Get running in 2 minutes

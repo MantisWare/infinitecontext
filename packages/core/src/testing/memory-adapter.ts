@@ -93,6 +93,11 @@ export class MemoryStorage implements StorageAdapter {
         this.nodes = this.nodes.filter((n) => !(n.project_id === projectId && n.public_id === publicId));
     }
 
+    async updateNodePrevId(projectId: number, publicId: string, prevId: string | null) {
+        const node = this.nodes.find((n) => n.project_id === projectId && n.public_id === publicId);
+        if (node) node.prev_id = prevId;
+    }
+
     async clearParentReferences(projectId: number, parentId: string) {
         for (const n of this.nodes) {
             if (n.project_id === projectId && n.parent_id === parentId) {

@@ -44,8 +44,20 @@ export async function prunePlaintextVersionHeads(
             );
         }
 
-        await storage.deleteNodesByContextId(projectId, oldest.head_id);
-        await storage.deleteNodeByPublicId(projectId, oldest.head_id);
+        const deletedHeadId = oldest.head_id;
+        await storage.deleteNodesByContextId(projectId, deletedHeadId);
+        await storage.deleteNodeByPublicId(projectId, deletedHeadId);
+
+        const remaining = await getVersions(storage, root.public_id);
+        const newOldest = remaining[0];
+        if (newOldest && newOldest.head_id !== deletedHeadId) {
+            const branches = await storage.findContextBranches(root.public_id);
+            const branch = branches.find((b) => b.public_id === newOldest.head_id);
+            if (branch?.prev_id === deletedHeadId) {
+                await storage.updateNodePrevId(projectId, newOldest.head_id, null);
+            }
+        }
+
         pruned += 1;
     }
 

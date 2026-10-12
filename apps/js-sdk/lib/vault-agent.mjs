@@ -134,6 +134,16 @@ async function pidLooksLikeVaultAgent(pid) {
   }
 }
 
+export function removeVaultAgentRuntimeFiles() {
+  for (const filePath of [socketPath(), pidPath()]) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export async function vaultAgentShutdown() {
   const agentAlive = await pingAgent();
   if (agentAlive) {
@@ -142,6 +152,7 @@ export async function vaultAgentShutdown() {
     } catch {
       // ignore
     }
+    removeVaultAgentRuntimeFiles();
     return;
   }
   try {
@@ -152,6 +163,7 @@ export async function vaultAgentShutdown() {
   } catch {
     // ignore
   }
+  removeVaultAgentRuntimeFiles();
 }
 
 export function vaultAgentAvailable() {

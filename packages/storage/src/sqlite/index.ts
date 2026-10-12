@@ -128,6 +128,13 @@ export class SqliteAdapter implements StorageAdapter {
         await this.db.delete(nodes).where(and(eq(nodes.project_id, projectId), eq(nodes.public_id, publicId)));
     }
 
+    async updateNodePrevId(projectId: number, publicId: string, prevId: string | null) {
+        await this.db
+            .update(nodes)
+            .set({ prev_id: prevId })
+            .where(and(eq(nodes.project_id, projectId), eq(nodes.public_id, publicId)));
+    }
+
     async clearParentReferences(projectId: number, parentId: string) {
         await this.db
             .update(nodes)

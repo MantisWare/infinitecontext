@@ -150,6 +150,27 @@ describe('vault CLI-equivalent e2e', () => {
         const dup = await json('POST', `/contexts/${contextId}`, enc, accessToken);
         assert.equal(dup.res.status, 409);
 
+        const stableClientId = String((enc.metadata as Record<string, unknown>).ic_client_node_id ?? enc.id);
+        const enc2 = encryptedMessage(material.dek, userPublicId, contextId);
+        const patchPayload = {
+            ...pickEnc(enc2),
+            metadata: { ...enc2.metadata, ic_client_node_id: stableClientId },
+        };
+        const patchMsg = await json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 0, ...patchPayload }] },
+            accessToken,
+        );
+        assert.equal(patchMsg.res.status, 200);
+        const patchAgain = await json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 0, ...patchPayload }] },
+            accessToken,
+        );
+        assert.equal(patchAgain.res.status, 200);
+
         const storedNodes = (storage as unknown as { nodes: Array<{ content: Record<string, unknown> }> }).nodes;
         const hasCipher = storedNodes.some((n) => n.content.__ic_enc === 1);
         assert.equal(hasCipher, true);
@@ -191,6 +212,55 @@ describe('vault CLI-equivalent e2e', () => {
         assert.deepEqual(dekFromRecovery, material.dek);
     });
 });
+
+describe('vault append and prune guards', () => {
+    it('rejects encrypted append to plaintext context and blocks prune for non-vault users', async () => {
+        const { json } = await setupVaultE2E();
+        const material = await createVaultCryptoMaterial('vault-guard-pass1');
+        const plainUser = await json('POST', '/auth/register', {
+            email: 'no-vault-prune@example.com',
+            password: 'password123456',
+        });
+        const plainToken = String(plainUser.body.access_token ?? '');
+        const ctx = await json('POST', '/contexts', { metadata: { source: 'prune-guard' } }, plainToken);
+        const contextId = String(ctx.body.id);
+        await json('POST', `/contexts/${contextId}`, { role: 'user', text: 'plain' }, plainToken);
+
+        const prunePlain = await json('POST', `/contexts/${contextId}/prune-plaintext-versions`, {}, plainToken);
+        assert.equal(prunePlain.res.status, 403);
+
+        await json(
+            'PUT',
+            '/auth/crypto',
+            {
+                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+                kdf_params: material.kdfParams,
+                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                dek_version: material.dekVersion,
+                vault_passphrase_required: false,
+            },
+            plainToken,
+        );
+
+        const me = await json('GET', '/auth/me', undefined, plainToken);
+        const enc = encryptedMessage(material.dek, String(me.body.id), contextId);
+        const blocked = await json('POST', `/contexts/${contextId}`, enc, plainToken);
+        assert.equal(blocked.res.status, 409);
+    });
+});
+
+function pickEnc(msg: Record<string, unknown>) {
+    return {
+        __ic_enc: msg.__ic_enc,
+        kid: msg.kid,
+        v: msg.v,
+        alg: msg.alg,
+        nonce: msg.nonce,
+        ct: msg.ct,
+    };
+}
 
 describe('google vault gate', () => {
     it('blocks writes until vault init for google-only accounts', async () => {

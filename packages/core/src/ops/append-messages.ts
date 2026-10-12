@@ -2,6 +2,7 @@
 // APPEND MESSAGES — append messages to a context (ported from POST /contexts/:id)
 // =============================================================================
 
+import { appendErrorCode } from './append-errors';
 import { buildNodeInsertRecords, findHead, findTail, getOrderedNodes, getVersions } from '../context-chain';
 import type { MessageView } from '../message-view';
 import type { StorageAdapter } from '../storage';
@@ -72,7 +73,7 @@ export async function appendMessages(
                 if (!input.clientPublicId) continue;
                 const existing = await tx.findNodeByPublicId(projectId, input.clientPublicId);
                 if (existing) {
-                    return { code: 'conflict', message: `Client node id already exists: ${input.clientPublicId}` };
+                    return { code: 'conflict', message: 'Client node id is already in use for this account' };
                 }
             }
             const insertRecords = buildNodeInsertRecords(typedInputs, projectId, head.public_id, tailPublicId);
@@ -94,8 +95,11 @@ export async function appendMessages(
 
             return { data, version: currentVersion };
         }, { isolationLevel: 'serializable' });
-    } catch {
-        // any tx failure collapses to a single internal error
+    } catch (error) {
+        const mapped = appendErrorCode(error);
+        if (mapped === 'conflict') {
+            return err('conflict', 'Concurrent append or client node id conflict; retry or run vault migrate-project');
+        }
         return err('internal', 'Failed to append messages');
     }
 

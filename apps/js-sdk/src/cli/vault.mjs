@@ -71,6 +71,16 @@ async function readPassphraseFromArgv(argv) {
   const fileFlag = argv.find((a) => a.startsWith("--passphrase-file="));
   if (fileFlag) {
     const filePath = fileFlag.slice("--passphrase-file=".length);
+    try {
+      const st = fs.statSync(filePath);
+      if ((st.mode & 0o077) !== 0) {
+        console.warn(
+          "Warning: passphrase file is readable by group or others; chmod 600 recommended.",
+        );
+      }
+    } catch {
+      // ignore stat errors; readFileSync will surface missing files
+    }
     const passphrase = fs.readFileSync(filePath, "utf8").replace(/\r?\n$/, "");
     if (!passphrase.trim()) throw new Error("Passphrase file is empty.");
     return passphrase;

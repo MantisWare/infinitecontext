@@ -19,7 +19,10 @@ describe("npm pack offline install", () => {
     assert.equal(pkg.dependencies?.["@infinitecontext/crypto"], undefined);
 
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-pack-"));
-    execSync(`npm install --no-save --ignore-scripts "${tgz}"`, { cwd: installDir, stdio: "inherit" });
+    execSync(`npm install --no-save --ignore-scripts --install-strategy=nested --legacy-peer-deps "file:${tgz}"`, {
+      cwd: installDir,
+      stdio: "inherit",
+    });
     const installedRoot = path.join(installDir, "node_modules", "infinitecontext");
     assert.ok(fs.existsSync(path.join(installedRoot, "lib/ic-crypto.mjs")));
     assert.ok(fs.existsSync(path.join(installedRoot, "lib/vault-agent-serve.mjs")));

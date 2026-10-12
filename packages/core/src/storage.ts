@@ -70,6 +70,7 @@ export interface StorageAdapter {
     insertNodes(values: NodeInsertRow | NodeInsertRow[]): Promise<Partial<NodeRow>[]>;
     deleteNodesByContextId(projectId: number, contextId: string): Promise<void>;
     deleteNodeByPublicId(projectId: number, publicId: string): Promise<void>;
+    updateNodePrevId(projectId: number, publicId: string, prevId: string | null): Promise<void>;
     clearParentReferences(projectId: number, parentId: string): Promise<void>;
     // batch-clear parent_id for all nodes whose parent_id is any of parentIds (single query)
     clearParentReferencesBulk(projectId: number, parentIds: string[]): Promise<void>;

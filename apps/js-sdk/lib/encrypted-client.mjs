@@ -5,6 +5,7 @@ import {
   encryptNodeContent,
   encryptNodeMetadata,
   generateClientNodeId,
+  isClientNodeId,
   isEncryptedContent,
   pickCleartextMetadata,
 } from "./ic-crypto.mjs";
@@ -44,6 +45,15 @@ function pickContentEnvelope(row) {
 function stripMessageShell(row) {
   const { id: _id, index: _index, metadata: _meta, created_at: _ca, ...content } = row;
   return content;
+}
+
+function resolveAadNodeId(msg) {
+  const meta = msg?.metadata;
+  if (meta && typeof meta === "object" && isClientNodeId(meta.ic_client_node_id)) {
+    return meta.ic_client_node_id;
+  }
+  if (typeof msg?.id === "string" && isClientNodeId(msg.id)) return msg.id;
+  return typeof msg?.id === "string" ? msg.id : null;
 }
 
 function encryptMessageFields(message, ctx, contextId, nodePublicId) {
@@ -218,8 +228,29 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async append(contextId, input) {
       ctx.contextId = contextId;
-      const encrypted = await encryptAppendBatch(client, contextId, input, ctx);
-      const res = await client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
+      const doAppend = async () => {
+        const encrypted = await encryptAppendBatch(client, contextId, input, ctx);
+        return client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
+      };
+      let res;
+      try {
+        res = await doAppend();
+      } catch (error) {
+        const status = error?.status;
+        const code = error?.bodyText && (() => {
+          try {
+            return JSON.parse(error.bodyText)?.code;
+          } catch {
+            return null;
+          }
+        })();
+        if (status === 409 && (code === "vault_migrate_required" || code === "vault_context_conflict")) {
+          await this.migrateEncryptContext(contextId);
+          res = await doAppend();
+        } else {
+          throw error;
+        }
+      }
       return mapGetResponse(res, contextId);
     },
 
@@ -242,13 +273,17 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       ctx.contextId = contextId;
       const rawUpdates = Array.isArray(input) ? input : input?.updates ?? [input];
       const encrypted = rawUpdates.map((msg) => {
-        const nodeId = msg.id ?? (() => {
+        const serverTargetId = msg.id ?? (() => {
           throw new Error("Vault update requires message id");
         })();
-        const { content, metadata } = encryptMessageFields(msg, ctx, contextId, nodeId);
+        const aadNodeId = resolveAadNodeId(msg);
+        if (!aadNodeId || !isClientNodeId(aadNodeId)) {
+          throw new Error("Vault update requires metadata.ic_client_node_id (icn_*)");
+        }
+        const { content, metadata } = encryptMessageFields(msg, ctx, contextId, aadNodeId);
         return {
           ...content,
-          id: nodeId,
+          id: serverTargetId,
           ...(msg.index !== undefined ? { index: msg.index } : {}),
           metadata,
         };
@@ -308,7 +343,11 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         return { encrypted: true, id: contextId, skipped: true };
       }
       const batchUpdates = plaintextRows.map((row) => {
-        const nodeId = generateClientNodeId();
+        const existingClientId = row?.metadata?.ic_client_node_id;
+        const nodeId =
+          typeof existingClientId === "string" && isClientNodeId(existingClientId)
+            ? existingClientId
+            : generateClientNodeId();
         const { content, metadata } = encryptMessageFields(
           { ...row, metadata: withClientNodeId(row.metadata, nodeId) },
           ctx,
