@@ -162,7 +162,7 @@ function deleteBootstrapState(key) {
 export async function daemonBoot({ createStore, resolveDbPath }) {
   const cfg = {
     apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
-    baseUrl: resolveBaseUrl({ required: true }),
+    baseUrl: resolveBaseUrl(),
     userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
     host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
     pollMs: toInt(process.env.DAEMON_POLL_MS, 1500),

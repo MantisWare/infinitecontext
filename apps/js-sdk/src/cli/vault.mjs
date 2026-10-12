@@ -25,7 +25,7 @@ function baseUrlFromArgs(argv) {
   if (flag) return flag.slice("--base-url=".length);
   const creds = loadCredentials();
   if (creds?.baseUrl) return creds.baseUrl;
-  return resolveBaseUrl({ required: true });
+  return resolveBaseUrl();
 }
 
 async function promptHidden(question) {

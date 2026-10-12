@@ -50,7 +50,7 @@ Commands:
 
 Environment:
   INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
-  INFINITECONTEXT_BASE_URL  API base URL (required for self-host — no hosted default)
+  INFINITECONTEXT_BASE_URL  API base URL (default: hosted free tier at api.infinitecontext.ai)
   INFINITECONTEXT_NO_UPDATE_CHECK  Set to 1 to skip optional npm version check
 
 Vault: Losing both your vault passphrase and recovery key means permanent data loss.

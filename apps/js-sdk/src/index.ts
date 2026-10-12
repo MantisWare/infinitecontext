@@ -1,4 +1,4 @@
-import { resolveRequiredBaseUrl } from './base-url';
+import { resolveBaseUrlFromConfig } from './base-url';
 
 export type InfiniteContextConfig = {
     apiKey?: string;
@@ -116,7 +116,13 @@ export type DeleteManyResponse = {
     deleted_count: number;
 };
 
-export { DOCS_API_BASE_URL_PLACEHOLDER, KEYS_AND_SERVICES_DOC_URL, MissingClientConfigError } from './base-url';
+export {
+    DOCS_API_BASE_URL_PLACEHOLDER,
+    HOSTED_API_BASE_URL,
+    KEYS_AND_SERVICES_DOC_URL,
+    MissingClientConfigError,
+    resolveBaseUrlFromConfig,
+} from './base-url';
 
 export class InfiniteContextHttpError extends Error {
     readonly status: number;
@@ -142,7 +148,7 @@ export class InfiniteContext {
     private readonly timeoutMs?: number;
 
     constructor(cfg: InfiniteContextConfig) {
-        this.baseUrl = resolveRequiredBaseUrl(cfg);
+        this.baseUrl = resolveBaseUrlFromConfig(cfg);
         this.apiKey = cfg.apiKey;
         this.accessToken = cfg.accessToken;
         this.getAccessTokenFn = cfg.getAccessToken;

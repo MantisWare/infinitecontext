@@ -1,9 +1,9 @@
 ---
 title: 'Keys and services'
-description: 'Bring-your-own configuration for a 100% free self-hosted InfiniteContext stack'
+description: 'Bring-your-own configuration for the free hosted tier and self-hosted InfiniteContext'
 ---
 
-InfiniteContext is **free and open source**. The repository does not ship paid-service credentials, hosted API endpoints, or telemetry. Every external dependency is **bring-your-own**: you choose providers, generate secrets locally, and store them in your environment or `~/.infinitecontext/config.json`.
+InfiniteContext is **free and open source**. The repository does not ship paid-service credentials or telemetry. External services (Postgres, SMTP, optional Resend, Google OAuth) are **bring-your-own** on self-host; the **hosted free tier** at `https://api.infinitecontext.ai` is operated separately and uses **zero-knowledge vault encryption** — the server stores and serves **ciphertext only** (see [vault zero-knowledge](/docs/vault-zero-knowledge) in the repo docs).
 
 <Info>No LLM API keys are required for core context storage. Future optional LLM features will follow the same pattern: documented, optional, and configured by you — never embedded in source.</Info>
 
@@ -13,16 +13,24 @@ These settings apply to the CLI, sync daemon, TUI, MCP server, and SDKs on your 
 
 | Setting | Required | Default | Env variable | Config key | If missing |
 |---------|----------|---------|--------------|------------|------------|
-| API base URL | **Yes** | none (self-host) | `INFINITECONTEXT_BASE_URL` | `baseUrl` via `infinitecontext config set server` | Cannot connect; run `infinitecontext config` or set URL |
+| API base URL | No | `https://api.infinitecontext.ai` (hosted) | `INFINITECONTEXT_BASE_URL` | `baseUrl` via `infinitecontext config set server` | Uses free hosted tier |
 | Legacy API key | One of key **or** login | — | `INFINITECONTEXT_API_KEY` | `apiKey` | Use `infinitecontext login` or set a project key |
 | Account session | One of key **or** login | — | (stored in `~/.infinitecontext/credentials.json`) | — | Run `infinitecontext login` |
 | Skip npm update check | No | check enabled | `INFINITECONTEXT_NO_UPDATE_CHECK=1` | — | Optional registry lookup on CLI start (not telemetry) |
 
 ```bash
-infinitecontext config show
+infinitecontext config show    # shows active server (hosted vs self-host)
 infinitecontext config doctor
-infinitecontext config set server http://127.0.0.1:8787
+infinitecontext config set server http://127.0.0.1:8787   # self-host
 ```
+
+Run `infinitecontext config` to pick **hosted** or **self-host** in the setup wizard.
+
+## Free hosted tier
+
+- **Default client URL:** `https://api.infinitecontext.ai` (single constant in each SDK).
+- **Zero-knowledge:** With vault enabled, message bodies and sensitive metadata are encrypted on your device; the hosted API does not hold decryption keys.
+- **Self-host anytime:** Same clients and vault model — point `config set server` or `INFINITECONTEXT_BASE_URL` at your own API.
 
 ## Server environment (Context API)
 
@@ -62,8 +70,8 @@ Copy `apps/api/wrangler.example.jsonc` to `apps/api/wrangler.jsonc` (gitignored)
 ## Health and auth providers
 
 ```bash
-curl -s http://127.0.0.1:8787/health/config
-curl -s http://127.0.0.1:8787/auth/providers
+curl -s https://api.infinitecontext.ai/health/config
+curl -s https://api.infinitecontext.ai/auth/providers
 ```
 
 `/health/config` returns booleans only (no secrets). Use it to see whether Google OAuth or SMTP is configured.

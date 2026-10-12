@@ -1,15 +1,14 @@
 import os
 
-import pytest
-
 from infinitecontext.client import InfiniteContext
+from infinitecontext.constants import HOSTED_API_BASE_URL
 
 
-def test_base_url_required():
+def test_default_hosted_base_url():
     old = os.environ.pop("INFINITECONTEXT_BASE_URL", None)
     try:
-        with pytest.raises(ValueError, match="base_url is required"):
-            InfiniteContext(api_key="ic_test_x")
+        client = InfiniteContext(api_key="ic_test_x")
+        assert client._base_url == HOSTED_API_BASE_URL
     finally:
         if old is not None:
             os.environ["INFINITECONTEXT_BASE_URL"] = old

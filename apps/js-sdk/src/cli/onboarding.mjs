@@ -14,7 +14,7 @@ import {
   ONBOARDING_CAPTURE_OPTIONS,
 } from "@infinitecontext/sync/onboarding-preferences";
 import { discoverRecentProjects } from "@infinitecontext/sync/recent-projects";
-import { KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
+import { HOSTED_API_BASE_URL, KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
 
 // agents list rendered in the wizard — "All" shortcut first, then each agent
 const AGENT_ROWS = [ONBOARDING_AGENT_ALL_OPTION, ...ONBOARDING_AGENT_OPTIONS];
@@ -69,7 +69,12 @@ function isValidKey(key) {
 
 // ── step constants ──────────────────────────────────────────────
 
-const STEPS = ["welcome", "url", "mode", "key", "agents", "projects", "capture", "launch", "done"];
+const STEPS = ["welcome", "hosting", "url", "mode", "key", "agents", "projects", "capture", "launch", "done"];
+
+const HOSTING_OPTIONS = [
+  { label: "Hosted (free — zero-knowledge vault)", value: "hosted" },
+  { label: "Self-host (your own Context API)", value: "selfhost" },
+];
 
 const MODE_OPTIONS = [
   { label: "API key (legacy project key)", value: "apikey" },
@@ -85,6 +90,7 @@ const LAUNCH_OPTIONS = [
 
 function stepNumber(step) {
   if (step === "welcome") return 1;
+  if (step === "hosting") return 2;
   if (step === "url") return 2;
   if (step === "mode" || step === "key") return 3;
   if (step === "agents") return 4;
@@ -105,8 +111,9 @@ function Onboarding({ onDone }) {
   const [step, setStep] = React.useState("welcome");
   // stack of prior steps — every forward transition pushes, goBack pops
   const [history, setHistory] = React.useState([]);
+  const [hosting, setHosting] = React.useState("hosted");
   const [authMode, setAuthMode] = React.useState("apikey");
-  const [baseUrl, setBaseUrl] = React.useState("");
+  const [baseUrl, setBaseUrl] = React.useState(HOSTED_API_BASE_URL);
   const [apiKey, setApiKey] = React.useState("");
   // multi-select agent list — default: watch them all
   const [captureAgents, setCaptureAgents] = React.useState(
@@ -177,11 +184,31 @@ function Onboarding({ onDone }) {
 
     // ── welcome ──
     if (step === "welcome") {
-      if (key.return) pushStep("url");
+      if (key.return) pushStep("hosting");
       return;
     }
 
-    // ── url input (required — no hosted default) ──
+    // ── hosted vs self-host ──
+    if (step === "hosting") {
+      if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
+      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, HOSTING_OPTIONS.length - 1));
+      if (input === "1") setSelectedIndex(0);
+      if (input === "2") setSelectedIndex(1);
+
+      if (key.return || input === " ") {
+        const chosen = HOSTING_OPTIONS[selectedIndex].value;
+        setHosting(chosen);
+        if (chosen === "hosted") {
+          setBaseUrl(HOSTED_API_BASE_URL);
+          pushStep("mode");
+        } else {
+          pushStep("url");
+        }
+      }
+      return;
+    }
+
+    // ── url input (self-host) ──
     if (step === "url") {
       if (key.return) {
         const trimmed = urlInput.trim();
@@ -387,6 +414,22 @@ function Onboarding({ onDone }) {
     );
   }
 
+  if (step === "hosting") {
+    content = React.createElement(
+      Box,
+      { flexDirection: "column" },
+      React.createElement(Text, { color: "white", bold: true }, "Where should InfiniteContext connect?"),
+      React.createElement(Box, { height: 1 }),
+      ...HOSTING_OPTIONS.map((opt, i) => ListRow({
+        keyProp: `h${i}`,
+        focused: i === selectedIndex,
+        label: opt.label,
+      })),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "\u2191\u2193 navigate \u00B7 enter select")
+    );
+  }
+
   if (step === "mode") {
     content = React.createElement(
       Box,
@@ -409,7 +452,7 @@ function Onboarding({ onDone }) {
       Box,
       { flexDirection: "column" },
       React.createElement(Text, { color: "white", bold: true }, "Enter your Context API base URL:"),
-      React.createElement(Text, { color: "gray" }, "Self-hosted — there is no hosted default."),
+      React.createElement(Text, { color: "gray" }, "Use your self-hosted Context API URL."),
       React.createElement(Box, { height: 1 }),
       React.createElement(Text, { color: "white", bold: true }, `> ${urlInput}_`),
       error ? React.createElement(Text, { color: "red" }, error) : null,

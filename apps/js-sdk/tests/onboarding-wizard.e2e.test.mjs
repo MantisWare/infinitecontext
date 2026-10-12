@@ -134,6 +134,16 @@ async function goWelcome(w) {
   await w.send(KEY.enter);
 }
 
+async function goHostingHosted(w) {
+  await w.waitFor(/Where should InfiniteContext connect/);
+  await w.send(KEY.enter);
+}
+
+async function goHostingSelfHost(w) {
+  await w.waitFor(/Where should InfiniteContext connect/);
+  await w.send(KEY.down, KEY.enter);
+}
+
 async function goUrlDefault(w) {
   await w.waitFor(/Context API base URL/);
   await w.send(KEY.enter);
@@ -175,6 +185,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       await goWelcome(w);
+      await goHostingSelfHost(w);
       await goUrlReplace(w, "https://api.example.com");
       await goApiKeyMode(w);
       await enterApiKey(w, "ic_test_abcdef123456");
@@ -207,7 +218,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
 
       await w.waitFor(/Enter your API key:/);
@@ -236,7 +247,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     const cfg = readConfig();
     assert.equal(cfg.apiKey, "ic_live_cloudkey99");
-    assert.equal(cfg.baseUrl, "http://127.0.0.1:8787");
+    assert.equal(cfg.baseUrl, "https://api.infinitecontext.ai");
     assert.deepEqual(cfg.captureAgents, ["codex"]);
     assert.deepEqual(cfg.projectPaths, [realProject]);
     assert.equal(cfg.bootstrapMode, "new_only");
@@ -247,7 +258,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       await goWelcome(w);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
 
       // key — bad input
@@ -285,6 +296,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       await goWelcome(w);
+      await goHostingSelfHost(w);
       await goUrlReplace(w, "http://wrong.example");
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
@@ -311,7 +323,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
 
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
 
       await w.waitFor(/Enter your API key:/);
@@ -343,7 +355,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     try {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_zero"), KEY.enter);
@@ -376,13 +388,15 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       await goWelcome(w);
-      await goUrlDefault(w);
+      await goHostingSelfHost(w);
+      await goUrlReplace(w, "https://api.left.test");
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(KEY.left);
       await w.waitFor(/How do you want to authenticate/);
       await w.send(KEY.left);
-      await goUrlReplace(w, "https://api.left.test");
+      await w.waitFor(/Context API base URL/);
+      await w.send(KEY.enter);
       await goApiKeyMode(w);
       await enterApiKey(w, "ic_test_left");
       await finishWizardDefaults(w);
@@ -401,7 +415,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     try {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_all"), KEY.enter);
@@ -431,7 +445,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
 
     try {
       await goWelcome(w);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_pers"));
@@ -455,7 +469,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     try {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_arrows"), KEY.enter);
@@ -502,7 +516,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     try {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_pick"), KEY.enter);
@@ -537,7 +551,7 @@ describeOnboarding("onboarding wizard e2e (real CLI, real pty)", () => {
     try {
       await w.waitFor(/Welcome to InfiniteContext/);
       await w.send(KEY.enter);
-      await goUrlDefault(w);
+      await goHostingHosted(w);
       await goApiKeyMode(w);
       await w.waitFor(/Enter your API key:/);
       await w.send(...chars("ic_test_all"), KEY.enter);

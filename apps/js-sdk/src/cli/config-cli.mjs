@@ -8,7 +8,9 @@ import {
   KEYS_AND_SERVICES_DOC_URL,
   maskSecret,
   readConfigFile,
+  describeActiveServer,
   resolveBaseUrl,
+  resolveBaseUrlSource,
   resolveSettingSource,
   writeConfigFile,
 } from "../../lib/client-config.mjs";
@@ -43,6 +45,11 @@ function keyDefByName(name) {
 }
 
 function cmdShow() {
+  const active = describeActiveServer(resolveBaseUrl());
+  const src = resolveBaseUrlSource();
+  console.log(`Active server: ${active.baseUrl}`);
+  console.log(`  kind:   ${active.label}`);
+  console.log(`  source: ${src.source}${src.envVar ? ` (${src.envVar})` : ""}\n`);
   console.log(`Config file: ${defaultConfigPath()}\n`);
   for (const def of CLIENT_CONFIG_KEYS) {
     const { source, value } = resolveSettingSource(def);

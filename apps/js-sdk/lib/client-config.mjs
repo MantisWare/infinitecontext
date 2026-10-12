@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-/** Placeholder used in docs/OpenAPI — not a runtime default. */
+/** Default free hosted Context API (single source of truth for this URL in JS). */
+export const HOSTED_API_BASE_URL = "https://api.infinitecontext.ai";
+
+/** Example URL for self-host docs and OpenAPI samples. */
 export const DOCS_API_BASE_URL_PLACEHOLDER = "https://your-api.example.com";
 
 /** Mintlify doc for bring-your-own keys and services. */
@@ -50,23 +53,47 @@ export function writeConfigFile(patch) {
   fs.writeFileSync(file, `${JSON.stringify({ ...existing, ...patch }, null, 2)}\n`, { mode: 0o600 });
 }
 
+export function normalizeBaseUrl(url) {
+  return String(url ?? "").trim().replace(/\/+$/, "");
+}
+
+export function isHostedApiBaseUrl(baseUrl) {
+  return normalizeBaseUrl(baseUrl) === HOSTED_API_BASE_URL;
+}
+
 /**
- * Resolve API base URL from env then config file. When `required`, throws with doc link.
- * @param {{ env?: NodeJS.ProcessEnv, config?: Record<string, unknown>, required?: boolean }} [opts]
+ * Resolve API base URL: env → config.json → hosted default.
+ * @param {{ env?: NodeJS.ProcessEnv, config?: Record<string, unknown> }} [opts]
  */
 export function resolveBaseUrl(opts = {}) {
   const env = opts.env ?? process.env;
   const config = opts.config ?? readConfigFile();
   const fromEnv = String(env.INFINITECONTEXT_BASE_URL ?? "").trim();
   const fromFile = String(config.baseUrl ?? "").trim();
-  const resolved = (fromEnv || fromFile).replace(/\/+$/, "");
-  if (!resolved && opts.required !== false) {
-    throw new MissingClientConfigError(
-      `API base URL is required. Set INFINITECONTEXT_BASE_URL or run: infinitecontext config set server <url>\n` +
-        `See ${KEYS_AND_SERVICES_DOC_URL}`,
-    );
+  return normalizeBaseUrl(fromEnv || fromFile || HOSTED_API_BASE_URL);
+}
+
+/** Where the effective base URL came from (for config show / login). */
+export function resolveBaseUrlSource(opts = {}) {
+  const env = opts.env ?? process.env;
+  const config = opts.config ?? readConfigFile();
+  const fromEnv = String(env.INFINITECONTEXT_BASE_URL ?? "").trim();
+  if (fromEnv) {
+    return { source: "environment", envVar: "INFINITECONTEXT_BASE_URL", value: normalizeBaseUrl(fromEnv) };
   }
-  return resolved;
+  const fromFile = String(config.baseUrl ?? "").trim();
+  if (fromFile) {
+    return { source: "config.json", envVar: null, value: normalizeBaseUrl(fromFile) };
+  }
+  return { source: "default", envVar: null, value: HOSTED_API_BASE_URL };
+}
+
+export function describeActiveServer(baseUrl = resolveBaseUrl()) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (isHostedApiBaseUrl(normalized)) {
+    return { baseUrl: normalized, kind: "hosted", label: "Hosted (free, zero-knowledge)" };
+  }
+  return { baseUrl: normalized, kind: "self-host", label: "Self-hosted" };
 }
 
 export function maskSecret(value, { visible = 4 } = {}) {
@@ -102,6 +129,9 @@ export function resolveSettingSource(keyDef) {
   const config = readConfigFile();
   if (keyDef.configField && String(config[keyDef.configField] ?? "").trim()) {
     return { source: "config.json", value: String(config[keyDef.configField]).trim() };
+  }
+  if (keyDef.key === "server") {
+    return { source: "default (hosted)", value: HOSTED_API_BASE_URL };
   }
   return { source: "default", value: "" };
 }

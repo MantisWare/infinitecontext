@@ -4,7 +4,7 @@ import os from "node:os";
 import process from "node:process";
 import readline from "node:readline/promises";
 
-import { resolveBaseUrl, KEYS_AND_SERVICES_DOC_URL } from "../../lib/client-config.mjs";
+import { describeActiveServer, resolveBaseUrl, KEYS_AND_SERVICES_DOC_URL, resolveBaseUrlSource } from "../../lib/client-config.mjs";
 import { saveCredentials } from "./credentials.mjs";
 const LOCAL_CALLBACK_PORT = 53682;
 
@@ -271,16 +271,10 @@ async function fetchAuthProviders(baseUrl) {
 
 export async function runLogin(argv = process.argv.slice(3)) {
   const args = parseArgs(argv);
-  let baseUrl;
-  try {
-    baseUrl = String(args.baseUrl ?? resolveBaseUrl({ required: true })).replace(/\/+$/, "");
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Set INFINITECONTEXT_BASE_URL or: infinitecontext config set server http://127.0.0.1:8787`);
-    console.error(`Documentation: ${KEYS_AND_SERVICES_DOC_URL}`);
-    process.exitCode = 1;
-    return;
-  }
+  const baseUrl = String(args.baseUrl ?? resolveBaseUrl()).replace(/\/+$/, "");
+  const active = describeActiveServer(baseUrl);
+  const src = resolveBaseUrlSource();
+  console.log(`Server: ${active.baseUrl} (${active.label}, source: ${src.source})`);
 
   if (args.google) {
     const providers = await fetchAuthProviders(baseUrl);

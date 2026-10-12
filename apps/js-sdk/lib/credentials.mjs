@@ -86,8 +86,7 @@ export async function getValidAccessToken({ baseUrl, fetchFn = fetch }) {
   const credentials = loadCredentials();
   if (!credentials?.refreshToken) return null;
 
-  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? resolveBaseUrl({ required: false }) ?? "").replace(/\/+$/, "");
-  if (!resolvedBaseUrl) return null;
+  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? resolveBaseUrl()).replace(/\/+$/, "");
   if (!isExpired(credentials.accessTokenExpiresAt) && credentials.accessToken) {
     return {
       accessToken: String(credentials.accessToken),

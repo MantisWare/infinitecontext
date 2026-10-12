@@ -116,7 +116,7 @@ function normalizeBootstrapModeWithPrompt(raw) {
 
 const cfg = {
   apiKey: normalizeApiKey(process.env.INFINITECONTEXT_API_KEY),
-  baseUrl: resolveBaseUrl({ required: true }),
+  baseUrl: resolveBaseUrl(),
   userId: process.env.DAEMON_USER_ID ?? process.env.USER ?? "unknown-user",
   host: (process.env.DAEMON_HOST || os.hostname() || "unknown-host").trim(),
   uiRefreshMs: toInt(process.env.TUI_REFRESH_MS, 1200),

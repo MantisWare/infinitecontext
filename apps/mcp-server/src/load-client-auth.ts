@@ -22,7 +22,7 @@ function readConfigFile(): Record<string, unknown> {
 
 export function loadClientAuth(): LoadedClientAuth {
     const config = readConfigFile();
-    const baseUrl = resolveBaseUrl({ config, required: true });
+    const baseUrl = resolveBaseUrl({ config });
 
     const envKey = String(process.env.INFINITECONTEXT_API_KEY ?? "").trim();
     const fileKey = String(config.apiKey ?? "").trim();
