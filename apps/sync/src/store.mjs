@@ -130,6 +130,9 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
         sequence = excluded.sequence,
         updated_at = unixepoch()
     `),
+    deleteSyncMessage: db.prepare(`
+      DELETE FROM sync_message_nodes WHERE client_node_id = ?
+    `),
   };
 
   // manual transaction wrapper (node:sqlite has no .transaction() helper)
@@ -201,7 +204,22 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
         return;
       }
 
-      if (op === "message_append" || op === "message_update" || op === "message_delete") {
+      if (op === "message_delete") {
+        const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
+        for (const id of deletedIds) {
+          if (id) stmt.deleteSyncMessage.run(String(id));
+        }
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        for (const row of rows) {
+          if (!row || typeof row !== "object") continue;
+          const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+          if (!clientNodeId) continue;
+          stmt.upsertSyncMessage.run(String(clientNodeId), String(payload.context_id ?? contextId), JSON.stringify(row), sequence);
+        }
+        return;
+      }
+
+      if (op === "message_append" || op === "message_update") {
         const rows = Array.isArray(payload.data) ? payload.data : [];
         for (const row of rows) {
           if (!row || typeof row !== "object") continue;

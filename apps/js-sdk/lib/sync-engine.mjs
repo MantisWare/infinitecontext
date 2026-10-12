@@ -28,6 +28,15 @@ export function getSyncCursor() {
   return Number(readSyncState().cursor ?? 0);
 }
 
+export function readLocalSyncState() {
+  const state = readSyncState();
+  return {
+    cursor: Number(state.cursor ?? 0),
+    outbox: Array.isArray(state.outbox) ? state.outbox : [],
+    parked_failures: Array.isArray(state.parked_failures) ? state.parked_failures : [],
+  };
+}
+
 export function queueSyncMutation(mutation) {
   const state = readSyncState();
   const outbox = Array.isArray(state.outbox) ? state.outbox : [];
@@ -55,14 +64,28 @@ export async function flushSyncOutbox({ baseUrl, log } = {}) {
   const result = await pushSyncMutations(outbox, { baseUrl });
   const settled = settledClientIds(result);
   const remaining = outbox.filter((m) => !settled.has(m.client_id));
-  writeSyncState({ ...state, outbox: remaining });
+  const parkedExisting = Array.isArray(state.parked_failures) ? state.parked_failures : [];
+  const parkedById = new Map(parkedExisting.map((row) => [row.client_id, row]));
+  for (const row of result.failed ?? []) {
+    if (row?.retryable || !row?.client_id) continue;
+    parkedById.set(row.client_id, row);
+  }
+  const parked_failures = [...parkedById.values()];
+  writeSyncState({ ...state, outbox: remaining, parked_failures });
   if (log && result.conflicts?.length) {
     log("warn", "Sync push recorded conflicts", { count: result.conflicts.length });
   }
   if (log && result.failed?.length) {
-    log("warn", "Sync push left retryable mutations in outbox", { count: result.failed.length });
+    const retryable = result.failed.filter((row) => row.retryable);
+    if (retryable.length) {
+      log("warn", "Sync push left retryable mutations in outbox", { count: retryable.length });
+    }
+    const dropped = result.failed.filter((row) => !row.retryable);
+    if (dropped.length) {
+      log("warn", "Sync push parked non-retryable failures", { count: dropped.length });
+    }
   }
-  return { pushed: result.applied?.length ?? 0, result, remaining: remaining.length };
+  return { pushed: result.applied?.length ?? 0, result, remaining: remaining.length, parked_failures };
 }
 
 function readReplica() {
@@ -140,7 +163,28 @@ export function applySyncChangeToReplica(replica, change, persist) {
     return;
   }
 
-  if (op === "message_update" || op === "message_delete") {
+  if (op === "message_delete") {
+    const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
+    for (const id of deletedIds) {
+      if (id) delete replica.messages[String(id)];
+    }
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+      if (!clientNodeId) continue;
+      replica.messages[String(clientNodeId)] = {
+        context_id: String(payload.context_id ?? contextId),
+        payload: row,
+        sequence,
+        op,
+      };
+    }
+    persist(replica);
+    return;
+  }
+
+  if (op === "message_update") {
     const rows = Array.isArray(payload.data) ? payload.data : [];
     for (const row of rows) {
       if (!row || typeof row !== "object") continue;

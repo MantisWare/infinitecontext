@@ -349,6 +349,228 @@ describe('sync-postgres-live vault', () => {
         assert.ok(payload.includes('__ic_enc') || payload.includes('ciphertext'), 'vault change log must not store plaintext bodies');
     });
 
+    it('message_delete with stale base_sequence records conflict instead of deleting', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'del-race', session_id: 'dr1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: m1,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m1, role: 'user', content: { message: 'one' }, metadata: { ic_client_node_id: m1 } }] },
+                    },
+                    {
+                        client_id: m2,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m2, role: 'user', content: { message: 'two' }, metadata: { ic_client_node_id: m2 } }] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const statusBefore = await fx.json('GET', '/sync/status', undefined, fx.accessA);
+        const baseSeq = Number(statusBefore.body.head_sequence ?? 0);
+
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: {
+                            data: [{ id: m1, role: 'user', content: { message: 'one edited' }, metadata: { ic_client_node_id: m1 } }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+
+        const delAttempt = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        base_sequence: baseSeq,
+                        payload: { ids: [m1] },
+                    },
+                ],
+            },
+            fx.accessB,
+        );
+        assert.equal(delAttempt.res.status, 200);
+        const conflictKinds = (delAttempt.body.conflicts as any[])?.map((c) => c.kind) ?? [];
+        assert.ok(conflictKinds.includes('delete_stale_base'), `expected delete_stale_base, got ${conflictKinds.join(',')}`);
+
+        const read = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        assert.equal((read.body.data as any[])?.length, 2);
+    });
+
+    it('message_update on a different icn id succeeds after message_delete', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'del-then-upd', session_id: 'dtu1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: m1,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m1, role: 'user', content: { message: 'drop me' }, metadata: { ic_client_node_id: m1 } }] },
+                    },
+                    {
+                        client_id: m2,
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: { messages: [{ id: m2, role: 'user', content: { message: 'keep' }, metadata: { ic_client_node_id: m2 } }] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const del = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        payload: { ids: [m1] },
+                    },
+                ],
+            },
+            fx.accessB,
+        );
+        assert.equal(del.res.status, 200);
+        const upd = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: {
+                            data: [{ id: m2, role: 'user', content: { message: 'keep edited' }, metadata: { ic_client_node_id: m2 } }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(upd.res.status, 200);
+        const failedCodes = (upd.body.failed as any[])?.map((f) => f.code) ?? [];
+        assert.ok(!failedCodes.includes('context_deleted'), `unexpected context_deleted: ${failedCodes.join(',')}`);
+
+        const read = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const messages = (read.body.data as any[]) ?? [];
+        assert.equal(messages.length, 1);
+        assert.match(String(messages[0]?.content?.message ?? ''), /keep edited/);
+    });
+
+    it('contexts_delete_many works via sync push under vault', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const material = await createVaultCryptoMaterial('vault-del-many');
+        await fx.json(
+            'PUT',
+            '/auth/crypto',
+            {
+                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+                kdf_params: material.kdfParams,
+                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                dek_version: material.dekVersion,
+                vault_passphrase_required: false,
+            },
+            fx.accessA,
+        );
+        const c1 = generateClientNodeId();
+        const c2 = generateClientNodeId();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    { client_id: c1, op: 'context_create', payload: { metadata: { source: 'bulk-del', n: 1 } } },
+                    { client_id: c2, op: 'context_create', payload: { metadata: { source: 'bulk-del', n: 2 } } },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(create.res.status, 200);
+        const ctx1 = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const ctx2 = String((create.body.effects as any[])?.[1]?.context_id ?? '');
+        const delMany = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'contexts_delete_many',
+                        payload: { ids: [ctx1, ctx2] },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(delMany.res.status, 200, JSON.stringify(delMany.body));
+        assert.ok(Number((delMany.body.effects as any[])?.[0]?.payload?.deleted_count ?? 0) >= 2);
+    });
+
     it('rejects plaintext message_update via sync push', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();

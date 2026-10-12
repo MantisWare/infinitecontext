@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { findHead, getOrderedNodes, getVersions } from '../context-chain';
+import { clientNodeIdFromMetadata, resolveMessagePublicId } from '../message-target';
 import { generatePublicId } from '../public-ids';
 import { isPlainObject } from '../request-parsing';
 import type { MessageView } from '../message-view';
@@ -43,7 +44,7 @@ export async function deleteMessages(
     projectId: number,
     contextId: string,
     params: DeleteMessagesParams
-): Promise<Result<{ data: MessageView[]; version: number }>> {
+): Promise<Result<{ data: MessageView[]; version: number; deleted_client_ids: string[] }>> {
     const { ids, userMetadata } = params;
 
     // userMetadata, when present, must be a plain object
@@ -76,20 +77,20 @@ export async function deleteMessages(
 
     // load the ordered messages under the current head
     const orderedNodes = await getOrderedNodes(storage, currentHead.public_id);
-    const nodeIds = new Set(orderedNodes.map((n) => n.public_id));
 
-    // resolve each target to a concrete message public id
+    // resolve each target to a concrete message public id (stable icn_* client ids supported)
     const idsToDelete: string[] = [];
+    const deletedClientIds: string[] = [];
     for (const input of rawIds) {
-        if (typeof input === 'string') {
-            if (!nodeIds.has(input)) return err('not_found', `Message not found: ${input}`);
-            idsToDelete.push(input);
-        } else {
-            let idx = input;
-            if (idx < 0) idx = orderedNodes.length + idx;
-            if (idx < 0 || idx >= orderedNodes.length) return err('invalid_input', `Index out of range: ${input}`);
-            idsToDelete.push(orderedNodes[idx].public_id);
-        }
+        const resolved = resolveMessagePublicId(orderedNodes, input);
+        if ('code' in resolved) return err(resolved.code, resolved.message);
+        idsToDelete.push(resolved.publicId);
+        const node = orderedNodes.find((n) => n.public_id === resolved.publicId);
+        const clientId =
+            typeof input === 'string' && /^icn_[0-9a-f]{24}$/.test(input)
+                ? input
+                : clientNodeIdFromMetadata((node?.metadata ?? {}) as Record<string, unknown>);
+        if (clientId) deletedClientIds.push(clientId);
     }
     const deleteSet = new Set(idsToDelete);
 
@@ -148,5 +149,5 @@ export async function deleteMessages(
         metadata: n.metadata,
     }));
 
-    return ok({ data: result, version: currentVersion });
+    return ok({ data: result, version: currentVersion, deleted_client_ids: deletedClientIds });
 }

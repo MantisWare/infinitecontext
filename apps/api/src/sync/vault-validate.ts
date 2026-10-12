@@ -50,9 +50,14 @@ export async function validateVaultSyncPush(
             continue;
         }
 
+        if (mutation.op === 'contexts_delete_many') {
+            const denied = await validateVaultDeleteWrite(c, deps, mutation.payload ?? {});
+            if (denied) return denied;
+            continue;
+        }
+
         const contextId = mutation.context_id;
         if (!contextId) {
-            if (mutation.op === 'contexts_delete_many') continue;
             return c.json({ error: 'context_id required for this sync op' }, 400);
         }
 
@@ -74,7 +79,7 @@ export async function validateVaultSyncPush(
             continue;
         }
 
-        if (mutation.op === 'context_delete' || mutation.op === 'contexts_delete_many') {
+        if (mutation.op === 'context_delete') {
             const denied = await validateVaultDeleteWrite(c, deps, mutation.payload ?? {});
             if (denied) return denied;
             continue;

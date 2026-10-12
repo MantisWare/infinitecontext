@@ -136,11 +136,84 @@ async function runDaemonCycle(home: string, dbFile: string) {
     await new Promise((r) => setTimeout(r, 300));
 }
 
-function countDaemonMessages(dbFile: string): number {
+function countDaemonMessages(dbFile: string, contextId?: string): number {
     const db = new DatabaseSync(dbFile);
-    const row = db.prepare('SELECT COUNT(*) AS c FROM sync_message_nodes').get();
+    const row = contextId
+        ? db.prepare('SELECT COUNT(*) AS c FROM sync_message_nodes WHERE context_id = ?').get(contextId)
+        : db.prepare('SELECT COUNT(*) AS c FROM sync_message_nodes').get();
     db.close();
     return Number((row as { c: number }).c ?? 0);
+}
+
+async function setupVaultCrypto(accessA: string) {
+    const material = await createVaultCryptoMaterial('vault-daemon-e2e-pass');
+    await apiJson(
+        'PUT',
+        '/auth/crypto',
+        {
+            kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+            kdf_params: material.kdfParams,
+            wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+            wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+            dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+            dek_version: material.dekVersion,
+            vault_passphrase_required: false,
+        },
+        accessA,
+    );
+    return material;
+}
+
+async function createVaultContext(accessA: string, material: Awaited<ReturnType<typeof createVaultCryptoMaterial>>, sessionId: string) {
+    const create = await apiJson(
+        'POST',
+        '/sync/push',
+        {
+            mutations: [
+                {
+                    client_id: generateClientNodeId(),
+                    op: 'context_create',
+                    payload: { metadata: { source: 'vault-daemon-e2e', session_id: sessionId } },
+                },
+            ],
+        },
+        accessA,
+    );
+    const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+    const me = await apiJson('GET', '/auth/me', undefined, accessA);
+    const userPublicId = String(me.body.id);
+    return { contextId, userPublicId };
+}
+
+async function appendVaultPlaintextMessages(
+    access: string,
+    material: Awaited<ReturnType<typeof createVaultCryptoMaterial>>,
+    contextId: string,
+    userPublicId: string,
+    entries: Array<{ clientId: string; message: string }>,
+) {
+    const crypto = await import('@infinitecontext/crypto');
+    const messages = entries.map(({ clientId, message }) => {
+        const aad = { contextId, userPublicId, nodePublicId: clientId };
+        return {
+            id: clientId,
+            ...crypto.encryptNodeContent(material.dek, 1, { role: 'user', message }, aad),
+            metadata: crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: clientId, source: 'vault' }, aad),
+        };
+    });
+    await apiJson(
+        'POST',
+        '/sync/push',
+        {
+            mutations: entries.map(({ clientId }) => ({
+                client_id: clientId,
+                op: 'message_append',
+                context_id: contextId,
+                payload: { messages: messages.filter((m) => m.id === clientId) },
+            })),
+        },
+        access,
+    );
 }
 
 async function unlockVaultInHome(home: string, passphrase: string) {
@@ -300,5 +373,270 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const blob = JSON.stringify(rows);
         assert.ok(!blob.includes('"message":"secret"'), 'daemon replica must not contain decrypted plaintext');
         assert.ok(blob.includes('__ic_enc') || blob.includes('ciphertext'));
+    });
+
+    it('vault: delete stale base conflicts; replica matches server after delete', async () => {
+        if (!postgresReady) return;
+        const email = `daemon-vdel-${Date.now()}@example.com`;
+        const auth = await authPair(email);
+        const material = await setupVaultCrypto(auth.accessA);
+        const homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vdel-a-'));
+        const homeB = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vdel-b-'));
+        const dbA = path.join(homeA, 'daemon.db');
+        const dbB = path.join(homeB, 'daemon.db');
+        writeCredentials(homeA, {
+            accessToken: auth.accessA,
+            refreshToken: auth.refreshA,
+            accessTokenExpiresAt: auth.accessExpiresA,
+            refreshTokenExpiresAt: auth.refreshExpiresA,
+        });
+        writeCredentials(homeB, {
+            accessToken: auth.accessB,
+            refreshToken: auth.refreshB,
+            accessTokenExpiresAt: auth.accessExpiresB,
+            refreshTokenExpiresAt: auth.refreshExpiresB,
+        });
+        await unlockVaultInHome(homeA, 'vault-daemon-e2e-pass');
+        await unlockVaultInHome(homeB, 'vault-daemon-e2e-pass');
+
+        const { contextId } = await createVaultContext(auth.accessA, material, 'vdel1');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await appendVaultPlaintextMessages(auth.accessA, material, contextId, String((await apiJson('GET', '/auth/me', undefined, auth.accessA)).body.id), [
+            { clientId: m1, message: 'one' },
+            { clientId: m2, message: 'two' },
+        ]);
+
+        const statusBefore = await apiJson('GET', '/sync/status', undefined, auth.accessA);
+        const baseSeq = Number(statusBefore.body.head_sequence ?? 0);
+
+        const crypto = await import('@infinitecontext/crypto');
+        const userPublicId = String((await apiJson('GET', '/auth/me', undefined, auth.accessA)).body.id);
+        const aad = { contextId, userPublicId, nodePublicId: m1 };
+        const encUpd = {
+            id: m1,
+            ...crypto.encryptNodeContent(material.dek, 1, { role: 'user', message: 'one edited' }, aad),
+            metadata: crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: m1, source: 'vault' }, aad),
+        };
+        await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: { data: [encUpd] },
+                    },
+                ],
+            },
+            auth.accessA,
+        );
+
+        const delAttempt = await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        base_sequence: baseSeq,
+                        payload: { ids: [m1] },
+                    },
+                ],
+            },
+            auth.accessB,
+        );
+        const conflictKinds = (delAttempt.body.conflicts as any[])?.map((c) => c.kind) ?? [];
+        assert.ok(conflictKinds.includes('delete_stale_base'));
+
+        await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_delete',
+                        context_id: contextId,
+                        payload: { ids: [m2] },
+                    },
+                ],
+            },
+            auth.accessA,
+        );
+
+        await runDaemonCycle(homeA, dbA);
+        await runDaemonCycle(homeB, dbB);
+
+        const read = await apiJson('GET', `/contexts/${contextId}`, undefined, auth.accessA);
+        const serverCount = ((read.body.data as any[]) ?? []).length;
+        assert.equal(countDaemonMessages(dbA, contextId), serverCount);
+        assert.equal(countDaemonMessages(dbB, contextId), serverCount);
+    });
+
+    it('vault: update on different message after delete is not context_deleted', async () => {
+        if (!postgresReady) return;
+        const email = `daemon-vupd-${Date.now()}@example.com`;
+        const auth = await authPair(email);
+        const material = await setupVaultCrypto(auth.accessA);
+        const homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vupd-a-'));
+        const dbA = path.join(homeA, 'daemon.db');
+        writeCredentials(homeA, {
+            accessToken: auth.accessA,
+            refreshToken: auth.refreshA,
+            accessTokenExpiresAt: auth.accessExpiresA,
+            refreshTokenExpiresAt: auth.refreshExpiresA,
+        });
+        await unlockVaultInHome(homeA, 'vault-daemon-e2e-pass');
+
+        const me = await apiJson('GET', '/auth/me', undefined, auth.accessA);
+        const userPublicId = String(me.body.id);
+        const { contextId } = await createVaultContext(auth.accessA, material, 'vupd1');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await appendVaultPlaintextMessages(auth.accessA, material, contextId, userPublicId, [
+            { clientId: m1, message: 'drop' },
+            { clientId: m2, message: 'stay' },
+        ]);
+
+        await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [{ client_id: generateClientNodeId(), op: 'message_delete', context_id: contextId, payload: { ids: [m1] } }],
+            },
+            auth.accessB,
+        );
+
+        const crypto = await import('@infinitecontext/crypto');
+        const aad = { contextId, userPublicId, nodePublicId: m2 };
+        const encUpd = {
+            id: m2,
+            ...crypto.encryptNodeContent(material.dek, 1, { role: 'user', message: 'stay edited' }, aad),
+            metadata: crypto.encryptNodeMetadata(material.dek, 1, { ic_client_node_id: m2, source: 'vault' }, aad),
+        };
+        const upd = await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    { client_id: generateClientNodeId(), op: 'message_update', context_id: contextId, payload: { data: [encUpd] } },
+                ],
+            },
+            auth.accessA,
+        );
+        const failedCodes = (upd.body.failed as any[])?.map((f) => f.code) ?? [];
+        assert.ok(!failedCodes.includes('context_deleted'));
+
+        await runDaemonCycle(homeA, dbA);
+        const read = await apiJson('GET', `/contexts/${contextId}`, undefined, auth.accessA);
+        assert.equal(((read.body.data as any[]) ?? []).length, 1);
+    });
+
+    it('vault: contexts_delete_many via sync push', async () => {
+        if (!postgresReady) return;
+        const email = `daemon-vbulk-${Date.now()}@example.com`;
+        const auth = await authPair(email);
+        await setupVaultCrypto(auth.accessA);
+        const c1 = generateClientNodeId();
+        const c2 = generateClientNodeId();
+        const create = await apiJson(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    { client_id: c1, op: 'context_create', payload: { metadata: { source: 'vbulk', n: 1 } } },
+                    { client_id: c2, op: 'context_create', payload: { metadata: { source: 'vbulk', n: 2 } } },
+                ],
+            },
+            auth.accessA,
+        );
+        const ctx1 = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const ctx2 = String((create.body.effects as any[])?.[1]?.context_id ?? '');
+        const delMany = await apiJson(
+            'POST',
+            '/sync/push',
+            { mutations: [{ client_id: generateClientNodeId(), op: 'contexts_delete_many', payload: { ids: [ctx1, ctx2] } }] },
+            auth.accessA,
+        );
+        assert.equal(delMany.res.status, 200, JSON.stringify(delMany.body));
+    });
+
+    it('plaintext: offline codex lines push after reconnect', async () => {
+        if (!postgresReady) return;
+        const email = `daemon-offline-${Date.now()}@example.com`;
+        const auth = await authPair(email);
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-offline-'));
+        const dbFile = path.join(home, 'daemon.db');
+        writeCredentials(home, {
+            accessToken: auth.accessA,
+            refreshToken: auth.refreshA,
+            accessTokenExpiresAt: auth.accessExpiresA,
+            refreshTokenExpiresAt: auth.refreshExpiresA,
+        });
+
+        const sessionDir = path.join(home, '.codex', 'sessions');
+        fs.mkdirSync(sessionDir, { recursive: true });
+        const sessionFile = path.join(sessionDir, 'offline-e2e.jsonl');
+        const sessionId = `sess-offline-${Date.now()}`;
+        const lines = [
+            JSON.stringify({
+                timestamp: new Date().toISOString(),
+                type: 'session_meta',
+                payload: { id: sessionId, cwd: '/tmp/offline-e2e' },
+            }),
+            JSON.stringify({
+                timestamp: new Date().toISOString(),
+                type: 'event_msg',
+                payload: { type: 'user_message', message: 'offline daemon line unique marker xyzzy' },
+            }),
+        ];
+        fs.writeFileSync(sessionFile, `${lines.join('\n')}\n`, 'utf8');
+
+        const codexGlob = sessionFile;
+        const offlineEnv = {
+            ...cliEnv(home, dbFile, {
+                CODEX_GLOB: codexGlob,
+                INGEST_CLAUDE: 'false',
+                INGEST_CURSOR: 'false',
+                INGEST_OPENCLAW: 'false',
+                INGEST_GEMINI: 'false',
+                INGEST_GSTACK: 'false',
+                INGEST_CODEX: 'true',
+                DAEMON_BOOTSTRAP_MODE: 'all',
+                INFINITECONTEXT_BASE_URL: 'http://127.0.0.1:9',
+            }),
+        };
+
+        await ensureDaemonDb(dbFile);
+        const offlineChild = spawn(process.execPath, [cliPath, 'sync', 'start'], {
+            env: offlineEnv,
+            stdio: 'ignore',
+        });
+        await new Promise((r) => setTimeout(r, 4500));
+        try {
+            await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: offlineEnv });
+        } catch {
+            offlineChild.kill('SIGTERM');
+        }
+        await new Promise((r) => setTimeout(r, 300));
+
+        const contextsBefore = await apiJson('GET', '/contexts?limit=50', undefined, auth.accessA);
+        const beforeCount = ((contextsBefore.body.data as any[]) ?? []).length;
+
+        await runDaemonCycle(home, dbFile);
+
+        const contextsAfter = await apiJson('GET', '/contexts?limit=50', undefined, auth.accessA);
+        const afterList = (contextsAfter.body.data as any[]) ?? [];
+        assert.ok(afterList.length > beforeCount, 'expected new context from offline replay');
+        const hit = afterList.find((c) => JSON.stringify(c.metadata ?? {}).includes(sessionId));
+        assert.ok(hit?.id, 'expected daemon-created context for offline session');
+        const ctx = await apiJson('GET', `/contexts/${hit.id}`, undefined, auth.accessA);
+        const blob = JSON.stringify(ctx.body.data ?? []);
+        assert.ok(blob.includes('xyzzy'), 'offline line should reach server after reconnect');
     });
 });

@@ -7,6 +7,7 @@ import { prunePlaintextVersionHeads } from '../ops/prune-plaintext-versions';
 import { updateMessages } from '../ops/update-messages';
 import { updateContextMetadataLww } from '../ops/update-context-metadata';
 import type { StorageAdapter } from '../storage';
+import { clientNodeIdFromMetadata } from '../message-target';
 import { generateSyncConflictPublicId } from './public-ids';
 import type { SyncRepository, TransactionalSyncRepository } from './repository';
 import {
@@ -63,11 +64,18 @@ function validateMutation(raw: unknown): SyncMutation | { error: string } {
     if (!isPlainObject(payload)) return { error: 'payload must be an object' };
     const contextId = raw.context_id === undefined ? undefined : String(raw.context_id);
     const updatedAt = raw.updated_at === undefined ? undefined : String(raw.updated_at);
+    const baseSequence =
+        raw.base_sequence === undefined
+            ? payload.base_sequence !== undefined
+                ? Number(payload.base_sequence)
+                : undefined
+            : Number(raw.base_sequence);
     return {
         client_id: clientId,
         op,
         context_id: contextId,
         updated_at: updatedAt,
+        base_sequence: Number.isFinite(baseSequence) ? baseSequence : undefined,
         payload,
     };
 }
@@ -483,7 +491,7 @@ export class SyncService {
 
         if (mutation.op === 'message_update') {
             const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload);
-            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_update');
             return {
                 kind: 'ok',
                 contextId,
@@ -492,18 +500,34 @@ export class SyncService {
         }
 
         if (mutation.op === 'message_delete') {
+            const deleteParams = mutation.payload as { ids?: unknown; base_sequence?: number };
+            const rawIds = deleteParams.ids;
+            const idList = Array.isArray(rawIds) ? rawIds : rawIds === undefined ? [] : [rawIds];
+            const targetClientIds = idList
+                .filter((id): id is string => typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id))
+                .map(String);
+            const baseSeq = mutation.base_sequence ?? deleteParams.base_sequence;
+            if (typeof baseSeq === 'number' && Number.isFinite(baseSeq)) {
+                const stale = await this.assertDeleteNotStale(ctx, contextId, baseSeq, targetClientIds);
+                if (stale) return stale;
+            }
             const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any);
-            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_delete');
             return {
                 kind: 'ok',
                 contextId,
-                changePayload: { context_id: contextId, version: result.data.version, data: result.data.data },
+                changePayload: {
+                    context_id: contextId,
+                    version: result.data.version,
+                    data: result.data.data,
+                    deleted_client_ids: result.data.deleted_client_ids,
+                },
             };
         }
 
         if (mutation.op === 'context_delete') {
             const result = await deleteContextPermanent(storage, ctx.projectId, contextId, {});
-            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'context_delete');
             return {
                 kind: 'ok',
                 contextId,
@@ -514,7 +538,7 @@ export class SyncService {
         if (mutation.op === 'contexts_delete_many') {
             const ids = (mutation.payload.ids as string[]) ?? [];
             const result = await deleteManyContexts(storage, ctx.projectId, ids);
-            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, null, 'contexts_delete_many');
             return {
                 kind: 'ok',
                 contextId: null,
@@ -535,11 +559,75 @@ export class SyncService {
         throw new SyncValidationError('Unsupported sync op');
     }
 
-    private mapApplyError(code: string, message: string, contextId: string | null): ApplyResult {
+    private extractClientIdsFromChangePayload(payload: Record<string, unknown>): string[] {
+        const ids: string[] = [];
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const meta = (row as { metadata?: Record<string, unknown> }).metadata;
+            const cid = clientNodeIdFromMetadata(meta) ?? clientNodeIdFromMetadata(row as Record<string, unknown>);
+            if (cid) ids.push(cid);
+        }
+        const deleted = payload.deleted_client_ids;
+        if (Array.isArray(deleted)) {
+            for (const id of deleted) {
+                if (typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id)) ids.push(id);
+            }
+        }
+        return ids;
+    }
+
+    private async assertDeleteNotStale(
+        ctx: SyncApplyContext,
+        contextId: string,
+        baseSequence: number,
+        targetClientIds: string[],
+    ): Promise<ApplyResult | null> {
+        const targets = new Set(targetClientIds);
+        if (targets.size === 0) return null;
+        const changes = await this.syncRepo.listChanges(ctx.userId, baseSequence, 2000);
+        for (const change of changes) {
+            if (change.context_id !== contextId) continue;
+            if (change.sequence <= baseSequence) continue;
+            if (change.op !== 'message_update' && change.op !== 'message_delete' && change.op !== 'message_append') {
+                continue;
+            }
+            const touched = this.extractClientIdsFromChangePayload(change.payload);
+            if (change.op === 'message_append') {
+                continue;
+            }
+            if (touched.some((id) => targets.has(id))) {
+                return {
+                    kind: 'conflict',
+                    contextId,
+                    conflictKind: 'delete_stale_base',
+                    leftPayload: { base_sequence: baseSequence, server_sequence: change.sequence, op: change.op },
+                    rightPayload: { delete_targets: [...targets] },
+                };
+            }
+        }
+        return null;
+    }
+
+    private mapApplyError(
+        code: string,
+        message: string,
+        contextId: string | null,
+        op?: string,
+    ): ApplyResult {
         if (code === 'not_found') {
+            const contextMissing = message.startsWith('Context not found');
+            if (contextMissing || op === 'context_delete') {
+                return {
+                    kind: 'failed',
+                    code: 'context_deleted',
+                    message,
+                    contextId: contextId ?? undefined,
+                };
+            }
             return {
                 kind: 'failed',
-                code: 'context_deleted',
+                code: 'message_not_found',
                 message,
                 contextId: contextId ?? undefined,
             };

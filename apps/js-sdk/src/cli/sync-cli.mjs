@@ -7,7 +7,7 @@ import {
   pushSyncMutations,
   fetchSyncConflicts,
 } from "../../lib/sync-api.mjs";
-import { createCliSyncStore, flushSyncOutbox, getSyncCursor, pullAndApplySync } from "../../lib/sync-engine.mjs";
+import { createCliSyncStore, flushSyncOutbox, getSyncCursor, pullAndApplySync, readLocalSyncState } from "../../lib/sync-engine.mjs";
 import { resolveBaseUrl } from "../../lib/client-config.mjs";
 import { getValidAccessToken } from "../../lib/credentials.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
@@ -61,9 +61,14 @@ Environment:
 
   if (cmd === "status") {
     return run(async () => {
-      const localCursor = getSyncCursor();
+      const local = readLocalSyncState();
       const remote = await fetchSyncStatus({ baseUrl });
-      printJson({ local_cursor: localCursor, ...remote });
+      printJson({
+        local_cursor: local.cursor,
+        outbox_count: local.outbox.length,
+        parked_failures: local.parked_failures,
+        ...remote,
+      });
     });
   }
 

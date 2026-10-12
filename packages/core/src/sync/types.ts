@@ -16,6 +16,7 @@ export type SyncMutation = {
     op: SyncOp;
     context_id?: string;
     updated_at?: string;
+    base_sequence?: number;
     payload: Record<string, unknown>;
 };
 

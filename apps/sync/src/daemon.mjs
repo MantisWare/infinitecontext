@@ -944,6 +944,10 @@ export async function daemonBoot({
         await uc.append(sessionContextId, batch);
       }
 
+      for (const { eventId } of sessionEvents) {
+        markEventSeen(store, sourceName, eventId);
+      }
+
       // update stats
       bumpStat("appended", sessionEvents.length);
       bumpSourceStat(sourceName, "appended", sessionEvents.length);
@@ -1038,8 +1042,11 @@ export async function daemonBoot({
           noteSourceActivity(source.name, { lastEventType: normalized.eventType, lastSessionId: normalized.sessionId, lastAt: Date.now() });
 
           const eventId = sha256(`${source.name}|${cfg.host}|${cfg.userId}|${normalized.sessionId}|${fileId}|${i}`);
-          const isNew = markEventSeen(store, source.name, eventId);
-          if (!isNew) { bumpStat("deduped"); bumpSourceStat(source.name, "deduped"); continue; }
+          if (store.isEventSeen(seenEventStoreKey(source.name, eventId))) {
+            bumpStat("deduped");
+            bumpSourceStat(source.name, "deduped");
+            continue;
+          }
 
           pendingEvents.push({ normalized, eventId, lineOffset: i, projectPath: fileProjectPath });
         }
@@ -1081,8 +1088,11 @@ export async function daemonBoot({
         noteSourceActivity(source.name, { lastEventType: normalized.eventType, lastSessionId: normalized.sessionId, lastAt: Date.now() });
 
         const eventId = sha256(`${source.name}|${cfg.host}|${cfg.userId}|${normalized.sessionId}|${fileId}|${lineOffset}|${sha256(line)}`);
-        const isNew = markEventSeen(store, source.name, eventId);
-        if (!isNew) { bumpStat("deduped"); bumpSourceStat(source.name, "deduped"); continue; }
+        if (store.isEventSeen(seenEventStoreKey(source.name, eventId))) {
+          bumpStat("deduped");
+          bumpSourceStat(source.name, "deduped");
+          continue;
+        }
 
         pendingEvents.push({ normalized, eventId, lineOffset, projectPath: fileProjectPath });
       }

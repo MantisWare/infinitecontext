@@ -5,6 +5,7 @@
 
 import type { StorageAdapter } from '../storage';
 import { findHead, getOrderedNodes, getVersions } from '../context-chain';
+import { resolveMessagePublicId } from '../message-target';
 import { generatePublicId } from '../public-ids';
 import { isPlainObject, parseUpdateRequestBody } from '../request-parsing';
 import type { MessageView } from '../message-view';
@@ -67,24 +68,15 @@ export async function updateMessages(
 
     // load current messages, indexed by public id for lookup
     const orderedNodes = await getOrderedNodes(storage, currentHead.public_id);
-    const nodeIds = new Set(orderedNodes.map((n) => n.public_id));
 
-    // resolve each update's selector (id or index) to a concrete target id
+    // resolve each update's selector (id, icn_* client id, or index) to a concrete target id
     const resolvedUpdates: Array<{ id: string; [key: string]: unknown }> = [];
     for (const u of updates) {
-        if (u.id) {
-            // id selector — must reference an existing message
-            if (!nodeIds.has(u.id)) return err('not_found', `Message not found: ${u.id}`);
-            const { index: _idx, ...rest } = u;
-            resolvedUpdates.push(rest as { id: string; [key: string]: unknown });
-        } else {
-            // index selector — normalize negatives, then bounds-check
-            let idx = u.index!;
-            if (idx < 0) idx = orderedNodes.length + idx;
-            if (idx < 0 || idx >= orderedNodes.length) return err('invalid_input', `Index out of range: ${u.index}`);
-            const { index: _idx, ...rest } = u;
-            resolvedUpdates.push({ ...rest, id: orderedNodes[idx].public_id });
-        }
+        const selector = u.id !== undefined ? u.id : u.index!;
+        const resolved = resolveMessagePublicId(orderedNodes, selector as string | number);
+        if ('code' in resolved) return err(resolved.code, resolved.message);
+        const { index: _idx, id: _id, ...rest } = u;
+        resolvedUpdates.push({ ...rest, id: resolved.publicId });
     }
 
     // index resolved updates by target id; collect affected ids for the head
