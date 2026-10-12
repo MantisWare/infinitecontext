@@ -47,12 +47,21 @@ export type SyncPushEffect = {
     version?: number;
 };
 
+export type SyncPushFailure = {
+    client_id: string;
+    code: string;
+    message: string;
+    retryable: boolean;
+};
+
 export type SyncPushResult = {
     head_sequence: number;
     applied: string[];
     duplicate: string[];
     conflicts: SyncConflictRecord[];
     effects: SyncPushEffect[];
+    /** Mutations that did not commit; retryable entries should stay in the client outbox. */
+    failed?: SyncPushFailure[];
 };
 
 export type SyncPullResult = {

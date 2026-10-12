@@ -113,6 +113,12 @@ export class SupabaseAuthRepository implements AuthRepository {
         return data?.project_id ?? null;
     }
 
+    async findUserIdByProjectId(projectId: number): Promise<number | null> {
+        const { data, error } = await this.client.from('user_projects').select('user_id').eq('project_id', projectId).maybeSingle();
+        if (error) throw error;
+        return data?.user_id ?? null;
+    }
+
     async createSession(input: {
         publicId: string;
         userId: number;

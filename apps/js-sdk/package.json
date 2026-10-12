@@ -63,7 +63,11 @@
         "./lib/encrypted-client.mjs": "./lib/encrypted-client.mjs",
         "./lib/vault-require.mjs": "./lib/vault-require.mjs",
         "./lib/vault-migrate.mjs": "./lib/vault-migrate.mjs",
-        "./lib/sync-client-auth.mjs": "./lib/sync-client-auth.mjs"
+        "./lib/sync-client-auth.mjs": "./lib/sync-client-auth.mjs",
+        "./lib/sync-engine.mjs": "./lib/sync-engine.mjs",
+        "./lib/sync-api.mjs": "./lib/sync-api.mjs",
+        "./lib/sync-push-client.mjs": "./lib/sync-push-client.mjs",
+        "./lib/sync-errors.mjs": "./lib/sync-errors.mjs"
     },
     "files": [
         "dist/",

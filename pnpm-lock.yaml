@@ -163,6 +163,9 @@ importers:
       figlet:
         specifier: ^1.10.0
         version: 1.10.0
+      infinitecontext:
+        specifier: workspace:*
+        version: link:../js-sdk
       ink:
         specifier: ^6.7.0
         version: 6.7.0(react@19.2.4)

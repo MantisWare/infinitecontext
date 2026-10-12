@@ -7,7 +7,7 @@ import {
   pushSyncMutations,
   fetchSyncConflicts,
 } from "../../lib/sync-api.mjs";
-import { flushSyncOutbox, getSyncCursor, pullAndApplySync } from "../../lib/sync-engine.mjs";
+import { createCliSyncStore, flushSyncOutbox, getSyncCursor, pullAndApplySync } from "../../lib/sync-engine.mjs";
 import { resolveBaseUrl } from "../../lib/client-config.mjs";
 import { getValidAccessToken } from "../../lib/credentials.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
@@ -69,7 +69,7 @@ Environment:
 
   if (cmd === "pull") {
     return run(async () => {
-      const result = await pullAndApplySync({ baseUrl });
+      const result = await pullAndApplySync({ baseUrl, store: createCliSyncStore() });
       const conflicts = await fetchSyncConflicts({ since: 0, baseUrl });
       printJson({ ...result, conflicts: conflicts.data ?? [] });
     });

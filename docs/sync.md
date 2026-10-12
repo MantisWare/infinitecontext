@@ -6,8 +6,8 @@ Account-scoped **pull + push** sync over the hosted API. Each user has a monoton
 
 | Deployment | `/sync/*` | Notes |
 |------------|-----------|--------|
-| **Node API + PostgreSQL (Drizzle)** | Supported | Default self-hosted and production Node entrypoint (`apps/api/server.ts`). |
-| **Cloudflare Workers + Supabase REST** | **503** `sync_api_unavailable` | No Drizzle sync repository; use `/contexts` only on Workers until a Supabase adapter ships. |
+| **Node API + PostgreSQL (Drizzle)** | Supported | **Free hosted default** (`https://api.infinitecontext.ai`) and self-hosted Node entrypoint (`apps/api/server.ts`). |
+| **Cloudflare Workers + Supabase REST** | **503** `sync_api_unavailable` | Optional edge deploy only; no Drizzle sync repository. Use `/contexts` on Workers until a Supabase adapter ships. |
 | **Legacy API key (no user session)** | **403** on `/sync/*` | Sync is per-user JWT; API keys keep using `/contexts`. |
 
 The CLI maps 503 to a plain-language error (see `lib/sync-errors.mjs`).

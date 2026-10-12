@@ -179,20 +179,43 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
       const sequence = parseNumber(change.sequence, 0);
 
-      if (op === "context_create" || op === "context_metadata") {
+      if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
         const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
         const id = String(payload.context_id ?? contextId ?? "");
         if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify(meta));
         return;
       }
 
-      if (op === "message_append") {
+      if (op === "context_delete") {
+        const id = String(payload.context_id ?? contextId ?? "");
+        if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
+        return;
+      }
+
+      if (op === "contexts_delete_many") {
+        const results = Array.isArray(payload.results) ? payload.results : [];
+        for (const row of results) {
+          const id = String(row?.id ?? row?.context_id ?? "");
+          if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
+        }
+        return;
+      }
+
+      if (op === "message_append" || op === "message_update" || op === "message_delete") {
         const rows = Array.isArray(payload.data) ? payload.data : [];
         for (const row of rows) {
           if (!row || typeof row !== "object") continue;
           const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
           if (!clientNodeId) continue;
           stmt.upsertSyncMessage.run(String(clientNodeId), String(payload.context_id ?? contextId), JSON.stringify(row), sequence);
+        }
+        return;
+      }
+
+      if (op === "prune_plaintext_versions") {
+        const id = String(payload.context_id ?? contextId ?? "");
+        if (id) {
+          stmt.upsertSyncContextMeta.run(id, JSON.stringify({ pruned_plaintext: true, ...(payload ?? {}) }));
         }
       }
     },

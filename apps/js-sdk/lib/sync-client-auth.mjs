@@ -39,10 +39,13 @@ export function createInfiniteContextClient(cfg) {
         const { getUnlockedDek } = await import("./vault-session.mjs");
         const { wrapInfiniteContextWithVault } = await import("./encrypted-client.mjs");
         const unlocked = cfg.apiKey ? null : await getUnlockedDek({ baseUrl: cfg.baseUrl });
-        let client = unlocked ? wrapInfiniteContextWithVault(target, unlocked) : target;
+        let client = target;
         if (!cfg.apiKey) {
           const { wrapInfiniteContextWithSyncPush } = await import("./sync-push-client.mjs");
           client = wrapInfiniteContextWithSyncPush(client, { baseUrl: cfg.baseUrl });
+        }
+        if (unlocked) {
+          client = wrapInfiniteContextWithVault(client, unlocked);
         }
         const fn = client[prop];
         if (typeof fn !== "function") return fn;

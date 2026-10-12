@@ -107,6 +107,11 @@ export class DrizzleAuthRepository implements AuthRepository {
         return rows[0]?.project_id ?? null;
     }
 
+    async findUserIdByProjectId(projectId: number): Promise<number | null> {
+        const rows = await this.db.select().from(user_projects).where(eq(user_projects.project_id, projectId)).limit(1);
+        return rows[0]?.user_id ?? null;
+    }
+
     async createSession(input: {
         publicId: string;
         userId: number;

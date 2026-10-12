@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import fg from "fast-glob";
 import { KEYS_AND_SERVICES_DOC_URL } from "./ic-constants.mjs";
@@ -155,6 +156,24 @@ function deleteBootstrapState(key) {
     fsSync.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
     fsSync.renameSync(tmp, CONFIG_FILE);
   } catch { /* best effort */ }
+}
+
+async function loadAccountSyncModules(log) {
+  try {
+    const syncEngine = await import("infinitecontext/lib/sync-engine.mjs");
+    const syncApi = await import("infinitecontext/lib/sync-api.mjs");
+    return { syncEngine, fetchSyncStatus: syncApi.fetchSyncStatus };
+  } catch (error) {
+    const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
+    try {
+      const syncEngine = await import(pathToFileURL(path.join(sdkLib, "sync-engine.mjs")).href);
+      const syncApi = await import(pathToFileURL(path.join(sdkLib, "sync-api.mjs")).href);
+      return { syncEngine, fetchSyncStatus: syncApi.fetchSyncStatus };
+    } catch (fallbackError) {
+      log("warn", "Sync engine unavailable; falling back to context list probe", errorDetails(fallbackError ?? error));
+      return null;
+    }
+  }
 }
 
 // ── exported boot function ──────────────────────────────────────
@@ -1159,20 +1178,13 @@ export async function daemonBoot({
     runtime.uc = uc;
 
     const useAccountSync = !cfg.apiKey;
-    let syncEngine = null;
-    if (useAccountSync) {
-      try {
-        syncEngine = await import("infinitecontext/lib/sync-engine.mjs");
-      } catch (error) {
-        log("warn", "Sync engine unavailable; falling back to context list probe", errorDetails(error));
-      }
-    }
+    const accountSync = useAccountSync ? await loadAccountSyncModules(log) : null;
+    const syncEngine = accountSync?.syncEngine ?? null;
 
     // connectivity check
     try {
-      if (syncEngine?.fetchSyncStatus) {
-        const { fetchSyncStatus } = await import("infinitecontext/lib/sync-api.mjs");
-        await fetchSyncStatus({ baseUrl: cfg.baseUrl });
+      if (accountSync?.fetchSyncStatus) {
+        await accountSync.fetchSyncStatus({ baseUrl: cfg.baseUrl });
       } else {
         await uc.get({ limit: 1 });
       }

@@ -1,3 +1,4 @@
+import type { StorageAdapter } from '../storage';
 import type { SyncChangeRecord, SyncConflictRecord } from './types';
 
 export type SyncAppendChangeInput = {
@@ -29,4 +30,23 @@ export interface SyncRepository {
     }): Promise<SyncConflictRecord>;
     listConflictsSince(userId: number, sinceSequence: number, limit: number): Promise<SyncConflictRecord[]>;
     touchSessionSync(sessionId: number, at: string): Promise<void>;
+}
+
+export type SyncStorageTransactionContext = {
+    storage: StorageAdapter;
+    appendChange(input: SyncAppendChangeInput): Promise<number>;
+    insertConflict(input: {
+        userId: number;
+        contextId: string;
+        kind: string;
+        clientId: string | null;
+        sequence: number;
+        publicId: string;
+        leftPayload: Record<string, unknown>;
+        rightPayload: Record<string, unknown>;
+    }): Promise<SyncConflictRecord>;
+};
+
+export interface TransactionalSyncRepository extends SyncRepository {
+    runStorageTransaction<T>(fn: (ctx: SyncStorageTransactionContext) => Promise<T>): Promise<T>;
 }

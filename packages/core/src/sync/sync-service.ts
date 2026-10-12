@@ -8,21 +8,35 @@ import { updateMessages } from '../ops/update-messages';
 import { updateContextMetadataLww } from '../ops/update-context-metadata';
 import type { StorageAdapter } from '../storage';
 import { generateSyncConflictPublicId } from './public-ids';
-import type { SyncRepository } from './repository';
+import type { SyncRepository, TransactionalSyncRepository } from './repository';
 import {
     SYNC_CLIENT_ID_PATTERN,
     type SyncMutation,
     type SyncPullResult,
     type SyncPushResult,
-    type     SyncConflictRecord,
+    type SyncConflictRecord,
     SyncPushEffect,
+    type SyncPushFailure,
 } from './types';
 
 const DEFAULT_PULL_LIMIT = 500;
 const MAX_PULL_LIMIT = 1000;
+const APPEND_RETRY_ATTEMPTS = 8;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isConcurrentAppendMessage(message: string): boolean {
+    return message.includes('Concurrent append');
+}
+
+function isClientIdConflictMessage(message: string): boolean {
+    return message.includes('already in use');
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function validateMutation(raw: unknown): SyncMutation | { error: string } {
@@ -64,6 +78,30 @@ export type SyncApplyContext = {
     sessionId?: number;
     deviceId?: string | null;
 };
+
+type ApplyResult =
+    | { kind: 'ok'; contextId: string | null; changePayload: Record<string, unknown> & { version?: number } }
+    | {
+          kind: 'conflict';
+          contextId: string;
+          conflictKind: string;
+          leftPayload: Record<string, unknown>;
+          rightPayload: Record<string, unknown>;
+          logPayload?: Record<string, unknown>;
+      }
+    | { kind: 'retryable'; code: string; message: string }
+    | { kind: 'failed'; code: string; message: string; contextId?: string };
+
+function isTransactionalSyncRepository(repo: SyncRepository): repo is TransactionalSyncRepository {
+    return typeof (repo as TransactionalSyncRepository).runStorageTransaction === 'function';
+}
+
+class SyncTransientError extends Error {
+    constructor() {
+        super('retry');
+        this.name = 'SyncTransientError';
+    }
+}
 
 export class SyncService {
     constructor(
@@ -107,6 +145,7 @@ export class SyncService {
         const duplicate: string[] = [];
         const conflicts: SyncConflictRecord[] = [];
         const effects: SyncPushEffect[] = [];
+        const failed: SyncPushFailure[] = [];
         let head = await this.syncRepo.getHeadSequence(ctx.userId);
 
         for (const raw of rawMutations) {
@@ -119,51 +158,22 @@ export class SyncService {
                 continue;
             }
 
-            const applyResult = await this.applyMutation(ctx, parsed);
-            if (applyResult.kind === 'conflict') {
-                const sequence = await this.syncRepo.appendChange({
-                    userId: ctx.userId,
-                    op: parsed.op,
-                    contextId: parsed.context_id ?? applyResult.contextId ?? null,
-                    clientId: parsed.client_id,
-                    payload: { ...parsed.payload, conflict: true, ...applyResult.logPayload },
-                    deviceId: ctx.deviceId ?? null,
-                });
-                head = sequence;
-                const conflict = await this.syncRepo.insertConflict({
-                    userId: ctx.userId,
-                    contextId: applyResult.contextId,
-                    kind: applyResult.conflictKind,
-                    clientId: parsed.client_id,
-                    sequence,
-                    publicId: generateSyncConflictPublicId(),
-                    leftPayload: applyResult.leftPayload,
-                    rightPayload: applyResult.rightPayload,
-                });
-                conflicts.push(conflict);
-                applied.push(parsed.client_id);
-                effects.push({ client_id: parsed.client_id, context_id: applyResult.contextId });
+            const outcome = isTransactionalSyncRepository(this.syncRepo)
+                ? await this.pushOneAtomic(ctx, parsed)
+                : await this.pushOneLegacy(ctx, parsed);
+
+            head = Math.max(head, outcome.head);
+            if (outcome.duplicate) {
+                duplicate.push(parsed.client_id);
                 continue;
             }
-
-            const sequence = await this.syncRepo.appendChange({
-                userId: ctx.userId,
-                op: parsed.op,
-                contextId: applyResult.contextId,
-                clientId: parsed.client_id,
-                payload: applyResult.changePayload,
-                deviceId: ctx.deviceId ?? null,
-            });
-            head = sequence;
-            applied.push(parsed.client_id);
-            effects.push({
-                client_id: parsed.client_id,
-                context_id: applyResult.contextId ?? undefined,
-                version:
-                    applyResult.kind === 'ok' && typeof applyResult.changePayload.version === 'number'
-                        ? applyResult.changePayload.version
-                        : undefined,
-            });
+            if (outcome.failed) {
+                failed.push(outcome.failed);
+                continue;
+            }
+            if (outcome.conflict) conflicts.push(outcome.conflict);
+            if (outcome.applied) applied.push(parsed.client_id);
+            if (outcome.effect) effects.push(outcome.effect);
         }
 
         if (ctx.sessionId) {
@@ -176,34 +186,225 @@ export class SyncService {
             duplicate,
             conflicts,
             effects,
+            failed: failed.length > 0 ? failed : undefined,
         };
     }
 
-    private async applyMutation(
+    private async pushOneLegacy(
+        ctx: SyncApplyContext,
+        parsed: SyncMutation,
+    ): Promise<{
+        head: number;
+        applied?: boolean;
+        duplicate?: boolean;
+        conflict?: SyncConflictRecord;
+        effect?: SyncPushEffect;
+        failed?: SyncPushFailure;
+    }> {
+        const applyResult = await this.applyMutationWithRetry(this.storage, ctx, parsed);
+        return this.finalizePushOutcome(ctx, parsed, applyResult, async (input) => this.syncRepo.appendChange(input), async (input) =>
+            this.syncRepo.insertConflict(input),
+        );
+    }
+
+    private async pushOneAtomic(ctx: SyncApplyContext, parsed: SyncMutation): Promise<{
+        head: number;
+        applied?: boolean;
+        duplicate?: boolean;
+        conflict?: SyncConflictRecord;
+        effect?: SyncPushEffect;
+        failed?: SyncPushFailure;
+    }> {
+        const txRepo = this.syncRepo as TransactionalSyncRepository;
+        for (let attempt = 0; attempt < APPEND_RETRY_ATTEMPTS; attempt += 1) {
+            try {
+                return await txRepo.runStorageTransaction(async (txCtx) => {
+                    const applyResult = await this.applyMutationWithRetry(txCtx.storage, ctx, parsed, {
+                        inTransaction: true,
+                    });
+                    if (applyResult.kind === 'retryable') {
+                        throw new SyncTransientError();
+                    }
+                    return this.finalizePushOutcome(
+                        ctx,
+                        parsed,
+                        applyResult,
+                        (input) => txCtx.appendChange(input),
+                        (input) => txCtx.insertConflict(input),
+                    );
+                });
+            } catch (error) {
+                if (error instanceof SyncTransientError) {
+                    await sleep(5 * (attempt + 1));
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        return {
+            head: await this.syncRepo.getHeadSequence(ctx.userId),
+            failed: {
+                client_id: parsed.client_id,
+                code: 'concurrent_append_exhausted',
+                message: 'Concurrent append retries exhausted',
+                retryable: true,
+            },
+        };
+    }
+
+    private async finalizePushOutcome(
+        ctx: SyncApplyContext,
+        parsed: SyncMutation,
+        applyResult: ApplyResult,
+        appendChange: (input: {
+            userId: number;
+            op: string;
+            contextId: string | null;
+            clientId: string;
+            payload: Record<string, unknown>;
+            deviceId?: string | null;
+        }) => Promise<number>,
+        insertConflict: (input: {
+            userId: number;
+            contextId: string;
+            kind: string;
+            clientId: string | null;
+            sequence: number;
+            publicId: string;
+            leftPayload: Record<string, unknown>;
+            rightPayload: Record<string, unknown>;
+        }) => Promise<SyncConflictRecord>,
+    ): Promise<{
+        head: number;
+        applied?: boolean;
+        duplicate?: boolean;
+        conflict?: SyncConflictRecord;
+        effect?: SyncPushEffect;
+        failed?: SyncPushFailure;
+    }> {
+        if (applyResult.kind === 'retryable') {
+            return {
+                head: await this.syncRepo.getHeadSequence(ctx.userId),
+                failed: {
+                    client_id: parsed.client_id,
+                    code: applyResult.code,
+                    message: applyResult.message,
+                    retryable: true,
+                },
+            };
+        }
+
+        if (applyResult.kind === 'failed') {
+            const contextId = applyResult.contextId ?? parsed.context_id ?? 'unknown';
+            const sequence = await appendChange({
+                userId: ctx.userId,
+                op: parsed.op,
+                contextId,
+                clientId: parsed.client_id,
+                payload: { ...parsed.payload, conflict: true, code: applyResult.code, message: applyResult.message },
+                deviceId: ctx.deviceId ?? null,
+            });
+            const conflict = await insertConflict({
+                userId: ctx.userId,
+                contextId,
+                kind: applyResult.code,
+                clientId: parsed.client_id,
+                sequence,
+                publicId: generateSyncConflictPublicId(),
+                leftPayload: { message: applyResult.message },
+                rightPayload: { mutation: parsed.payload },
+            });
+            return {
+                head: sequence,
+                applied: true,
+                conflict,
+                effect: { client_id: parsed.client_id, context_id: contextId },
+            };
+        }
+
+        if (applyResult.kind === 'conflict') {
+            const sequence = await appendChange({
+                userId: ctx.userId,
+                op: parsed.op,
+                contextId: applyResult.contextId,
+                clientId: parsed.client_id,
+                payload: { ...parsed.payload, conflict: true, ...applyResult.logPayload },
+                deviceId: ctx.deviceId ?? null,
+            });
+            const conflict = await insertConflict({
+                userId: ctx.userId,
+                contextId: applyResult.contextId,
+                kind: applyResult.conflictKind,
+                clientId: parsed.client_id,
+                sequence,
+                publicId: generateSyncConflictPublicId(),
+                leftPayload: applyResult.leftPayload,
+                rightPayload: applyResult.rightPayload,
+            });
+            return {
+                head: sequence,
+                applied: true,
+                conflict,
+                effect: { client_id: parsed.client_id, context_id: applyResult.contextId },
+            };
+        }
+
+        const sequence = await appendChange({
+            userId: ctx.userId,
+            op: parsed.op,
+            contextId: applyResult.contextId,
+            clientId: parsed.client_id,
+            payload: applyResult.changePayload,
+            deviceId: ctx.deviceId ?? null,
+        });
+        return {
+            head: sequence,
+            applied: true,
+            effect: {
+                client_id: parsed.client_id,
+                context_id: applyResult.contextId ?? undefined,
+                version:
+                    typeof applyResult.changePayload.version === 'number' ? applyResult.changePayload.version : undefined,
+            },
+        };
+    }
+
+    private async applyMutationWithRetry(
+        storage: StorageAdapter,
         ctx: SyncApplyContext,
         mutation: SyncMutation,
-    ): Promise<
-        | { kind: 'ok'; contextId: string | null; changePayload: Record<string, unknown> & { version?: number } }
-        | {
-              kind: 'conflict';
-              contextId: string;
-              conflictKind: string;
-              leftPayload: Record<string, unknown>;
-              rightPayload: Record<string, unknown>;
-              logPayload?: Record<string, unknown>;
-          }
-    > {
+        options?: { inTransaction?: boolean },
+    ): Promise<ApplyResult> {
+        if (mutation.op !== 'message_append') {
+            return this.applyMutation(storage, ctx, mutation);
+        }
+
+        for (let attempt = 0; attempt < APPEND_RETRY_ATTEMPTS; attempt += 1) {
+            const result = await this.applyMutation(storage, ctx, mutation);
+            if (result.kind !== 'retryable') return result;
+            if (options?.inTransaction) return result;
+            await sleep(5 * (attempt + 1));
+        }
+        return {
+            kind: 'retryable',
+            code: 'concurrent_append_exhausted',
+            message: 'Concurrent append retries exhausted',
+        };
+    }
+
+    private async applyMutation(storage: StorageAdapter, ctx: SyncApplyContext, mutation: SyncMutation): Promise<ApplyResult> {
         if (mutation.op === 'context_create' || mutation.op === 'context_fork') {
             const payload = mutation.payload;
             const metadata = isPlainObject(payload.metadata) ? payload.metadata : {};
-            const result = await createContext(this.storage, ctx.projectId, {
+            const result = await createContext(storage, ctx.projectId, {
                 from: typeof payload.from === 'string' ? payload.from : undefined,
                 version: payload.version,
                 at: payload.at,
                 before: typeof payload.before === 'string' ? payload.before : undefined,
                 metadata,
             });
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, null);
             return {
                 kind: 'ok',
                 contextId: result.data.id,
@@ -223,8 +424,8 @@ export class SyncService {
             const updatedAt =
                 mutation.updated_at ??
                 (typeof mutation.payload.updated_at === 'string' ? mutation.payload.updated_at : new Date().toISOString());
-            const result = await updateContextMetadataLww(this.storage, ctx.projectId, contextId, metadata, updatedAt);
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await updateContextMetadataLww(storage, ctx.projectId, contextId, metadata, updatedAt);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             if (!result.data.applied) {
                 return {
                     kind: 'conflict',
@@ -253,9 +454,12 @@ export class SyncService {
 
         if (mutation.op === 'message_append') {
             const messages = mutation.payload.messages ?? mutation.payload.message ?? mutation.payload;
-            const result = await appendMessages(this.storage, ctx.projectId, contextId, messages as object | object[]);
+            const result = await appendMessages(storage, ctx.projectId, contextId, messages as object | object[]);
             if (!result.ok) {
-                if (result.code === 'conflict') {
+                if (result.code === 'conflict' && isConcurrentAppendMessage(result.message)) {
+                    return { kind: 'retryable', code: 'concurrent_append', message: result.message };
+                }
+                if (result.code === 'conflict' && isClientIdConflictMessage(result.message)) {
                     return {
                         kind: 'conflict',
                         contextId,
@@ -264,7 +468,7 @@ export class SyncService {
                         rightPayload: { messages },
                     };
                 }
-                throw new SyncApplyError(result.message, result.code);
+                return this.mapApplyError(result.code, result.message, contextId);
             }
             return {
                 kind: 'ok',
@@ -278,8 +482,8 @@ export class SyncService {
         }
 
         if (mutation.op === 'message_update') {
-            const result = await updateMessages(this.storage, ctx.projectId, contextId, mutation.payload);
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             return {
                 kind: 'ok',
                 contextId,
@@ -288,8 +492,8 @@ export class SyncService {
         }
 
         if (mutation.op === 'message_delete') {
-            const result = await deleteMessages(this.storage, ctx.projectId, contextId, mutation.payload as any);
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             return {
                 kind: 'ok',
                 contextId,
@@ -298,8 +502,8 @@ export class SyncService {
         }
 
         if (mutation.op === 'context_delete') {
-            const result = await deleteContextPermanent(this.storage, ctx.projectId, contextId, {});
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await deleteContextPermanent(storage, ctx.projectId, contextId, {});
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             return {
                 kind: 'ok',
                 contextId,
@@ -309,8 +513,8 @@ export class SyncService {
 
         if (mutation.op === 'contexts_delete_many') {
             const ids = (mutation.payload.ids as string[]) ?? [];
-            const result = await deleteManyContexts(this.storage, ctx.projectId, ids);
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await deleteManyContexts(storage, ctx.projectId, ids);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             return {
                 kind: 'ok',
                 contextId: null,
@@ -319,8 +523,8 @@ export class SyncService {
         }
 
         if (mutation.op === 'prune_plaintext_versions') {
-            const result = await prunePlaintextVersionHeads(this.storage, ctx.projectId, contextId);
-            if (!result.ok) throw new SyncApplyError(result.message, result.code);
+            const result = await prunePlaintextVersionHeads(storage, ctx.projectId, contextId);
+            if (!result.ok) return this.mapApplyError(result.code, result.message, contextId);
             return {
                 kind: 'ok',
                 contextId,
@@ -329,6 +533,27 @@ export class SyncService {
         }
 
         throw new SyncValidationError('Unsupported sync op');
+    }
+
+    private mapApplyError(code: string, message: string, contextId: string | null): ApplyResult {
+        if (code === 'not_found') {
+            return {
+                kind: 'failed',
+                code: 'context_deleted',
+                message,
+                contextId: contextId ?? undefined,
+            };
+        }
+        if (code === 'conflict') {
+            return {
+                kind: 'conflict',
+                contextId: contextId ?? 'unknown',
+                conflictKind: 'operation_conflict',
+                leftPayload: { message },
+                rightPayload: {},
+            };
+        }
+        throw new SyncApplyError(message, code);
     }
 }
 

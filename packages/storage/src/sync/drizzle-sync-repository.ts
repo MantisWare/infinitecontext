@@ -1,8 +1,14 @@
 import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm';
 
-import type { SyncRepository, SyncAppendChangeInput } from '@infinitecontext/core/sync';
+import type {
+    SyncRepository,
+    SyncAppendChangeInput,
+    SyncStorageTransactionContext,
+    TransactionalSyncRepository,
+} from '@infinitecontext/core/sync';
 import type { SyncChangeRecord, SyncConflictRecord } from '@infinitecontext/core/sync';
 
+import { DrizzleAdapter } from '../drizzle';
 import { sync_change_log, sync_conflicts, sync_user_state, sessions, type ApiDb } from '../db';
 
 function mapChange(row: typeof sync_change_log.$inferSelect): SyncChangeRecord {
@@ -31,7 +37,7 @@ function mapConflict(row: typeof sync_conflicts.$inferSelect): SyncConflictRecor
     };
 }
 
-export class DrizzleSyncRepository implements SyncRepository {
+export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncRepository {
     constructor(private db: ApiDb) {}
 
     async getHeadSequence(userId: number): Promise<number> {
@@ -63,36 +69,78 @@ export class DrizzleSyncRepository implements SyncRepository {
     }
 
     async appendChange(input: SyncAppendChangeInput): Promise<number> {
+        return this.db.transaction(async (tx) => this.appendChangeOnDb(tx as ApiDb, input));
+    }
+
+    private async appendChangeOnDb(txDb: ApiDb, input: SyncAppendChangeInput): Promise<number> {
+        await txDb
+            .insert(sync_user_state)
+            .values({ user_id: input.userId, head_sequence: 0 })
+            .onConflictDoNothing();
+
+        const bumped = await txDb
+            .update(sync_user_state)
+            .set({ head_sequence: sql`${sync_user_state.head_sequence} + 1` })
+            .where(eq(sync_user_state.user_id, input.userId))
+            .returning({ sequence: sync_user_state.head_sequence });
+
+        const sequence = Number(bumped[0]?.sequence ?? 0);
+        if (!sequence) {
+            throw new Error('Failed to allocate sync sequence');
+        }
+
+        await txDb.insert(sync_change_log).values({
+            user_id: input.userId,
+            sequence,
+            op: input.op,
+            context_id: input.contextId,
+            client_id: input.clientId,
+            payload: input.payload,
+            device_id: input.deviceId ?? null,
+        });
+
+        return sequence;
+    }
+
+    async runStorageTransaction<T>(fn: (ctx: SyncStorageTransactionContext) => Promise<T>): Promise<T> {
         return this.db.transaction(async (tx) => {
             const txDb = tx as ApiDb;
-            await txDb
-                .insert(sync_user_state)
-                .values({ user_id: input.userId, head_sequence: 0 })
-                .onConflictDoNothing();
-
-            const bumped = await txDb
-                .update(sync_user_state)
-                .set({ head_sequence: sql`${sync_user_state.head_sequence} + 1` })
-                .where(eq(sync_user_state.user_id, input.userId))
-                .returning({ sequence: sync_user_state.head_sequence });
-
-            const sequence = Number(bumped[0]?.sequence ?? 0);
-            if (!sequence) {
-                throw new Error('Failed to allocate sync sequence');
-            }
-
-            await txDb.insert(sync_change_log).values({
-                user_id: input.userId,
-                sequence,
-                op: input.op,
-                context_id: input.contextId,
-                client_id: input.clientId,
-                payload: input.payload,
-                device_id: input.deviceId ?? null,
-            });
-
-            return sequence;
+            const ctx: SyncStorageTransactionContext = {
+                storage: new DrizzleAdapter(txDb),
+                appendChange: (input) => this.appendChangeOnDb(txDb, input),
+                insertConflict: (input) => this.insertConflictOnDb(txDb, input),
+            };
+            return fn(ctx);
         });
+    }
+
+    private async insertConflictOnDb(
+        txDb: ApiDb,
+        input: {
+            userId: number;
+            contextId: string;
+            kind: string;
+            clientId: string | null;
+            sequence: number;
+            publicId: string;
+            leftPayload: Record<string, unknown>;
+            rightPayload: Record<string, unknown>;
+        },
+    ): Promise<SyncConflictRecord> {
+        const rows = await txDb
+            .insert(sync_conflicts)
+            .values({
+                public_id: input.publicId,
+                user_id: input.userId,
+                context_id: input.contextId,
+                kind: input.kind,
+                client_id: input.clientId,
+                sequence: input.sequence,
+                left_payload: input.leftPayload,
+                right_payload: input.rightPayload,
+            })
+            .returning();
+        return mapConflict(rows[0]!);
     }
 
     async listChanges(userId: number, since: number, limit: number): Promise<SyncChangeRecord[]> {

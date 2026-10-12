@@ -7,12 +7,20 @@ import type { AuthRepository } from '@infinitecontext/auth';
 
 export async function syncSessionMeta(c: HttpContext, authRepo: AuthRepository | null | undefined) {
     const auth = c.get('auth');
-    if (auth.kind !== 'user_session' || !authRepo) return null;
-    const session = await authRepo.findSessionById(auth.sessionId);
-    return {
-        userId: auth.userId,
-        deviceId: session?.device_id ?? null,
-    };
+    if (!authRepo) return null;
+    if (auth.kind === 'user_session') {
+        const session = await authRepo.findSessionById(auth.sessionId);
+        return {
+            userId: auth.userId,
+            deviceId: session?.device_id ?? null,
+        };
+    }
+    if (auth.kind === 'api_key') {
+        const userId = await authRepo.findUserIdByProjectId(auth.projectId);
+        if (!userId) return null;
+        return { userId, deviceId: null };
+    }
+    return null;
 }
 
 export function extractAppendClientIds(body: unknown): string[] {

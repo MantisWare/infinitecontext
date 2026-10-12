@@ -6,6 +6,7 @@ import { generateClientNodeId } from "./ic-crypto.mjs";
 import { pullSyncChanges, pushSyncMutations } from "./sync-api.mjs";
 
 const SYNC_STATE_FILE = path.join(os.homedir(), ".infinitecontext", "sync-state.json");
+const SYNC_REPLICA_FILE = path.join(os.homedir(), ".infinitecontext", "sync-replica.json");
 
 function readSyncState() {
   try {
@@ -34,17 +35,126 @@ export function queueSyncMutation(mutation) {
   writeSyncState({ ...state, outbox });
 }
 
+function settledClientIds(result) {
+  const settled = new Set(result.applied ?? []);
+  for (const id of result.duplicate ?? []) settled.add(id);
+  for (const row of result.conflicts ?? []) {
+    if (row.client_id) settled.add(row.client_id);
+  }
+  for (const row of result.failed ?? []) {
+    if (!row.retryable && row.client_id) settled.add(row.client_id);
+  }
+  return settled;
+}
+
 export async function flushSyncOutbox({ baseUrl, log } = {}) {
   const state = readSyncState();
   const outbox = Array.isArray(state.outbox) ? state.outbox : [];
   if (outbox.length === 0) return { pushed: 0 };
 
   const result = await pushSyncMutations(outbox, { baseUrl });
-  writeSyncState({ ...state, outbox: [], cursor: Math.max(state.cursor ?? 0, result.head_sequence ?? 0) });
+  const settled = settledClientIds(result);
+  const remaining = outbox.filter((m) => !settled.has(m.client_id));
+  writeSyncState({ ...state, outbox: remaining });
   if (log && result.conflicts?.length) {
     log("warn", "Sync push recorded conflicts", { count: result.conflicts.length });
   }
-  return { pushed: result.applied?.length ?? 0, result };
+  if (log && result.failed?.length) {
+    log("warn", "Sync push left retryable mutations in outbox", { count: result.failed.length });
+  }
+  return { pushed: result.applied?.length ?? 0, result, remaining: remaining.length };
+}
+
+function readReplica() {
+  try {
+    return JSON.parse(fs.readFileSync(SYNC_REPLICA_FILE, "utf8"));
+  } catch {
+    return { contexts: {}, messages: {} };
+  }
+}
+
+function writeReplica(replica) {
+  const dir = path.dirname(SYNC_REPLICA_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${SYNC_REPLICA_FILE}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(replica, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, SYNC_REPLICA_FILE);
+}
+
+/** Lightweight on-disk replica for `infinitecontext sync pull` (no daemon.db). */
+export function createCliSyncStore() {
+  return {
+    applySyncChange(change) {
+      applySyncChangeToReplica(readReplica(), change, writeReplica);
+    },
+  };
+}
+
+export function applySyncChangeToReplica(replica, change, persist) {
+  if (!change || typeof change !== "object") return;
+  const op = String(change.op ?? "");
+  const contextId = change.context_id ? String(change.context_id) : "";
+  const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
+  const sequence = Number(change.sequence ?? 0);
+
+  if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
+    const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
+    const id = String(payload.context_id ?? contextId ?? "");
+    if (id) {
+      replica.contexts[id] = { metadata: meta, sequence, deleted: false };
+    }
+    persist(replica);
+    return;
+  }
+
+  if (op === "context_delete") {
+    const id = String(payload.context_id ?? contextId ?? "");
+    if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
+    persist(replica);
+    return;
+  }
+
+  if (op === "contexts_delete_many") {
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    for (const row of results) {
+      const id = String(row?.id ?? row?.context_id ?? "");
+      if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
+    }
+    persist(replica);
+    return;
+  }
+
+  if (op === "message_append") {
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+      if (!clientNodeId) continue;
+      replica.messages[String(clientNodeId)] = {
+        context_id: String(payload.context_id ?? contextId),
+        payload: row,
+        sequence,
+      };
+    }
+    persist(replica);
+    return;
+  }
+
+  if (op === "message_update" || op === "message_delete") {
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+      if (!clientNodeId) continue;
+      replica.messages[String(clientNodeId)] = {
+        context_id: String(payload.context_id ?? contextId),
+        payload: row,
+        sequence,
+        op,
+      };
+    }
+    persist(replica);
+  }
 }
 
 export async function pullAndApplySync({ baseUrl, store, log } = {}) {

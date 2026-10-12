@@ -29,6 +29,7 @@ Run `infinitecontext config` to pick **hosted** or **self-host** in the setup wi
 ## Free hosted tier
 
 - **Default client URL:** `https://api.infinitecontext.ai` (single constant per SDK language).
+- **Hosted API runtime:** Node.js + PostgreSQL (Drizzle), including **`/sync/*`** multi-device sync. Cloudflare Workers is an optional self-host path only; Workers deployments return **503** `sync_api_unavailable` for sync routes.
 - **Zero-knowledge when vault is enabled:** Run `infinitecontext vault init` after login. The server stores ciphertext for encrypted contexts; without vault, data may be plaintext JSON (same as self-host before vault).
 - **Self-host anytime:** Point `config set server` or `INFINITECONTEXT_BASE_URL` at your own API — see the self-host recipe below.
 

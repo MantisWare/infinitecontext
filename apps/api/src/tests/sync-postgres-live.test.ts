@@ -126,6 +126,73 @@ describe('sync-postgres-live', () => {
         assert.equal((read.body.data as any[])?.length, 2);
     });
 
+    it('stores 10k appends from 8 parallel pushers (change log matches nodes)', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'parallel-append', session_id: 'pa1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(create.res.status, 200);
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+
+        const total = 10_000;
+        const workers = 8;
+        const perWorker = total / workers;
+
+        const worker = async (offset: number) => {
+            const batchSize = 50;
+            for (let i = 0; i < perWorker; i += batchSize) {
+                const mutations = [];
+                for (let j = 0; j < batchSize && i + j < perWorker; j += 1) {
+                    const n = offset + i + j;
+                    const mId = generateClientNodeId();
+                    mutations.push({
+                        client_id: generateClientNodeId(),
+                        op: 'message_append',
+                        context_id: contextId,
+                        payload: {
+                            messages: [{ id: mId, role: 'user', content: { message: `m-${n}` }, metadata: { ic_client_node_id: mId } }],
+                        },
+                    });
+                }
+                const push = await fx.json('POST', '/sync/push', { mutations }, fx.accessA);
+                assert.equal(push.res.status, 200, JSON.stringify(push.body));
+                const retryable = (push.body.failed as any[])?.filter((f) => f.retryable) ?? [];
+                assert.equal(retryable.length, 0, `retryable failures: ${JSON.stringify(retryable.slice(0, 3))}`);
+            }
+        };
+
+        await Promise.all(Array.from({ length: workers }, (_, w) => worker(w * perWorker)));
+
+        const read = await fx.json('GET', `/contexts/${contextId}?limit=20000`, undefined, fx.accessA);
+        assert.equal(read.res.status, 200);
+        const stored = ((read.body.data as any[]) ?? []).length;
+        assert.equal(stored, total, `expected ${total} stored messages, got ${stored}`);
+
+        let since = 0;
+        let appendOps = 0;
+        while (appendOps < total + 50) {
+            const pull = await fx.json('GET', `/sync/changes?since=${since}&limit=1000`, undefined, fx.accessA);
+            const batch = (pull.body.changes as any[]) ?? [];
+            if (batch.length === 0) break;
+            appendOps += batch.filter((c) => c.op === 'message_append').length;
+            since = Number(pull.body.next_since ?? since);
+            if (!pull.body.has_more) break;
+        }
+        assert.equal(appendOps, total);
+    });
+
     it('paginates 10k changes with no gaps/duplicates under concurrent push', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();
@@ -277,5 +344,62 @@ describe('sync-postgres-live vault', () => {
         assert.equal(append.res.status, 200);
         const pull = await fx.json('GET', '/sync/changes?since=0', undefined, fx.accessB);
         assert.ok((pull.body.changes as any[])?.length >= 2);
+        const appendChange = (pull.body.changes as any[]).find((c) => c.op === 'message_append');
+        const payload = JSON.stringify(appendChange?.payload ?? {});
+        assert.ok(payload.includes('__ic_enc') || payload.includes('ciphertext'), 'vault change log must not store plaintext bodies');
+    });
+
+    it('rejects plaintext message_update via sync push', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const material = await createVaultCryptoMaterial('vault-sync-pass1');
+        await fx.json(
+            'PUT',
+            '/auth/crypto',
+            {
+                kdf_salt: Buffer.from(material.kdfSalt).toString('base64'),
+                kdf_params: material.kdfParams,
+                wrapped_dek: Buffer.from(material.wrappedDekPassphrase).toString('base64'),
+                wrapped_dek_recovery: Buffer.from(material.wrappedDekRecovery).toString('base64'),
+                dek_proof: Buffer.from(computeDekProof(material.dek)).toString('base64'),
+                dek_version: material.dekVersion,
+                vault_passphrase_required: false,
+            },
+            fx.accessA,
+        );
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'vault-upd', session_id: 'vu1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const nodeId = generateClientNodeId();
+        const upd = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'message_update',
+                        context_id: contextId,
+                        payload: {
+                            data: [{ id: nodeId, role: 'user', content: { message: 'plain' }, metadata: { ic_client_node_id: nodeId } }],
+                        },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        assert.equal(upd.res.status, 422);
     });
 });
