@@ -186,7 +186,8 @@ function isNewerVersion(latest, current) {
 }
 
 async function checkForUpdateSilent() {
-  if (String(process.env.INFINITECONTEXT_NO_UPDATE_CHECK ?? "").trim() === "1") return;
+  const { isUpdateCheckDisabled } = await import("infinitecontext/lib/update-check.mjs");
+  if (isUpdateCheckDisabled()) return;
   if (process.env.INFINITECONTEXT_DEV) return;
   const current = readTuiVersion();
   if (current === "unknown") return;

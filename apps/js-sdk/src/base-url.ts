@@ -1,9 +1,10 @@
-export const HOSTED_API_BASE_URL = 'https://api.infinitecontext.ai';
+export {
+    DOCS_API_BASE_URL_PLACEHOLDER,
+    HOSTED_API_BASE_URL,
+    KEYS_AND_SERVICES_DOC_URL,
+} from '../lib/client-config.mjs';
 
-export const DOCS_API_BASE_URL_PLACEHOLDER = 'https://your-api.example.com';
-
-export const KEYS_AND_SERVICES_DOC_URL =
-    'https://docs.infinitecontext.ai/configuration/keys-and-services';
+import { HOSTED_API_BASE_URL } from '../lib/client-config.mjs';
 
 export class MissingClientConfigError extends Error {
     constructor(message: string) {

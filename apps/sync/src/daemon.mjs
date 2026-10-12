@@ -8,7 +8,7 @@ import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 
 import fg from "fast-glob";
-import { resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
+import { KEYS_AND_SERVICES_DOC_URL, resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
 import { assertSyncAuth, createInfiniteContextClient } from "./client-auth.mjs";
 import {
   createBootstrapStateKey,
@@ -1148,7 +1148,7 @@ export async function daemonBoot({ createStore, resolveDbPath }) {
     // connectivity check
     try { await uc.get({ limit: 1 }); } catch (error) {
       const details = errorDetails(error);
-      throw new Error(`InfiniteContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). Check your API key at https://infinitecontext.ai`);
+      throw new Error(`InfiniteContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). See ${KEYS_AND_SERVICES_DOC_URL}`);
     }
 
     log("info", "InfiniteContext daemon started", {

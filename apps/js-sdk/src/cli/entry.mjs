@@ -51,7 +51,7 @@ Commands:
 Environment:
   INFINITECONTEXT_API_KEY   Optional legacy API key (or run: infinitecontext login)
   INFINITECONTEXT_BASE_URL  API base URL (default: hosted free tier at api.infinitecontext.ai)
-  INFINITECONTEXT_NO_UPDATE_CHECK  Set to 1 to skip optional npm version check
+  INFINITECONTEXT_NO_UPDATE_CHECK  Set to 1, true, or yes to skip optional npm version check
 
 Vault: Losing both your vault passphrase and recovery key means permanent data loss.
 Run \`infinitecontext vault help\` for init/unlock/recover commands.
@@ -376,7 +376,8 @@ function printUpdateNotice(current, latest) {
 
 // check on every invocation, no cache — like Claude Code
 async function checkForUpdate() {
-  if (String(process.env.INFINITECONTEXT_NO_UPDATE_CHECK ?? "").trim() === "1") return;
+  const { isUpdateCheckDisabled } = await import("../../lib/update-check.mjs");
+  if (isUpdateCheckDisabled()) return;
   const current = readVersion();
   if (current === "unknown") return;
 

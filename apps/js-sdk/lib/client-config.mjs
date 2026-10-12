@@ -75,6 +75,13 @@ export function resolveBaseUrl(opts = {}) {
 
 /** Where the effective base URL came from (for config show / login). */
 export function resolveBaseUrlSource(opts = {}) {
+  if (opts.cliBaseUrl) {
+    return {
+      source: "cli flag (--base-url)",
+      envVar: null,
+      value: normalizeBaseUrl(opts.cliBaseUrl),
+    };
+  }
   const env = opts.env ?? process.env;
   const config = opts.config ?? readConfigFile();
   const fromEnv = String(env.INFINITECONTEXT_BASE_URL ?? "").trim();
@@ -85,13 +92,17 @@ export function resolveBaseUrlSource(opts = {}) {
   if (fromFile) {
     return { source: "config.json", envVar: null, value: normalizeBaseUrl(fromFile) };
   }
-  return { source: "default", envVar: null, value: HOSTED_API_BASE_URL };
+  return { source: "default (hosted)", envVar: null, value: HOSTED_API_BASE_URL };
 }
 
 export function describeActiveServer(baseUrl = resolveBaseUrl()) {
   const normalized = normalizeBaseUrl(baseUrl);
   if (isHostedApiBaseUrl(normalized)) {
-    return { baseUrl: normalized, kind: "hosted", label: "Hosted (free, zero-knowledge)" };
+    return {
+      baseUrl: normalized,
+      kind: "hosted",
+      label: "Hosted (free; zero-knowledge when vault is enabled)",
+    };
   }
   return { baseUrl: normalized, kind: "self-host", label: "Self-hosted" };
 }

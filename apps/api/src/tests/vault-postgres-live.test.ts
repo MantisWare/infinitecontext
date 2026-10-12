@@ -19,14 +19,25 @@ const TEST_AUTH_CONFIG = {
     publicBaseUrl: 'http://127.0.0.1:8787',
 };
 
-const DB_URL =
-    process.env.VAULT_E2E_DATABASE_URL ??
-    'postgres://infinitecontext:infinitecontext@127.0.0.1:5432/infinitecontext_verify';
+const DB_URL = process.env.VAULT_E2E_DATABASE_URL;
+
+function liveDatabaseUrl(): string {
+    if (!DB_URL) {
+        throw new Error('VAULT_E2E_DATABASE_URL is required for live vault postgres tests');
+    }
+    return DB_URL;
+}
 
 let postgresReady = false;
 
 before(async () => {
-    process.env.POSTGRES_PASSWORD = process.env.POSTGRES_PASSWORD ?? 'infinitecontext';
+    if (!DB_URL || !process.env.POSTGRES_PASSWORD) {
+        postgresReady = false;
+        console.warn(
+            'vault-postgres-live skipped: set VAULT_E2E_DATABASE_URL and POSTGRES_PASSWORD to run live postgres tests.',
+        );
+        return;
+    }
     const script = path.resolve(process.cwd(), '../postgres/scripts/verify-migration-chain.sh');
     const res = spawnSync('bash', [script], {
         encoding: 'utf8',
@@ -51,7 +62,7 @@ type LiveFixture = Awaited<ReturnType<typeof setupLiveApp>>;
 async function setupLiveApp() {
     const config: ApiConfig = {
         DATABASE_PROVIDER: 'postgres',
-        DATABASE_URL: DB_URL,
+        DATABASE_URL: liveDatabaseUrl(),
         INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
     };
     const storage = createStorageAdapter(config);
@@ -129,7 +140,10 @@ async function setupLiveApp() {
 
 describe('vault postgres live e2e', () => {
     it('append-by-index round-trips (daemon-style payload)', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { vaultClient } = await setupLiveApp();
         const created = await vaultClient.create({ metadata: { source: 'live-test', title: 'My Title' } });
         assert.equal(created.metadata?.title, 'My Title');
@@ -143,7 +157,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('append round-trips sync daemon payload shape (nested content, no id)', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { vaultClient } = await setupLiveApp();
         const created = await vaultClient.create({ metadata: { source: 'sync-daemon-test' } });
         await vaultClient.append(created.id, {
@@ -164,7 +181,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('detects swapped ciphertext between indices', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { vaultClient, json, accessToken } = await setupLiveApp();
         const created = await vaultClient.create({ metadata: { source: 'swap-test' } });
         await vaultClient.append(created.id, { role: 'user', text: 'first' });
@@ -209,7 +229,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('fork preserves root title and message metadata', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { vaultClient } = await setupLiveApp();
         const source = await vaultClient.create({ metadata: { title: 'Fork Me', source: 'fork-test' } });
         await vaultClient.append(source.id, {
@@ -225,7 +248,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('delete-then-read keeps stable client node ids', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { vaultClient } = await setupLiveApp();
         const created = await vaultClient.create({ metadata: { source: 'delete-test' } });
         await vaultClient.append(created.id, { role: 'user', text: 'a' });
@@ -240,7 +266,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('migrateEncryptContext converges plaintext', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { json, accessToken, vaultClient } = await setupLiveApp();
         const registerPlain = await json('POST', '/auth/register', {
             email: `plain-${Date.now()}@example.com`,
@@ -273,7 +302,7 @@ describe('vault postgres live e2e', () => {
         const { InfiniteContext } = await import(path.join(sdkRoot, 'dist/index.mjs') as string);
         const config: ApiConfig = {
             DATABASE_PROVIDER: 'postgres',
-            DATABASE_URL: DB_URL,
+            DATABASE_URL: liveDatabaseUrl(),
             INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
         };
         const storage = createStorageAdapter(config);
@@ -314,7 +343,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('blocks encrypted append until migrate and allows migrate-read on legacy plaintext', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { json, material } = await setupLiveApp();
         const register = await json('POST', '/auth/register', {
             email: `legacy-append-${Date.now()}@example.com`,
@@ -363,7 +395,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('concurrent duplicate icn appends return 409 not 500', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { json, vaultClient, accessToken, material, userPublicId } = await setupLiveApp();
         const created = await vaultClient.create({ metadata: { source: 'concurrent-append' } });
         const crypto = await import('@infinitecontext/crypto');
@@ -386,7 +421,10 @@ describe('vault postgres live e2e', () => {
     });
 
     it('rejects historical plaintext version reads', async (t) => {
-        if (!postgresReady) t.skip();
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
         const { json, accessToken } = await setupLiveApp();
         const register = await json('POST', '/auth/register', {
             email: `hist-${Date.now()}@example.com`,
@@ -418,7 +456,7 @@ describe('vault postgres live e2e', () => {
         const { InfiniteContext } = await import(path.join(sdkRoot, 'dist/index.mjs') as string);
         const config: ApiConfig = {
             DATABASE_PROVIDER: 'postgres',
-            DATABASE_URL: DB_URL,
+            DATABASE_URL: liveDatabaseUrl(),
             INFINITECONTEXT_ADMIN_KEY: 'test-admin-key',
         };
         const storage = createStorageAdapter(config);

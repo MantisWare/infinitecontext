@@ -69,11 +69,16 @@ function isValidKey(key) {
 
 // ── step constants ──────────────────────────────────────────────
 
-const STEPS = ["welcome", "hosting", "url", "mode", "key", "agents", "projects", "capture", "launch", "done"];
+const STEPS = ["welcome", "hosting", "url", "mode", "vaultOffer", "key", "agents", "projects", "capture", "launch", "done"];
 
 const HOSTING_OPTIONS = [
-  { label: "Hosted (free — zero-knowledge vault)", value: "hosted" },
+  { label: "Hosted (free — vault optional, zero-knowledge when enabled)", value: "hosted" },
   { label: "Self-host (your own Context API)", value: "selfhost" },
+];
+
+const VAULT_OFFER_OPTIONS = [
+  { label: "Yes — initialize vault after login (recommended)", value: true },
+  { label: "No — skip for now", value: false },
 ];
 
 const MODE_OPTIONS = [
@@ -232,6 +237,21 @@ function Onboarding({ onDone }) {
       return;
     }
 
+    // ── vault offer (hosted + account login) ──
+    if (step === "vaultOffer") {
+      if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
+      if (key.downArrow) setSelectedIndex((i) => Math.min(i + 1, VAULT_OFFER_OPTIONS.length - 1));
+      if (input === "1") setSelectedIndex(0);
+      if (input === "2") setSelectedIndex(1);
+
+      if (key.return || input === " ") {
+        const recommend = VAULT_OFFER_OPTIONS[selectedIndex].value;
+        writeConfig({ vaultInitRecommended: recommend });
+        pushStep("agents");
+      }
+      return;
+    }
+
     // ── auth mode ──
     if (step === "mode") {
       if (key.upArrow) setSelectedIndex((i) => Math.max(i - 1, 0));
@@ -245,7 +265,11 @@ function Onboarding({ onDone }) {
         if (chosen === "login") {
           writeConfig({ baseUrl });
           process.env.INFINITECONTEXT_BASE_URL = baseUrl;
-          pushStep("agents");
+          if (hosting === "hosted") {
+            pushStep("vaultOffer");
+          } else {
+            pushStep("agents");
+          }
           setError("");
           return;
         }
@@ -414,6 +438,23 @@ function Onboarding({ onDone }) {
     );
   }
 
+  if (step === "vaultOffer") {
+    content = React.createElement(
+      Box,
+      { flexDirection: "column" },
+      React.createElement(Text, { color: "white", bold: true }, "Initialize vault after you sign in?"),
+      React.createElement(Text, { color: "gray" }, "Zero-knowledge when vault is enabled (`infinitecontext vault init`)."),
+      React.createElement(Box, { height: 1 }),
+      ...VAULT_OFFER_OPTIONS.map((opt, i) => ListRow({
+        keyProp: `v${i}`,
+        focused: i === selectedIndex,
+        label: opt.label,
+      })),
+      React.createElement(Box, { height: 1 }),
+      React.createElement(Text, { color: "gray" }, "\u2191\u2193 navigate \u00B7 enter select")
+    );
+  }
+
   if (step === "hosting") {
     content = React.createElement(
       Box,
@@ -553,7 +594,13 @@ function Onboarding({ onDone }) {
       Box,
       { flexDirection: "column" },
       authMode === "login"
-        ? React.createElement(Text, { color: "yellow" }, "Run `infinitecontext login` after setup to sign in.")
+        ? React.createElement(
+            Text,
+            { color: "yellow" },
+            hosting === "hosted"
+              ? "Run `infinitecontext login` — you will be prompted to initialize vault if recommended."
+              : "Run `infinitecontext login` after setup to sign in.",
+          )
         : null,
       React.createElement(Text, { color: "white", bold: true }, "Launch the TUI dashboard?"),
       React.createElement(Box, { height: 1 }),

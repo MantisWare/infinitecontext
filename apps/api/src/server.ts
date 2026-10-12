@@ -11,9 +11,8 @@ import { createAuthRepository } from '@infinitecontext/storage/auth';
 
 // -- Node.js entrypoint -------------------------------------------------------
 
-warnIfJwtSecretMissing(process.env);
-
 const config = getApiConfig();
+warnIfJwtSecretMissing(process.env);
 const storage = createStorageAdapter(config);
 const authConfig = buildAuthRuntimeConfig(process.env);
 const authRepo = authConfig ? createAuthRepository(config) : undefined;
@@ -31,7 +30,7 @@ const app = createApp({
 const port = Number(process.env.PORT ?? 8787);
 
 logStartupConfigSummary(process.env);
-void warnIfMailMisconfigured(process.env, 'node');
+await warnIfMailMisconfigured(process.env, 'node');
 
 serve({ fetch: app.fetch, port });
 

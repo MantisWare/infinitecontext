@@ -13,6 +13,27 @@ describe('runtime-config', () => {
         });
     });
 
+    it('warnIfMailMisconfigured warns when SMTP host missing on Node', async () => {
+        const { warnIfMailMisconfigured } = await import('../runtime-config');
+        const warnings: string[] = [];
+        const original = console.warn;
+        console.warn = (msg: string) => {
+            warnings.push(String(msg));
+        };
+        try {
+            await warnIfMailMisconfigured(
+                {
+                    INFINITECONTEXT_JWT_SECRET: 'test-jwt-secret-must-be-at-least-32-bytes-long',
+                    INFINITECONTEXT_MAIL_PROVIDER: 'smtp',
+                },
+                'node',
+            );
+        } finally {
+            console.warn = original;
+        }
+        assert.ok(warnings.some((w) => w.includes('INFINITECONTEXT_SMTP_HOST')));
+    });
+
     it('buildStartupConfigSummary omits secrets', () => {
         const summary = buildStartupConfigSummary({
             DATABASE_PROVIDER: 'postgres',

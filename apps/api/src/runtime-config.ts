@@ -104,6 +104,21 @@ export function warnIfJwtSecretMissing(env: Record<string, string | undefined>):
 export async function warnIfMailMisconfigured(env: Record<string, string | undefined>, runtime: 'node' | 'worker'): Promise<void> {
     const authConfig = buildAuthRuntimeConfig(env);
     if (!authConfig) return;
+
+    const mailProvider = String(env.INFINITECONTEXT_MAIL_PROVIDER ?? 'smtp').trim().toLowerCase();
+    if (mailProvider === 'smtp' && !String(env.INFINITECONTEXT_SMTP_HOST ?? '').trim()) {
+        console.warn(
+            `[infinitecontext-api] WARNING: INFINITECONTEXT_SMTP_HOST is not set — verification email will fail. See ${KEYS_AND_SERVICES_DOC_URL}`,
+        );
+        return;
+    }
+    if (mailProvider === 'resend' && !String(env.INFINITECONTEXT_RESEND_API_KEY ?? '').trim()) {
+        console.warn(
+            `[infinitecontext-api] WARNING: INFINITECONTEXT_RESEND_API_KEY is not set — verification email will fail. See ${KEYS_AND_SERVICES_DOC_URL}`,
+        );
+        return;
+    }
+
     try {
         await resolveMailer(env, runtime);
     } catch (error) {

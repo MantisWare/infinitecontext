@@ -3,7 +3,7 @@ title: 'Keys and services'
 description: 'Bring-your-own configuration for the free hosted tier and self-hosted InfiniteContext'
 ---
 
-InfiniteContext is **free and open source**. The repository does not ship paid-service credentials or telemetry. External services (Postgres, SMTP, optional Resend, Google OAuth) are **bring-your-own** on self-host; the **hosted free tier** at `https://api.infinitecontext.ai` is operated separately and uses **zero-knowledge vault encryption** — the server stores and serves **ciphertext only** (see [vault zero-knowledge](/docs/vault-zero-knowledge) in the repo docs).
+InfiniteContext is **free and open source**. The repository does not ship paid-service credentials or telemetry. External services (Postgres, SMTP, optional Resend, Google OAuth) are **bring-your-own** on self-host. The **free hosted tier** uses the default client URL (`https://api.infinitecontext.ai` in SDK constants). Context is **zero-knowledge when vault is enabled** (`infinitecontext vault init`) — until then, appends may be stored as plaintext on the server.
 
 <Info>No LLM API keys are required for core context storage. Future optional LLM features will follow the same pattern: documented, optional, and configured by you — never embedded in source.</Info>
 
@@ -13,10 +13,10 @@ These settings apply to the CLI, sync daemon, TUI, MCP server, and SDKs on your 
 
 | Setting | Required | Default | Env variable | Config key | If missing |
 |---------|----------|---------|--------------|------------|------------|
-| API base URL | No | `https://api.infinitecontext.ai` (hosted) | `INFINITECONTEXT_BASE_URL` | `baseUrl` via `infinitecontext config set server` | Uses free hosted tier |
+| API base URL | No | Hosted free tier (see SDK constant) | `INFINITECONTEXT_BASE_URL` | `baseUrl` via `infinitecontext config set server` | Uses hosted default |
 | Legacy API key | One of key **or** login | — | `INFINITECONTEXT_API_KEY` | `apiKey` | Use `infinitecontext login` or set a project key |
 | Account session | One of key **or** login | — | (stored in `~/.infinitecontext/credentials.json`) | — | Run `infinitecontext login` |
-| Skip npm update check | No | check enabled | `INFINITECONTEXT_NO_UPDATE_CHECK=1` | — | Optional registry lookup on CLI start (not telemetry) |
+| Skip npm update check | No | check enabled | `INFINITECONTEXT_NO_UPDATE_CHECK=1` / `true` / `yes` | — | Optional registry lookup on CLI start (not telemetry) |
 
 ```bash
 infinitecontext config show    # shows active server (hosted vs self-host)
@@ -28,9 +28,9 @@ Run `infinitecontext config` to pick **hosted** or **self-host** in the setup wi
 
 ## Free hosted tier
 
-- **Default client URL:** `https://api.infinitecontext.ai` (single constant in each SDK).
-- **Zero-knowledge:** With vault enabled, message bodies and sensitive metadata are encrypted on your device; the hosted API does not hold decryption keys.
-- **Self-host anytime:** Same clients and vault model — point `config set server` or `INFINITECONTEXT_BASE_URL` at your own API.
+- **Default client URL:** `https://api.infinitecontext.ai` (single constant per SDK language).
+- **Zero-knowledge when vault is enabled:** Run `infinitecontext vault init` after login. The server stores ciphertext for encrypted contexts; without vault, data may be plaintext JSON (same as self-host before vault).
+- **Self-host anytime:** Point `config set server` or `INFINITECONTEXT_BASE_URL` at your own API — see the self-host recipe below.
 
 ## Server environment (Context API)
 
@@ -70,12 +70,12 @@ Copy `apps/api/wrangler.example.jsonc` to `apps/api/wrangler.jsonc` (gitignored)
 ## Health and auth providers
 
 ```bash
-curl -s https://api.infinitecontext.ai/health/config
-curl -s https://api.infinitecontext.ai/auth/providers
+curl -s https://your-api.example.com/health/config
+curl -s https://your-api.example.com/auth/providers
 ```
 
-`/health/config` returns booleans only (no secrets). Use it to see whether Google OAuth or SMTP is configured.
+Replace the host with your hosted or self-hosted base URL. `/health/config` returns booleans only (no secrets).
 
 ## No telemetry
 
-InfiniteContext does not include product analytics or crash reporting in the open-source tree. The CLI may optionally query the public npm registry for a newer package version unless you set `INFINITECONTEXT_NO_UPDATE_CHECK=1`.
+InfiniteContext does not include product analytics or crash reporting in the open-source tree. The CLI may optionally query the public npm registry for a newer package version unless you set `INFINITECONTEXT_NO_UPDATE_CHECK` to `1`, `true`, or `yes`.

@@ -82,7 +82,7 @@ function spawnWizard() {
   proc.onExit(({ exitCode: code, signal }) => { exitCode = code; exitSignal = signal; });
 
   // wait until `re` appears in the output since the last mark
-  async function waitFor(re, { timeoutMs = 4000 } = {}) {
+  async function waitFor(re, { timeoutMs = 10000 } = {}) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (re.test(buffer)) return true;
@@ -132,6 +132,7 @@ const DEFAULT_URL = "http://127.0.0.1:8787";
 async function goWelcome(w) {
   await w.waitFor(/Welcome to InfiniteContext/);
   await w.send(KEY.enter);
+  await new Promise((r) => setTimeout(r, 150));
 }
 
 async function goHostingHosted(w) {

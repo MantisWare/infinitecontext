@@ -117,7 +117,12 @@ async function postJson(baseUrl, path, body) {
 
 async function afterLoginVaultGate(baseUrl, { google = false } = {}) {
   const { runInteractiveVaultInitIfRequired } = await import("../../lib/vault-require.mjs");
-  await runInteractiveVaultInitIfRequired({ baseUrl, googleAccount: google });
+  const { isHostedApiBaseUrl } = await import("../../lib/client-config.mjs");
+  await runInteractiveVaultInitIfRequired({
+    baseUrl,
+    googleAccount: google,
+    hostedVaultRecommended: isHostedApiBaseUrl(baseUrl),
+  });
 }
 
 function persistTokens(baseUrl, body, extra = {}) {
@@ -273,7 +278,9 @@ export async function runLogin(argv = process.argv.slice(3)) {
   const args = parseArgs(argv);
   const baseUrl = String(args.baseUrl ?? resolveBaseUrl()).replace(/\/+$/, "");
   const active = describeActiveServer(baseUrl);
-  const src = resolveBaseUrlSource();
+  const src = args.baseUrl
+    ? resolveBaseUrlSource({ cliBaseUrl: args.baseUrl })
+    : resolveBaseUrlSource();
   console.log(`Server: ${active.baseUrl} (${active.label}, source: ${src.source})`);
 
   if (args.google) {

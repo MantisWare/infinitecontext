@@ -4,12 +4,19 @@ import { homedir } from "node:os";
 
 import { InfiniteContext } from "infinitecontext";
 import { getValidAccessToken, loadCredentials } from "infinitecontext/credentials";
-import { resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
+import { KEYS_AND_SERVICES_DOC_URL, resolveBaseUrl } from "infinitecontext/lib/client-config.mjs";
 
 export type LoadedClientAuth = {
     baseUrl: string;
     createClient: () => InfiniteContext | Promise<InfiniteContext>;
 };
+
+export class ClientAuthError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ClientAuthError';
+    }
+}
 
 function readConfigFile(): Record<string, unknown> {
     const configPath = join(homedir(), ".infinitecontext", "config.json");
@@ -42,14 +49,18 @@ export function loadClientAuth(): LoadedClientAuth {
             createClient: async () => {
                 const session = await getValidAccessToken({ baseUrl });
                 if (!session?.accessToken) {
-                    throw new Error("Session expired or invalid. Run `infinitecontext login`.");
+                    throw new ClientAuthError(
+                        'Session expired or invalid. Run `infinitecontext login` to refresh your account session.',
+                    );
                 }
                 return new InfiniteContext({
                     baseUrl,
                     getAccessToken: async () => {
                         const next = await getValidAccessToken({ baseUrl });
                         if (!next?.accessToken) {
-                            throw new Error("Session expired or invalid. Run `infinitecontext login`.");
+                            throw new ClientAuthError(
+                                'Session expired or invalid. Run `infinitecontext login` to refresh your account session.',
+                            );
                         }
                         return next.accessToken;
                     },
@@ -58,8 +69,7 @@ export function loadClientAuth(): LoadedClientAuth {
         };
     }
 
-    throw new Error(
-        "Authentication required: set INFINITECONTEXT_API_KEY, add apiKey to ~/.infinitecontext/config.json, or run `infinitecontext login`. " +
-            "See https://docs.infinitecontext.ai/configuration/keys-and-services",
+    throw new ClientAuthError(
+        `Authentication required: set INFINITECONTEXT_API_KEY, add apiKey to ~/.infinitecontext/config.json, or run \`infinitecontext login\`. See ${KEYS_AND_SERVICES_DOC_URL}`,
     );
 }
