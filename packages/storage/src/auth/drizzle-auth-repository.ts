@@ -155,15 +155,19 @@ export class DrizzleAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
-    }): Promise<void> {
-        await this.db
+    }): Promise<boolean> {
+        const rows = await this.db
             .update(sessions)
             .set({
                 refresh_token_hash: input.newRefreshTokenHash,
                 replaced_refresh_token_hash: input.previousRefreshTokenHash,
                 last_used_at: input.lastUsedAt,
             })
-            .where(eq(sessions.id, input.sessionId));
+            .where(
+                and(eq(sessions.id, input.sessionId), eq(sessions.refresh_token_hash, input.previousRefreshTokenHash)),
+            )
+            .returning({ id: sessions.id });
+        return rows.length > 0;
     }
 
     async touchSession(id: number, lastUsedAt: string): Promise<void> {

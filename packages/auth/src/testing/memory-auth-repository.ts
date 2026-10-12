@@ -152,12 +152,13 @@ export class MemoryAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
-    }): Promise<void> {
+    }): Promise<boolean> {
         const session = this.sessions.find((s) => s.id === input.sessionId);
-        if (!session) return;
+        if (!session || session.refresh_token_hash !== input.previousRefreshTokenHash) return false;
         session.replaced_refresh_token_hash = input.previousRefreshTokenHash;
         session.refresh_token_hash = input.newRefreshTokenHash;
         session.last_used_at = input.lastUsedAt;
+        return true;
     }
 
     async touchSession(id: number, lastUsedAt: string): Promise<void> {

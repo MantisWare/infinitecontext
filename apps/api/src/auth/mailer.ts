@@ -80,10 +80,7 @@ async function createSmtpMailer(env: Record<string, string | undefined>): Promis
 }
 
 export async function resolveMailer(env: Record<string, string | undefined>, runtime: 'node' | 'worker'): Promise<Mailer> {
-    if (String(env.INFINITECONTEXT_ALLOW_CONSOLE_MAILER ?? '').trim() === 'true') {
-        return createConsoleMailer();
-    }
-    if (isDevEnvironment(env)) {
+    if (isDevEnvironment(env) && String(env.INFINITECONTEXT_ALLOW_CONSOLE_MAILER ?? '').trim() === 'true') {
         return createConsoleMailer();
     }
 

@@ -5,7 +5,7 @@ import { MemoryStorage } from '@infinitecontext/core/testing';
 
 import { createMockGoogleOAuthClient } from './google-oauth';
 import { AuthService } from './service';
-import { hashRefreshToken } from './tokens';
+import { hashOpaqueToken, hashRefreshToken } from './tokens';
 import { MemoryAuthRepository } from './testing/memory-auth-repository';
 
 const config = {
@@ -59,7 +59,32 @@ describe('AuthService', () => {
         const rotated = await service.refresh(firstRefresh);
         assert.notEqual(rotated.refreshToken, firstRefresh);
 
+        const reusedSession = await authRepo.findSessionByReplacedRefreshTokenHash(await hashRefreshToken(firstRefresh));
+        assert.ok(reusedSession);
+        reusedSession.last_used_at = new Date(Date.now() - 31_000).toISOString();
+
         await assert.rejects(() => service.refresh(firstRefresh), /reuse/i);
+    });
+
+    it('returns expired for stale Google device flows', async () => {
+        const authRepo = new MemoryAuthRepository();
+        const storage = new MemoryStorage();
+        const service = new AuthService({
+            authRepo,
+            storage,
+            config,
+            mailer: { async sendVerificationEmail() {}, async sendPasswordResetEmail() {} },
+            google: createMockGoogleOAuthClient(),
+        });
+
+        const started = await service.startGoogleDeviceFlow();
+        const hash = await hashOpaqueToken(started.deviceCode);
+        const row = await authRepo.findOAuthDeviceFlowByHash(hash);
+        assert.ok(row);
+        row!.expires_at = new Date(Date.now() - 60_000).toISOString();
+
+        const result = await service.pollGoogleDeviceFlow(started.deviceCode);
+        assert.equal(result.status, 'expired');
     });
 
     it('registers Google users without auth password hash', async () => {

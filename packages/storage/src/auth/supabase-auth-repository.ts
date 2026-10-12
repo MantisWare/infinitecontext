@@ -173,16 +173,19 @@ export class SupabaseAuthRepository implements AuthRepository {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
-    }): Promise<void> {
-        const { error } = await this.client
+    }): Promise<boolean> {
+        const { data, error } = await this.client
             .from('sessions')
             .update({
                 refresh_token_hash: input.newRefreshTokenHash,
                 replaced_refresh_token_hash: input.previousRefreshTokenHash,
                 last_used_at: input.lastUsedAt,
             })
-            .eq('id', input.sessionId);
+            .eq('id', input.sessionId)
+            .eq('refresh_token_hash', input.previousRefreshTokenHash)
+            .select('id');
         if (error) throw error;
+        return (data?.length ?? 0) > 0;
     }
 
     async touchSession(id: number, lastUsedAt: string): Promise<void> {

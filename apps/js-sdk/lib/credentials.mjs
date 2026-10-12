@@ -4,6 +4,9 @@ import path from "node:path";
 
 const CREDENTIALS_VERSION = 1;
 
+/** @type {Promise<{ accessToken: string; baseUrl: string; credentials: object } | null> | null} */
+let refreshInFlight = null;
+
 export function infinitecontextHome() {
   return path.join(process.env.HOME ?? process.env.USERPROFILE ?? os.homedir(), ".infinitecontext");
 }
@@ -56,19 +59,7 @@ function isExpired(iso) {
   return Date.parse(iso) <= Date.now() + 30_000;
 }
 
-export async function getValidAccessToken({ baseUrl, fetchFn = fetch }) {
-  const credentials = loadCredentials();
-  if (!credentials?.refreshToken) return null;
-
-  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? "https://api.infinitecontext.ai").replace(/\/+$/, "");
-  if (!isExpired(credentials.accessTokenExpiresAt) && credentials.accessToken) {
-    return {
-      accessToken: String(credentials.accessToken),
-      baseUrl: resolvedBaseUrl,
-      credentials,
-    };
-  }
-
+async function refreshAccessToken(resolvedBaseUrl, credentials, fetchFn) {
   const res = await fetchFn(`${resolvedBaseUrl}/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -87,6 +78,28 @@ export async function getValidAccessToken({ baseUrl, fetchFn = fetch }) {
   };
   saveCredentials(next);
   return { accessToken: next.accessToken, baseUrl: resolvedBaseUrl, credentials: next };
+}
+
+export async function getValidAccessToken({ baseUrl, fetchFn = fetch }) {
+  const credentials = loadCredentials();
+  if (!credentials?.refreshToken) return null;
+
+  const resolvedBaseUrl = String(baseUrl ?? credentials.baseUrl ?? "https://api.infinitecontext.ai").replace(/\/+$/, "");
+  if (!isExpired(credentials.accessTokenExpiresAt) && credentials.accessToken) {
+    return {
+      accessToken: String(credentials.accessToken),
+      baseUrl: resolvedBaseUrl,
+      credentials,
+    };
+  }
+
+  if (!refreshInFlight) {
+    refreshInFlight = refreshAccessToken(resolvedBaseUrl, credentials, fetchFn).finally(() => {
+      refreshInFlight = null;
+    });
+  }
+
+  return refreshInFlight;
 }
 
 export function hasSessionCredentials() {

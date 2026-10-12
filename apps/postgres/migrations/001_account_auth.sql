@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_replaced_refresh ON sessions (replaced_refresh_token_hash);
 
 CREATE TABLE IF NOT EXISTS auth_tokens (
   id BIGSERIAL PRIMARY KEY,

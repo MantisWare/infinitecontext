@@ -9,6 +9,7 @@ import {
 } from '@infinitecontext/auth';
 import type { StorageAdapter } from '@infinitecontext/core';
 
+import { type ClientIpReaderOptions } from './auth/rate-limit';
 import { registerAuthRoutes, resolveGoogleClient } from './auth/routes';
 import type { KeyCache } from './cache/types';
 import { registerAuthMiddleware } from './middleware/auth';
@@ -31,6 +32,7 @@ export type AppOptions = {
     authRepo?: AuthRepository;
     mailer?: Mailer;
     googleOAuth?: GoogleOAuthClient;
+    clientIpOptions?: ClientIpReaderOptions;
 };
 
 export function createApp(options: AppOptions) {
@@ -61,6 +63,7 @@ export function createApp(options: AppOptions) {
             mailer: options.mailer,
             google,
             rateLimiters: createAuthRateLimiters(),
+            clientIpOptions: options.clientIpOptions ?? { trustProxy: false, runtime: 'node' },
         });
     }
 

@@ -9,26 +9,82 @@ import { saveCredentials } from "./credentials.mjs";
 const DEFAULT_BASE_URL = "https://api.infinitecontext.ai";
 const LOCAL_CALLBACK_PORT = 53682;
 
+function parseFlagValue(argv, flagName) {
+  const prefix = `--${flagName}=`;
+  const arg = argv.find((a) => a.startsWith(prefix));
+  if (!arg) return undefined;
+  return arg.slice(prefix.length);
+}
+
 function parseArgs(argv) {
-  const flags = new Set(argv.filter((a) => a.startsWith("--")).map((a) => a.replace(/^--/, "")));
+  const booleanFlags = new Set();
+  for (const arg of argv) {
+    if (!arg.startsWith("--")) continue;
+    if (arg.includes("=")) continue;
+    booleanFlags.add(arg.slice(2));
+  }
   return {
-    google: flags.has("google"),
-    localhost: flags.has("localhost"),
-    email: argv.find((a) => a.startsWith("--email="))?.split("=")[1] ?? process.env.INFINITECONTEXT_LOGIN_EMAIL ?? "",
-    password: argv.find((a) => a.startsWith("--password="))?.split("=")[1] ?? process.env.INFINITECONTEXT_LOGIN_PASSWORD ?? "",
-    baseUrl: argv.find((a) => a.startsWith("--base-url="))?.split("=")[1] ?? process.env.INFINITECONTEXT_BASE_URL ?? DEFAULT_BASE_URL,
+    google: booleanFlags.has("google"),
+    localhost: booleanFlags.has("localhost"),
+    passwordStdin: booleanFlags.has("password-stdin"),
+    email: parseFlagValue(argv, "email") ?? process.env.INFINITECONTEXT_LOGIN_EMAIL ?? "",
+    baseUrl: parseFlagValue(argv, "base-url") ?? process.env.INFINITECONTEXT_BASE_URL ?? DEFAULT_BASE_URL,
   };
+}
+
+async function promptVisible(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
+async function readPasswordFromStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
 }
 
 async function promptHidden(question) {
   if (process.env.INFINITECONTEXT_LOGIN_PASSWORD) return process.env.INFINITECONTEXT_LOGIN_PASSWORD;
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(question);
-    return answer;
-  } finally {
-    rl.close();
+  if (!process.stdin.isTTY) {
+    return readPasswordFromStdin();
   }
+
+  return new Promise((resolve, reject) => {
+    process.stdout.write(question);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+
+    let password = "";
+    const onData = (chunk) => {
+      const ch = String(chunk);
+      if (ch === "\n" || ch === "\r" || ch === "\u0004") {
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        process.stdin.removeListener("data", onData);
+        process.stdout.write("\n");
+        resolve(password);
+        return;
+      }
+      if (ch === "\u0003") {
+        process.exit(130);
+      }
+      if (ch === "\u007f" || ch === "\b") {
+        password = password.slice(0, -1);
+        return;
+      }
+      password += ch;
+    };
+
+    process.stdin.on("data", onData);
+    process.stdin.on("error", reject);
+  });
 }
 
 async function postJson(baseUrl, path, body) {
@@ -64,9 +120,9 @@ function persistTokens(baseUrl, body, extra = {}) {
   });
 }
 
-async function loginWithPassword({ baseUrl, email, password }) {
-  const resolvedEmail = email || (await promptHidden("Email: "));
-  const resolvedPassword = password || (await promptHidden("Password: "));
+async function loginWithPassword({ baseUrl, email, passwordStdin }) {
+  const resolvedEmail = email || (await promptVisible("Email: "));
+  const resolvedPassword = passwordStdin ? await readPasswordFromStdin() : await promptHidden("Password: ");
   const body = await postJson(baseUrl, "/auth/login", {
     email: resolvedEmail,
     password: resolvedPassword,
@@ -200,7 +256,7 @@ export async function runLogin(argv = process.argv.slice(3)) {
     await loginWithGoogleDevice(baseUrl);
     return;
   }
-  await loginWithPassword({ baseUrl, email: args.email, password: args.password });
+  await loginWithPassword({ baseUrl, email: args.email, passwordStdin: args.passwordStdin });
 }
 
 export async function runLogout() {

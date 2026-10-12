@@ -138,9 +138,23 @@ describe('account auth', () => {
         assert.ok(poll.body.access_token);
 
         const pollAgain = await json('POST', '/auth/oauth/google/device/poll', { device_code: deviceCode });
-        assert.equal(pollAgain.res.status, 202);
-        assert.equal(pollAgain.body.status, 'pending');
+        assert.equal(pollAgain.res.status, 410);
+        assert.equal(pollAgain.body.status, 'already_used');
         assert.equal(pollAgain.body.access_token, undefined);
+    });
+
+    it('returns expired for stale Google device flows', async () => {
+        const { authRepo, json } = await setupAuthApp();
+        const start = await json('POST', '/auth/oauth/google/device/start');
+        const deviceCode = String(start.body.device_code);
+        const hash = await (await import('@infinitecontext/auth')).hashOpaqueToken(deviceCode);
+        const row = await authRepo.findOAuthDeviceFlowByHash(hash);
+        assert.ok(row);
+        row.expires_at = new Date(Date.now() - 60_000).toISOString();
+
+        const poll = await json('POST', '/auth/oauth/google/device/poll', { device_code: deviceCode });
+        assert.equal(poll.res.status, 410);
+        assert.equal(poll.body.status, 'expired');
     });
 
     it('does not link Google account by unverified email', async () => {
@@ -165,7 +179,8 @@ describe('account auth', () => {
 
         const start = await json('POST', '/auth/oauth/google/device/start');
         const poll = await json('POST', '/auth/oauth/google/device/poll', { device_code: start.body.device_code });
-        assert.equal(poll.body.user?.email, 'google-attacker@users.google.infinitecontext.local');
+        const pollBody = poll.body as { user?: { email?: string } };
+        assert.equal(pollBody.user?.email, 'google-attacker@users.google.infinitecontext.local');
     });
 
     it('revokes sessions after password reset', async () => {

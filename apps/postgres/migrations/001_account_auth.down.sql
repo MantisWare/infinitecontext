@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS oauth_states;
 DROP TABLE IF EXISTS user_crypto;
 DROP TABLE IF EXISTS oauth_device_flows;
 DROP TABLE IF EXISTS auth_tokens;

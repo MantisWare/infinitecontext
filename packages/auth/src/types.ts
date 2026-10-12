@@ -99,7 +99,7 @@ export type AuthRepository = {
         newRefreshTokenHash: string;
         previousRefreshTokenHash: string;
         lastUsedAt: string;
-    }): Promise<void>;
+    }): Promise<boolean>;
     touchSession(id: number, lastUsedAt: string): Promise<void>;
 
     insertAuthToken(input: {

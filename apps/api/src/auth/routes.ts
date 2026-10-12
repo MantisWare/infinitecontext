@@ -11,7 +11,7 @@ import {
 import type { StorageAdapter } from '@infinitecontext/core';
 
 import { mapAuthError } from './errors';
-import { enforceRateLimit, readClientIp } from './rate-limit';
+import { enforceRateLimit, readClientIp, type ClientIpReaderOptions } from './rate-limit';
 import type { HttpApp, HttpContext } from '../types/http';
 
 export type AuthRouteDeps = {
@@ -21,6 +21,7 @@ export type AuthRouteDeps = {
     mailer: Mailer;
     google?: GoogleOAuthClient;
     rateLimiters: AuthRateLimiters;
+    clientIpOptions: ClientIpReaderOptions;
 };
 
 function tokenResponse(c: { json: (body: unknown, status?: number) => Response }, tokens: {
@@ -60,7 +61,12 @@ export function registerAuthRoutes(app: HttpApp, deps: AuthRouteDeps) {
         return async (c: HttpContext) => {
             const body = await c.req.json().catch(() => ({}));
             const accountKey = accountField ? accountKeyFromEmail(body[accountField]) : undefined;
-            const limited = enforceRateLimit(c, deps.rateLimiters, accountKey ?? `${readClientIp(c)}:anonymous`);
+            const limited = enforceRateLimit(
+                c,
+                deps.rateLimiters,
+                deps.clientIpOptions,
+                accountKey ?? `${readClientIp(c, deps.clientIpOptions)}:anonymous`,
+            );
             if (limited) return limited;
             return handler(c, body as Record<string, unknown>);
         };
@@ -141,7 +147,7 @@ export function registerAuthRoutes(app: HttpApp, deps: AuthRouteDeps) {
     });
 
     app.get('/auth/verify-email', async (c) => {
-        const limited = enforceRateLimit(c, deps.rateLimiters, `${readClientIp(c)}:verify`);
+        const limited = enforceRateLimit(c, deps.rateLimiters, deps.clientIpOptions, `${readClientIp(c, deps.clientIpOptions)}:verify`);
         if (limited) return limited;
         try {
             const token = String(c.req.query('token') ?? '');
@@ -222,6 +228,9 @@ export function registerAuthRoutes(app: HttpApp, deps: AuthRouteDeps) {
                 if (result.status === 'expired') {
                     return c.json({ status: 'expired', error: 'Device authorization expired' }, 410);
                 }
+                if (result.status === 'already_used') {
+                    return c.json({ status: 'already_used', error: 'Device authorization already completed' }, 410);
+                }
                 return c.json({
                     status: 'complete',
                     user: { id: result.user.public_id, email: result.user.email },
@@ -235,7 +244,7 @@ export function registerAuthRoutes(app: HttpApp, deps: AuthRouteDeps) {
     );
 
     app.get('/auth/oauth/google/authorize', async (c) => {
-        const limited = enforceRateLimit(c, deps.rateLimiters, `${readClientIp(c)}:oauth`);
+        const limited = enforceRateLimit(c, deps.rateLimiters, deps.clientIpOptions, `${readClientIp(c, deps.clientIpOptions)}:oauth`);
         if (limited) return limited;
         try {
             const redirectUri = String(c.req.query('redirect_uri') ?? '');

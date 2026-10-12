@@ -114,8 +114,13 @@ export class AuthService {
         if (!session) {
             const reused = await this.deps.authRepo.findSessionByReplacedRefreshTokenHash(hash);
             if (reused) {
-                await this.deps.authRepo.revokeSession(reused.id, this.now().toISOString());
-                throw new AuthError('invalid_refresh', 'Refresh token reuse detected');
+                const graceMs = 30_000;
+                const lastUsedMs = reused.last_used_at ? Date.parse(reused.last_used_at) : 0;
+                const withinGrace = lastUsedMs > 0 && this.now().getTime() - lastUsedMs <= graceMs;
+                if (!withinGrace) {
+                    await this.deps.authRepo.revokeSession(reused.id, this.now().toISOString());
+                    throw new AuthError('invalid_refresh', 'Refresh token reuse detected');
+                }
             }
             throw new AuthError('invalid_refresh', 'Invalid refresh token');
         }
@@ -130,12 +135,15 @@ export class AuthService {
 
         const newRefreshToken = generateRefreshToken();
         const newHash = await hashRefreshToken(newRefreshToken);
-        await this.deps.authRepo.rotateSessionRefreshToken({
+        const rotated = await this.deps.authRepo.rotateSessionRefreshToken({
             sessionId: session.id,
             newRefreshTokenHash: newHash,
             previousRefreshTokenHash: session.refresh_token_hash,
             lastUsedAt: this.now().toISOString(),
         });
+        if (!rotated) {
+            throw new AuthError('invalid_refresh', 'Invalid refresh token');
+        }
 
         session = (await this.deps.authRepo.findSessionById(session.id)) ?? session;
         const projectId = await this.ensureUserProject(user.id);
@@ -233,6 +241,7 @@ export class AuthService {
         | { status: 'pending' }
         | { status: 'complete'; user: UserRow; tokens: AuthTokenPair }
         | { status: 'expired' }
+        | { status: 'already_used' }
     > {
         const google = this.requireGoogle();
         const deviceCodeHash = await hashOpaqueToken(deviceCode);
@@ -244,7 +253,7 @@ export class AuthService {
 
         if (row.completed_at && row.user_id) {
             if (row.tokens_delivered_at) {
-                return { status: 'pending' };
+                return { status: 'already_used' };
             }
             const delivered = await this.deps.authRepo.markOAuthDeviceFlowTokensDelivered(row.id, this.now().toISOString());
             if (!delivered) return { status: 'pending' };

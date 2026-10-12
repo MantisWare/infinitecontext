@@ -26,6 +26,7 @@ type Env = {
     INFINITECONTEXT_RESEND_API_KEY?: string;
     INFINITECONTEXT_MAIL_FROM?: string;
     INFINITECONTEXT_ALLOW_CONSOLE_MAILER?: string;
+    INFINITECONTEXT_TRUSTED_PROXY?: string;
     INFINITECONTEXT_ENV?: string;
     NODE_ENV?: string;
     INFINITECONTEXT_API_KEYS_CACHE?: KVNamespace;
@@ -53,7 +54,16 @@ export default {
             mailerPromise ??= authConfig ? resolveMailer(env as unknown as Record<string, string | undefined>, 'worker') : Promise.resolve(undefined);
             const mailer = await mailerPromise;
 
-            app = createApp({ config, storage, keyCache, authConfig, authRepo, mailer });
+            const trustProxy = String(env.INFINITECONTEXT_TRUSTED_PROXY ?? '').trim() === 'true';
+            app = createApp({
+                config,
+                storage,
+                keyCache,
+                authConfig,
+                authRepo,
+                mailer,
+                clientIpOptions: { trustProxy, runtime: 'worker' },
+            });
         }
 
         return app.fetch(request);
