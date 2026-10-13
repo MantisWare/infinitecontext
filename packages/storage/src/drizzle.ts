@@ -134,6 +134,20 @@ export class DrizzleAdapter implements StorageAdapter {
             .where(and(eq(nodes.project_id, projectId), inArray(nodes.parent_id, parentIds)));
     }
 
+    async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
+        await this.db
+            .update(nodes)
+            .set({ metadata })
+            .where(
+                and(
+                    eq(nodes.project_id, projectId),
+                    eq(nodes.public_id, publicId),
+                    eq(nodes.type, 'context'),
+                    isNull(nodes.context_id),
+                ),
+            );
+    }
+
     // -- api keys -------------------------------------------------------------
 
     async findApiKeyByPrefix(prefix: string): Promise<ApiKeyRow | null> {

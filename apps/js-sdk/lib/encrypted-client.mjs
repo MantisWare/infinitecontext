@@ -226,12 +226,48 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     dekVersion: vaultCtx.dekVersion ?? 1,
     userPublicId: vaultCtx.userPublicId,
     contextId: null,
+    contextSyncBaseSequence: new Map(),
   };
   const allowPlaintext = migrationMode;
 
+  function captureSyncBaseFromContextRead(contextId, res) {
+    if (
+      contextId &&
+      typeof res?.sync_base_sequence === "number" &&
+      Number.isFinite(res.sync_base_sequence)
+    ) {
+      ctx.contextSyncBaseSequence.set(contextId, res.sync_base_sequence);
+    }
+  }
+
   function mapGetResponse(res, contextId) {
+    captureSyncBaseFromContextRead(contextId, res);
     res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
     return res;
+  }
+
+  function mapMutationResponse(res, contextId) {
+    res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
+    return res;
+  }
+
+  function maybeAdvanceSyncBaseAfterMutation(contextId, requestBase, res) {
+    if (requestBase === undefined || requestBase === null) return;
+    const newHead = res?.sync_base_sequence;
+    if (typeof newHead !== "number" || !Number.isFinite(newHead)) return;
+    const tracked = ctx.contextSyncBaseSequence.get(contextId);
+    if (tracked !== requestBase) return;
+    if (newHead !== requestBase + 1) return;
+    ctx.contextSyncBaseSequence.set(contextId, newHead);
+  }
+
+  function withLastSeenBase(contextId, options) {
+    const base =
+      options?.base_sequence !== undefined && options?.base_sequence !== null
+        ? options.base_sequence
+        : ctx.contextSyncBaseSequence.get(contextId);
+    if (base === undefined || base === null) return options;
+    return { ...(options ?? {}), base_sequence: base };
   }
 
   return {
@@ -266,7 +302,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           try {
             encrypted = await encryptAppendBatch(client, contextId, batchInput, ctx);
             const res = await client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
-            return mapGetResponse(res, contextId);
+            return mapMutationResponse(res, contextId);
           } catch (error) {
             const status = error?.status;
             const code = parseHttpErrorCode(error);
@@ -311,7 +347,8 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async update(contextId, input, options) {
       ctx.contextId = contextId;
-      const snap = await this.get(contextId);
+      const rawSnap = await client.get(contextId, { trackSyncBase: false });
+      const snap = mapMutationResponse(rawSnap, contextId);
       const rows = snap?.data ?? [];
       const rawUpdates = Array.isArray(input) ? input : input?.updates ?? [input];
 
@@ -355,14 +392,14 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           metadata: mergedMetadata,
         };
         const { content, metadata } = encryptMessageFields(mergedMessage, ctx, contextId, aadNodeId);
+        const targetByIndexOnly = msg.index !== undefined && msg.id === undefined;
         return {
           ...content,
-          id: row.id,
-          ...(msg.index !== undefined ? { index: msg.index } : {}),
+          ...(targetByIndexOnly ? { index: msg.index } : { id: row.id }),
           metadata,
         };
       });
-      const body =
+      let body =
         input?.updates || (options?.metadata ?? input?.metadata)
           ? {
               updates: encrypted,
@@ -380,25 +417,29 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           : encrypted.length === 1
             ? encrypted[0]
             : encrypted;
-      const res = await client.update(contextId, body, options?.metadata ? undefined : options);
-      return mapGetResponse(res, contextId);
+      const baseOpts = withLastSeenBase(contextId, options);
+      const res = await client.update(contextId, body, baseOpts);
+      const mapped = mapMutationResponse(res, contextId);
+      maybeAdvanceSyncBaseAfterMutation(contextId, baseOpts?.base_sequence, mapped);
+      return mapped;
     },
 
     async delete(contextId, input, options) {
       ctx.contextId = contextId;
-      let nextOptions = options;
-      if (options?.metadata) {
+      let nextOptions = withLastSeenBase(contextId, options);
+      if (nextOptions?.metadata) {
         nextOptions = {
-          ...options,
-          metadata: encryptNodeMetadata(ctx.dek, ctx.dekVersion, options.metadata, {
+          ...nextOptions,
+          metadata: encryptNodeMetadata(ctx.dek, ctx.dekVersion, nextOptions.metadata, {
             contextId,
             userPublicId: ctx.userPublicId,
           }),
         };
       }
       const res = await client.delete(contextId, input, nextOptions);
-      if (res?.data?.length) return mapGetResponse(res, contextId);
-      return res;
+      const mapped = res?.data?.length ? mapMutationResponse(res, contextId) : res;
+      maybeAdvanceSyncBaseAfterMutation(contextId, nextOptions?.base_sequence, mapped);
+      return mapped;
     },
 
     async deleteMany(ids) {
@@ -410,6 +451,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       const beforeHead = await withRateLimitRetry(() =>
         client.get(contextId, { history: true, vaultMigrateRead: true }),
       );
+      captureSyncBaseFromContextRead(contextId, beforeHead);
       const rows = beforeHead?.data ?? [];
       const plaintextRows = rows.filter((row) => !isEncryptedContent(row));
       if (plaintextRows.length === 0) {
@@ -432,7 +474,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         );
         return { index: row.index, ...content, metadata };
       });
-      await client.update(contextId, { updates: batchUpdates });
+      await client.update(contextId, { updates: batchUpdates }, withLastSeenBase(contextId, {}));
       if (typeof client.prunePlaintextVersions === "function") {
         await withRateLimitRetry(() => client.prunePlaintextVersions(contextId));
       }

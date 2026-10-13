@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import fg from "fast-glob";
 import { KEYS_AND_SERVICES_DOC_URL } from "./ic-constants.mjs";
@@ -155,6 +156,24 @@ function deleteBootstrapState(key) {
     fsSync.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
     fsSync.renameSync(tmp, CONFIG_FILE);
   } catch { /* best effort */ }
+}
+
+async function loadAccountSyncModules(log) {
+  try {
+    const syncEngine = await import("infinitecontext/lib/sync-engine.mjs");
+    const syncApi = await import("infinitecontext/lib/sync-api.mjs");
+    return { syncEngine, fetchSyncStatus: syncApi.fetchSyncStatus };
+  } catch (error) {
+    const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
+    try {
+      const syncEngine = await import(pathToFileURL(path.join(sdkLib, "sync-engine.mjs")).href);
+      const syncApi = await import(pathToFileURL(path.join(sdkLib, "sync-api.mjs")).href);
+      return { syncEngine, fetchSyncStatus: syncApi.fetchSyncStatus };
+    } catch (fallbackError) {
+      log("warn", "Sync engine unavailable; falling back to context list probe", errorDetails(fallbackError ?? error));
+      return null;
+    }
+  }
 }
 
 // ── exported boot function ──────────────────────────────────────
@@ -925,6 +944,10 @@ export async function daemonBoot({
         await uc.append(sessionContextId, batch);
       }
 
+      for (const { eventId } of sessionEvents) {
+        markEventSeen(store, sourceName, eventId);
+      }
+
       // update stats
       bumpStat("appended", sessionEvents.length);
       bumpSourceStat(sourceName, "appended", sessionEvents.length);
@@ -1019,8 +1042,11 @@ export async function daemonBoot({
           noteSourceActivity(source.name, { lastEventType: normalized.eventType, lastSessionId: normalized.sessionId, lastAt: Date.now() });
 
           const eventId = sha256(`${source.name}|${cfg.host}|${cfg.userId}|${normalized.sessionId}|${fileId}|${i}`);
-          const isNew = markEventSeen(store, source.name, eventId);
-          if (!isNew) { bumpStat("deduped"); bumpSourceStat(source.name, "deduped"); continue; }
+          if (store.isEventSeen(seenEventStoreKey(source.name, eventId))) {
+            bumpStat("deduped");
+            bumpSourceStat(source.name, "deduped");
+            continue;
+          }
 
           pendingEvents.push({ normalized, eventId, lineOffset: i, projectPath: fileProjectPath });
         }
@@ -1062,8 +1088,11 @@ export async function daemonBoot({
         noteSourceActivity(source.name, { lastEventType: normalized.eventType, lastSessionId: normalized.sessionId, lastAt: Date.now() });
 
         const eventId = sha256(`${source.name}|${cfg.host}|${cfg.userId}|${normalized.sessionId}|${fileId}|${lineOffset}|${sha256(line)}`);
-        const isNew = markEventSeen(store, source.name, eventId);
-        if (!isNew) { bumpStat("deduped"); bumpSourceStat(source.name, "deduped"); continue; }
+        if (store.isEventSeen(seenEventStoreKey(source.name, eventId))) {
+          bumpStat("deduped");
+          bumpSourceStat(source.name, "deduped");
+          continue;
+        }
 
         pendingEvents.push({ normalized, eventId, lineOffset, projectPath: fileProjectPath });
       }
@@ -1158,8 +1187,18 @@ export async function daemonBoot({
     const uc = createInfiniteContextClient(cfg);
     runtime.uc = uc;
 
+    const useAccountSync = !cfg.apiKey;
+    const accountSync = useAccountSync ? await loadAccountSyncModules(log) : null;
+    const syncEngine = accountSync?.syncEngine ?? null;
+
     // connectivity check
-    try { await uc.get({ limit: 1 }); } catch (error) {
+    try {
+      if (accountSync?.fetchSyncStatus) {
+        await accountSync.fetchSyncStatus({ baseUrl: cfg.baseUrl });
+      } else {
+        await uc.get({ limit: 1 });
+      }
+    } catch (error) {
       const details = errorDetails(error);
       throw new Error(`InfiniteContext auth/connectivity check failed (status=${details.status ?? "?"}, url=${details.url ?? cfg.baseUrl}, body=${details.bodyText ?? details.message}). See ${KEYS_AND_SERVICES_DOC_URL}`);
     }
@@ -1218,6 +1257,22 @@ export async function daemonBoot({
       ));
 
       if (stats.cycles % cfg.cleanupEveryCycles === 0) { try { store.cleanupExpired(); } catch { /* ignore */ } }
+
+      if (syncEngine?.pullAndApplySync) {
+        try {
+          await syncEngine.pullAndApplySync({
+            baseUrl: cfg.baseUrl,
+            store,
+            log,
+            getCursor: () => store.getSyncPullCursor(),
+            setCursor: (value) => store.setSyncPullCursor(value),
+          });
+          await syncEngine.flushSyncOutbox({ baseUrl: cfg.baseUrl, log });
+        } catch (error) {
+          bumpStat("errors");
+          log("warn", "Sync pull/push cycle failed", errorDetails(error));
+        }
+      }
 
       // write status.json atomically after each cycle
       try { await writeStatusJson(cfg, stats, state, runtime); } catch { /* ignore */ }

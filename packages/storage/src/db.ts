@@ -66,6 +66,7 @@ export const sessions = pgTable('sessions', {
     revoked_at: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
     created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
     last_used_at: timestamp('last_used_at', { withTimezone: true, mode: 'string' }),
+    last_sync_at: timestamp('last_sync_at', { withTimezone: true, mode: 'string' }),
 });
 
 export const auth_tokens = pgTable('auth_tokens', {
@@ -90,6 +91,36 @@ export const oauth_device_flows = pgTable('oauth_device_flows', {
     tokens_delivered_at: timestamp('tokens_delivered_at', { withTimezone: true, mode: 'string' }),
     user_id: bigint('user_id', { mode: 'number' }),
     created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const sync_user_state = pgTable('sync_user_state', {
+    user_id: bigint('user_id', { mode: 'number' }).primaryKey(),
+    head_sequence: bigint('head_sequence', { mode: 'number' }).notNull().default(0),
+});
+
+export const sync_change_log = pgTable('sync_change_log', {
+    user_id: bigint('user_id', { mode: 'number' }).notNull(),
+    sequence: bigint('sequence', { mode: 'number' }).notNull(),
+    op: text('op').notNull(),
+    context_id: text('context_id'),
+    client_id: text('client_id').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    device_id: text('device_id'),
+    created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const sync_conflicts = pgTable('sync_conflicts', {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    public_id: text('public_id').notNull(),
+    user_id: bigint('user_id', { mode: 'number' }).notNull(),
+    context_id: text('context_id').notNull(),
+    kind: text('kind').notNull(),
+    client_id: text('client_id'),
+    sequence: bigint('sequence', { mode: 'number' }).notNull(),
+    left_payload: jsonb('left_payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    right_payload: jsonb('right_payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    created_at: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    resolved_at: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
 });
 
 export const user_crypto = pgTable('user_crypto', {
@@ -133,6 +164,9 @@ export const schema = {
     auth_tokens,
     oauth_device_flows,
     user_crypto,
+    sync_user_state,
+    sync_change_log,
+    sync_conflicts,
 };
 
 export type ApiDb = PostgresJsDatabase<typeof schema>;

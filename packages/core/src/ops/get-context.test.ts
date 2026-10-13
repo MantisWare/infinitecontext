@@ -129,8 +129,16 @@ describe('getContext', () => {
         assert.equal(result.data.version, 0);
         assert.equal(result.data.data.length, 2);
         // node order preserved + index/id/metadata spread
-        assert.deepEqual(result.data.data[0], { role: 'user', text: 'a', id: messageIds[0], index: 0, metadata: {} });
-        assert.deepEqual(result.data.data[1], { role: 'assistant', text: 'b', id: messageIds[1], index: 1, metadata: {} });
+        assert.equal(result.data.data[0]?.role, 'user');
+        assert.equal(result.data.data[0]?.text, 'a');
+        assert.equal(result.data.data[0]?.id, messageIds[0]);
+        assert.equal(result.data.data[0]?.index, 0);
+        assert.match(String(result.data.data[0]?.metadata?.ic_client_node_id ?? ''), /^icn_[0-9a-f]{24}$/);
+        assert.equal(result.data.data[1]?.role, 'assistant');
+        assert.equal(result.data.data[1]?.text, 'b');
+        assert.equal(result.data.data[1]?.id, messageIds[1]);
+        assert.equal(result.data.data[1]?.index, 1);
+        assert.match(String(result.data.data[1]?.metadata?.ic_client_node_id ?? ''), /^icn_[0-9a-f]{24}$/);
     });
 
     it('returns empty data with version 0 for a created-but-message-less head', async () => {

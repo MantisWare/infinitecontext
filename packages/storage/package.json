@@ -8,7 +8,8 @@
         "./drizzle": "./src/drizzle.ts",
         "./supabase": "./src/supabase.ts",
         "./sqlite": "./src/sqlite/index.ts",
-        "./auth": "./src/auth/index.ts"
+        "./auth": "./src/auth/index.ts",
+        "./sync": "./src/sync/index.ts"
     },
     "scripts": {
         "check": "tsc --noEmit",

@@ -47,6 +47,8 @@ export type GetContextInput = {
     history?: boolean;
     /** One-time plaintext read for vault migrate-encrypt tooling (sets X-IC-Vault-Migrate-Read). */
     vaultMigrateRead?: boolean;
+    /** When false, GET does not update the per-context sync base (internal snapshot reads). */
+    trackSyncBase?: boolean;
 };
 
 export type GetContextResponse<T = unknown> = {
@@ -54,6 +56,8 @@ export type GetContextResponse<T = unknown> = {
     version: number;
     metadata?: Record<string, unknown>;
     versions?: Version[];
+    /** Sync log sequence at read time; pass as base_sequence on PATCH/DELETE when session sync is enabled. */
+    sync_base_sequence?: number;
 };
 
 export type ListContextsInput = {
@@ -77,6 +81,8 @@ export type ListContextsResponse = {
 
 export type MutationOptions = {
     metadata?: Record<string, unknown>;
+    /** Last-seen sync sequence (from GET context or pull cursor). Required for session-sync message delete. */
+    base_sequence?: number;
 };
 
 export type UpdateMessageInput =
@@ -87,6 +93,7 @@ export type UpdateInput = UpdateMessageInput | UpdateMessageInput[];
 export type UpdateResponse<T = unknown> = {
     data: Array<{ id: string; index: number; metadata: Record<string, unknown> } & T>;
     version: number;
+    sync_base_sequence?: number;
 };
 
 export type DeleteInput = (string | number) | (string | number)[];
@@ -97,6 +104,7 @@ export type DeletePermanentInput = { permanent: true; metadata?: Record<string, 
 export type DeleteResponse<T = unknown> = {
     data: Array<{ id: string; index: number; metadata: Record<string, unknown> } & T>;
     version: number;
+    sync_base_sequence?: number;
 };
 
 export type PermanentDeleteResponse = {
@@ -124,6 +132,11 @@ export {
     resolveBaseUrlFromConfig,
 } from './base-url';
 
+function mutationBaseHeaders(options?: MutationOptions): Record<string, string> | undefined {
+    if (options?.base_sequence === undefined) return undefined;
+    return { 'X-IC-Base-Sequence': String(options.base_sequence) };
+}
+
 export class InfiniteContextHttpError extends Error {
     readonly status: number;
     readonly url: string;
@@ -146,6 +159,8 @@ export class InfiniteContext {
     private readonly fetchFn: typeof fetch;
     private readonly headers?: Record<string, string>;
     private readonly timeoutMs?: number;
+    /** Per-context sync base from GET /contexts/:id or noteSyncBaseFromPull — never from append/PATCH/DELETE. */
+    private contextSyncBaseSequence = new Map<string, number>();
 
     constructor(cfg: InfiniteContextConfig) {
         this.baseUrl = resolveBaseUrlFromConfig(cfg);
@@ -202,21 +217,40 @@ export class InfiniteContext {
         if (options?.before) params.set('before', options.before);
         if (options?.history) params.set('history', 'true');
         const query = params.toString();
-        return this.request<GetContextResponse<T>>(`/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`, {
-            method: 'GET',
-            headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
-        });
+        const res = await this.request<GetContextResponse<T>>(
+            `/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`,
+            {
+                method: 'GET',
+                headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
+            },
+        );
+        if (options?.trackSyncBase !== false) {
+            this.captureSyncBaseFromContextRead(idOrOptions, res);
+        }
+        return res;
+    }
+
+    /** After applying pull changes for a context, record the head sequence used for stale delete checks. */
+    noteSyncBaseFromPull(contextId: string, sequence: number): void {
+        if (typeof sequence === 'number' && Number.isFinite(sequence) && sequence >= 0 && Number.isSafeInteger(sequence)) {
+            this.contextSyncBaseSequence.set(contextId, sequence);
+        }
     }
 
     async update<T = unknown>(contextId: string, input: UpdateInput, options?: MutationOptions): Promise<UpdateResponse<T>> {
-        const body = options?.metadata
-            ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
-            : input;
+        let body: Record<string, unknown> =
+            options?.metadata !== undefined
+                ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
+                : (input as Record<string, unknown>);
+        const baseSequence = options?.base_sequence ?? this.contextSyncBaseSequence.get(contextId) ?? undefined;
 
-        return this.request<UpdateResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
+        const res = await this.request<UpdateResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'PATCH',
             body,
+            headers: mutationBaseHeaders({ ...options, base_sequence: baseSequence }),
         });
+        this.maybeAdvanceSyncBaseAfterMutation(contextId, baseSequence, res);
+        return res;
     }
 
     async delete<T = unknown>(contextId: string, ids: DeleteInput, options?: MutationOptions): Promise<DeleteResponse<T>>;
@@ -240,10 +274,24 @@ export class InfiniteContext {
             });
         }
 
-        return this.request<DeleteResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
+        const baseSequence = options?.base_sequence ?? this.contextSyncBaseSequence.get(contextId) ?? undefined;
+        if (this.usesSessionSync() && baseSequence === undefined) {
+            throw new Error(
+                'base_sequence is required for message delete — run sync pull or GET /contexts/:id first, or pass options.base_sequence',
+            );
+        }
+
+        const body: Record<string, unknown> = {
+            ids: input as DeleteInput,
+            metadata: options?.metadata,
+        };
+        const res = await this.request<DeleteResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'DELETE',
-            body: { ids: input as DeleteInput, metadata: options?.metadata },
+            body,
+            headers: mutationBaseHeaders({ ...options, base_sequence: baseSequence }),
         });
+        this.maybeAdvanceSyncBaseAfterMutation(contextId, baseSequence, res);
+        return res;
     }
 
     async deleteMany(ids: string[]): Promise<DeleteManyResponse> {
@@ -260,6 +308,31 @@ export class InfiniteContext {
             `/contexts/${encodeURIComponent(contextId)}/prune-plaintext-versions`,
             { method: 'POST', body: {} },
         );
+    }
+
+    private usesSessionSync(): boolean {
+        return Boolean(this.accessToken || this.getAccessTokenFn);
+    }
+
+    private captureSyncBaseFromContextRead(contextId: string, res: { sync_base_sequence?: number }) {
+        if (typeof res?.sync_base_sequence === 'number' && Number.isFinite(res.sync_base_sequence)) {
+            this.contextSyncBaseSequence.set(contextId, res.sync_base_sequence);
+        }
+    }
+
+    /** Advance cached base after our own mutation when exactly one sync sequence was appended. */
+    private maybeAdvanceSyncBaseAfterMutation(
+        contextId: string,
+        requestBase: number | undefined,
+        res: { sync_base_sequence?: number },
+    ) {
+        if (requestBase === undefined) return;
+        const newHead = res?.sync_base_sequence;
+        if (typeof newHead !== 'number' || !Number.isFinite(newHead)) return;
+        const tracked = this.contextSyncBaseSequence.get(contextId);
+        if (tracked !== requestBase) return;
+        if (newHead !== requestBase + 1) return;
+        this.contextSyncBaseSequence.set(contextId, newHead);
     }
 
     private async resolveBearerToken(): Promise<string> {

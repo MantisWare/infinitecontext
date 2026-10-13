@@ -180,6 +180,17 @@ export class SupabaseAdapter implements StorageAdapter {
         if (error) throw error;
     }
 
+    async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
+        const { error } = await this.client
+            .from('nodes')
+            .update({ metadata })
+            .eq('project_id', projectId)
+            .eq('public_id', publicId)
+            .eq('type', 'context')
+            .is('context_id', null);
+        if (error) throw error;
+    }
+
     // -- api keys -------------------------------------------------------------
 
     async findApiKeyByPrefix(prefix: string): Promise<ApiKeyRow | null> {

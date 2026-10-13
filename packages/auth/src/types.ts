@@ -98,6 +98,7 @@ export type AuthRepository = {
 
     linkUserProject(userId: number, projectId: number): Promise<void>;
     findProjectIdByUserId(userId: number): Promise<number | null>;
+    findUserIdByProjectId(projectId: number): Promise<number | null>;
 
     createSession(input: {
         publicId: string;

@@ -101,6 +101,13 @@ export class MemoryAuthRepository implements AuthRepository {
         return this.userProjects.get(userId) ?? null;
     }
 
+    async findUserIdByProjectId(projectId: number): Promise<number | null> {
+        for (const [userId, linkedProjectId] of this.userProjects.entries()) {
+            if (linkedProjectId === projectId) return userId;
+        }
+        return null;
+    }
+
     async createSession(input: {
         publicId: string;
         userId: number;

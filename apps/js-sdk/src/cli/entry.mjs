@@ -37,7 +37,10 @@ Commands:
   sync          Start sync (daemon + TUI)
   sync start    Start daemon in background (no TUI)
   sync stop     Stop a running daemon
-  sync status   Show daemon status
+  sync status   Daemon status + server sync cursor
+  sync pull     Pull incremental sync changes
+  sync push     Flush local sync outbox
+  sync devices  List or revoke registered devices
   config        Config wizard and settings (show, set, doctor, …)
   login         Sign in with email/password or Google OAuth
   logout        Sign out and clear local session tokens
@@ -444,10 +447,21 @@ async function run() {
         break;
       }
 
-      // sync status — show daemon status
+      if (subcommand === "pull" || subcommand === "push" || subcommand === "devices" || subcommand === "parked") {
+        const { runSyncCli } = await import("./sync-cli.mjs");
+        await runSyncCli(subcommand, process.argv.slice(4));
+        break;
+      }
+
       if (subcommand === "status") {
-        process.argv[2] = "status";
-        await runCtlSDK();
+        const { hasSessionCredentials } = await import("../../lib/credentials.mjs");
+        const accountSession = await hasSessionCredentials();
+        if (!accountSession) {
+          process.argv[2] = "status";
+          await runCtlSDK();
+        }
+        const { runSyncCli } = await import("./sync-cli.mjs");
+        await runSyncCli("status", []);
         break;
       }
 

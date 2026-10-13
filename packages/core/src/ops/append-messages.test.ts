@@ -35,7 +35,7 @@ describe('appendMessages', () => {
         assert.equal(msg.text, 'hi');
         assert.equal(msg.index, 0);
         assert.match(String(msg.id), /^msg_/);
-        assert.deepEqual(msg.metadata, {});
+        assert.match(String((msg.metadata as Record<string, unknown>)?.ic_client_node_id ?? ''), /^icn_[0-9a-f]{24}$/);
     });
 
     // -- success: array of messages with indices continuing past tail ---------
@@ -93,7 +93,10 @@ describe('appendMessages', () => {
         assert.equal(result.ok, true);
         if (!result.ok) return;
         const [msg] = result.data.data as Array<Record<string, unknown>>;
-        assert.deepEqual(msg.metadata, { source: 'cli', tokens: 12 });
+        const meta = msg.metadata as Record<string, unknown>;
+        assert.equal(meta.source, 'cli');
+        assert.equal(meta.tokens, 12);
+        assert.match(String(meta.ic_client_node_id ?? ''), /^icn_[0-9a-f]{24}$/);
         assert.equal(msg.role, 'user');
         assert.equal(msg.text, 'hello');
         assert.equal('metadata' in (msg as { metadata?: unknown }) && msg.metadata !== undefined, true);

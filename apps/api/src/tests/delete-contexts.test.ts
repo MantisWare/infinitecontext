@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateKey, hashKey, KEY_PREFIX_LEN } from '@infinitecontext/core';
+import { generateClientNodeId } from '@infinitecontext/crypto';
 import { MemoryStorage } from '@infinitecontext/core/testing';
 import { createApp } from '../app';
 import type { ApiConfig } from '../types/api';
@@ -66,7 +67,17 @@ async function createTestContext(req: Function) {
 }
 
 async function appendMessages(req: Function, contextId: string, messages: object[]) {
-    const res = await req('POST', `/contexts/${contextId}`, messages);
+    const withIds = messages.map((m) => {
+        const row = m as Record<string, unknown>;
+        const meta =
+            row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+                ? (row.metadata as Record<string, unknown>)
+                : {};
+        const icClient =
+            typeof meta.ic_client_node_id === 'string' ? meta.ic_client_node_id : generateClientNodeId();
+        return { ...row, metadata: { ...meta, ic_client_node_id: icClient } };
+    });
+    const res = await req('POST', `/contexts/${contextId}`, withIds);
     assert.equal(res.status, 201);
     return res.json();
 }

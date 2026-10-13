@@ -26,3 +26,4 @@ export type { StorageAdapter } from '@infinitecontext/core';
 export { DrizzleAdapter } from './drizzle';
 export { SupabaseAdapter } from './supabase';
 export { createAuthRepository } from './auth';
+export { createSyncRepository, DrizzleSyncRepository } from './sync';

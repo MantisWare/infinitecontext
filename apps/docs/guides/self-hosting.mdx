@@ -56,7 +56,7 @@ cd infinitecontext
 # start PostgreSQL
 pnpm infinitecontext:db:up
 
-# apply schema
+# apply schema (run as the PostgreSQL database owner — migration 008 needs CREATE on pgcrypto)
 pnpm infinitecontext:db:migrate
 
 # start the API
@@ -77,6 +77,10 @@ bun run infinitecontext:db:migrate
 bun run infinitecontext:api
 ```
 </CodeGroup>
+
+<Note>
+  Run `pnpm infinitecontext:db:migrate` (or apply `apps/postgres/migrations/*.sql`) **as the PostgreSQL database owner** for that database. Migration `008_backfill_ic_client_node_ids.sql` runs `CREATE EXTENSION IF NOT EXISTS pgcrypto`, which requires sufficient privileges on the target database.
+</Note>
 
 ## Database schema
 

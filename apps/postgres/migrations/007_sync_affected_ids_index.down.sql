@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_sync_change_log_affected_client_ids;
+DROP INDEX IF EXISTS idx_sync_change_log_deleted_client_ids;
