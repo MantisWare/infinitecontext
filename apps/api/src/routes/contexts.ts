@@ -157,8 +157,10 @@ export function registerContextRoutes(
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
         if (syncMeta) {
             await recordMessageAppendChanges(syncRepo, syncMeta, contextPublicId, body, result.data);
+        }
+        if (syncMeta && syncRepo) {
             return c.json(
-                { ...result.data, sync_base_sequence: await syncRepo!.getHeadSequence(syncMeta.userId) },
+                { ...result.data, sync_base_sequence: await syncRepo.getHeadSequence(syncMeta.userId) },
                 201,
             );
         }
