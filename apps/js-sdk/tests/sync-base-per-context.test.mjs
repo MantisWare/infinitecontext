@@ -10,12 +10,18 @@ function mockFetch(handlers) {
     const handler = handlers[key];
     if (!handler) throw new Error(`unhandled ${key}`);
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
-    const json = await handler({ body, url: u });
+    const headers = init.headers ?? {};
+    const json = await handler({ body, url: u, headers });
     return new Response(JSON.stringify(json), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   };
+}
+
+function baseFromHeaders(headers) {
+  const h = headers instanceof Headers ? Object.fromEntries(headers.entries()) : headers;
+  return h["X-IC-Base-Sequence"] ?? h["x-ic-base-sequence"];
 }
 
 describe("per-context sync base (plain SDK)", () => {
@@ -35,9 +41,10 @@ describe("per-context sync base (plain SDK)", () => {
           version: 0,
           sync_base_sequence: 99,
         }),
-        "DELETE /contexts/ctx_c": async ({ body }) => {
-          deleteBase = body.base_sequence;
-          return { data: [], version: 1 };
+        "DELETE /contexts/ctx_c": async ({ headers, body }) => {
+          deleteBase = baseFromHeaders(headers);
+          assert.equal(body.base_sequence, undefined);
+          return { data: [], version: 1, sync_base_sequence: 6 };
         },
       }),
     });
@@ -45,7 +52,7 @@ describe("per-context sync base (plain SDK)", () => {
     await client.get("ctx_c");
     await client.get("ctx_x");
     await client.delete("ctx_c", 0);
-    assert.equal(deleteBase, 5);
+    assert.equal(deleteBase, "5");
   });
 
   it("read C, append to C, delete — append does not refresh base", async () => {
@@ -64,9 +71,9 @@ describe("per-context sync base (plain SDK)", () => {
           version: 1,
           sync_base_sequence: 88,
         }),
-        "DELETE /contexts/ctx_c": async ({ body }) => {
-          deleteBase = body.base_sequence;
-          return { data: [], version: 2 };
+        "DELETE /contexts/ctx_c": async ({ headers }) => {
+          deleteBase = baseFromHeaders(headers);
+          return { data: [], version: 2, sync_base_sequence: 6 };
         },
       }),
     });
@@ -74,7 +81,7 @@ describe("per-context sync base (plain SDK)", () => {
     await client.get("ctx_c");
     await client.append("ctx_c", { role: "user", text: "n" });
     await client.delete("ctx_c", 0);
-    assert.equal(deleteBase, 5);
+    assert.equal(deleteBase, "5");
   });
 
   it("noteSyncBaseFromPull updates only the given context", async () => {
@@ -88,8 +95,8 @@ describe("per-context sync base (plain SDK)", () => {
           version: 0,
           sync_base_sequence: 3,
         }),
-        "DELETE /contexts/ctx_b": async ({ body }) => {
-          deleteBase = body.base_sequence;
+        "DELETE /contexts/ctx_b": async ({ headers }) => {
+          deleteBase = baseFromHeaders(headers);
           return { data: [], version: 1 };
         },
       }),
@@ -98,6 +105,37 @@ describe("per-context sync base (plain SDK)", () => {
     await client.get("ctx_a");
     client.noteSyncBaseFromPull("ctx_b", 12);
     await client.delete("ctx_b", 0);
-    assert.equal(deleteBase, 12);
+    assert.equal(deleteBase, "12");
+  });
+
+  it("advances base after own PATCH then DELETE without false stale", async () => {
+    const calls = [];
+    const client = new InfiniteContext({
+      apiKey: "ic_test_key",
+      baseUrl: "http://mock",
+      fetch: mockFetch({
+        "GET /contexts/ctx_c": async () => ({
+          data: [{ id: "msg_c", index: 0, metadata: { ic_client_node_id: "icn_" + "c".repeat(24) }, text: "c" }],
+          version: 0,
+          sync_base_sequence: 5,
+        }),
+        "PATCH /contexts/ctx_c": async ({ headers }) => {
+          calls.push(["patch", baseFromHeaders(headers)]);
+          return { data: [{ id: "msg_c", index: 0, text: "new" }], version: 1, sync_base_sequence: 6 };
+        },
+        "DELETE /contexts/ctx_c": async ({ headers }) => {
+          calls.push(["delete", baseFromHeaders(headers)]);
+          return { data: [], version: 2, sync_base_sequence: 7 };
+        },
+      }),
+    });
+
+    await client.get("ctx_c");
+    await client.update("ctx_c", { index: 0, text: "new" });
+    await client.delete("ctx_c", 0);
+    assert.deepEqual(calls, [
+      ["patch", "5"],
+      ["delete", "6"],
+    ]);
   });
 });

@@ -363,6 +363,73 @@ describe('sync-postgres-live', () => {
         assert.equal(aboveHead.res.status, 400);
     });
 
+    it('device A: read C, B edits msg 1, A edits msg 0, delete msg 1 stale at original base', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'stale-ab', session_id: 'ab1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        const m2 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            `/contexts/${contextId}`,
+            [
+                { id: m1, role: 'user', content: { message: 'one' }, metadata: { ic_client_node_id: m1 } },
+                { id: m2, role: 'user', content: { message: 'two' }, metadata: { ic_client_node_id: m2 } },
+            ],
+            fx.accessA,
+        );
+
+        const readA = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const baseInitial = Number(readA.body.sync_base_sequence ?? 0);
+        assert.ok(baseInitial > 0);
+
+        const patchB = await fx.json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 1, role: 'user', content: { message: 'b-edited' } }] },
+            fx.accessB,
+        );
+        assert.equal(patchB.res.status, 200);
+
+        const patchA = await fx.json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 0, role: 'user', content: { message: 'a-edited' } }] },
+            fx.accessA,
+            { 'X-IC-Base-Sequence': String(baseInitial) },
+        );
+        assert.equal(patchA.res.status, 200);
+
+        const delStale = await fx.json(
+            'DELETE',
+            `/contexts/${contextId}`,
+            { ids: [1] },
+            fx.accessA,
+            { 'X-IC-Base-Sequence': String(baseInitial) },
+        );
+        assert.equal(delStale.res.status, 409);
+        assert.equal((delStale.body as any).conflict, 'delete_stale_base');
+
+        const after = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const rows = (after.body.data as any[]) ?? [];
+        assert.equal(rows.length, 2);
+        assert.equal(rows[1]?.content?.message ?? rows[1]?.message, 'b-edited');
+    });
+
     it('message_delete with stale base_sequence records conflict instead of deleting', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();

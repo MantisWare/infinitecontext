@@ -151,6 +151,22 @@ describe('vault postgres live e2e', () => {
         assert.equal(read.data[0]?.text, 'daemon payload');
     });
 
+    it('vault update by index round-trips against live API', async (t) => {
+        if (!postgresReady) {
+            t.skip();
+            return;
+        }
+        const { vaultClient } = await setupLiveApp();
+        const created = await vaultClient.create({ metadata: { source: 'vault-update-live' } });
+        await vaultClient.append(created.id, { role: 'user', text: 'first' });
+        await vaultClient.append(created.id, { role: 'user', text: 'second' });
+        await vaultClient.update(created.id, { index: 0, text: 'updated-first' });
+        const read = await vaultClient.get(created.id);
+        assert.equal(read.data.length, 2);
+        assert.equal(read.data[0]?.text, 'updated-first');
+        assert.equal(read.data[1]?.text, 'second');
+    });
+
     it('append round-trips sync daemon payload shape (nested content, no id)', async (t) => {
         if (!postgresReady) {
             t.skip();

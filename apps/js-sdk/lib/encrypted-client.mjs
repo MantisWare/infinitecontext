@@ -251,6 +251,16 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     return res;
   }
 
+  function maybeAdvanceSyncBaseAfterMutation(contextId, requestBase, res) {
+    if (requestBase === undefined || requestBase === null) return;
+    const newHead = res?.sync_base_sequence;
+    if (typeof newHead !== "number" || !Number.isFinite(newHead)) return;
+    const tracked = ctx.contextSyncBaseSequence.get(contextId);
+    if (tracked !== requestBase) return;
+    if (newHead !== requestBase + 1) return;
+    ctx.contextSyncBaseSequence.set(contextId, newHead);
+  }
+
   function withLastSeenBase(contextId, options) {
     const base =
       options?.base_sequence !== undefined && options?.base_sequence !== null
@@ -337,7 +347,8 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
 
     async update(contextId, input, options) {
       ctx.contextId = contextId;
-      const snap = await this.get(contextId);
+      const rawSnap = await client.get(contextId, { trackSyncBase: false });
+      const snap = mapMutationResponse(rawSnap, contextId);
       const rows = snap?.data ?? [];
       const rawUpdates = Array.isArray(input) ? input : input?.updates ?? [input];
 
@@ -381,10 +392,10 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           metadata: mergedMetadata,
         };
         const { content, metadata } = encryptMessageFields(mergedMessage, ctx, contextId, aadNodeId);
+        const targetByIndexOnly = msg.index !== undefined && msg.id === undefined;
         return {
           ...content,
-          id: row.id,
-          ...(msg.index !== undefined ? { index: msg.index } : {}),
+          ...(targetByIndexOnly ? { index: msg.index } : { id: row.id }),
           metadata,
         };
       });
@@ -406,11 +417,11 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           : encrypted.length === 1
             ? encrypted[0]
             : encrypted;
-      if (options?.base_sequence !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
-        body = { ...body, base_sequence: options.base_sequence };
-      }
-      const res = await client.update(contextId, body, withLastSeenBase(contextId, options));
-      return mapMutationResponse(res, contextId);
+      const baseOpts = withLastSeenBase(contextId, options);
+      const res = await client.update(contextId, body, baseOpts);
+      const mapped = mapMutationResponse(res, contextId);
+      maybeAdvanceSyncBaseAfterMutation(contextId, baseOpts?.base_sequence, mapped);
+      return mapped;
     },
 
     async delete(contextId, input, options) {
@@ -426,8 +437,9 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         };
       }
       const res = await client.delete(contextId, input, nextOptions);
-      if (res?.data?.length) return mapMutationResponse(res, contextId);
-      return res;
+      const mapped = res?.data?.length ? mapMutationResponse(res, contextId) : res;
+      maybeAdvanceSyncBaseAfterMutation(contextId, nextOptions?.base_sequence, mapped);
+      return mapped;
     },
 
     async deleteMany(ids) {
