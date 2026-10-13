@@ -1,5 +1,6 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { computeDekProof, createVaultCryptoMaterial, generateClientNodeId } from '@infinitecontext/crypto';
 
 import { createLivePostgresApp } from './helpers/live-postgres-app';
@@ -806,6 +807,28 @@ describe('sync-postgres-live', () => {
         assert.ok(Array.isArray(delChange?.payload?.deleted_client_ids));
         assert.ok(delChange?.payload?.deleted_client_ids?.includes(m1));
         assert.equal(delChange?.payload?.data, undefined);
+    });
+
+    it('EXPLAIN stale EXISTS references GIN indexes on affected/deleted ids', async () => {
+        if (!postgresReady || !DB_URL) return;
+        const icn = generateClientNodeId();
+        const explainSql = `
+EXPLAIN (FORMAT TEXT)
+SELECT EXISTS (
+  SELECT 1 FROM sync_change_log
+  WHERE user_id = 1 AND context_id = 'ctx_explain' AND sequence > 0
+    AND op IN ('message_update', 'message_delete')
+    AND (
+      COALESCE(payload->'affected_client_ids', '[]'::jsonb) @> '${JSON.stringify([icn])}'::jsonb
+      OR COALESCE(payload->'deleted_client_ids', '[]'::jsonb) @> '${JSON.stringify([icn])}'::jsonb
+    )
+);`;
+        const out = spawnSync('psql', [DB_URL, '-v', 'ON_ERROR_STOP=1', '-c', explainSql], {
+            encoding: 'utf8',
+            env: { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD },
+        });
+        assert.equal(out.status, 0, out.stderr || out.stdout);
+        assert.match(out.stdout ?? '', /idx_sync_change_log_(affected|deleted)_client_ids|Bitmap Index Scan/i);
     });
 });
 
