@@ -82,25 +82,6 @@ export function assertXc20pCtLength(envelope) {
   if (ctBytes.length < XC20P_POLY1305_TAG_BYTES) {
     throw new Error(`Storage enc.ct must be at least ${XC20P_POLY1305_TAG_BYTES} bytes (ciphertext + Poly1305 tag)`);
   }
-  rejectJsonPlaintextInCtBytes(ctBytes);
-}
-
-/** @param {Uint8Array} ctBytes */
-function rejectJsonPlaintextInCtBytes(ctBytes) {
-  const asText = tryDecodeUtf8(ctBytes);
-  if (asText === null) {
-    return;
-  }
-  const trimmed = asText.trimStart();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return;
-  }
-  try {
-    JSON.parse(asText);
-  } catch {
-    return;
-  }
-  throw new Error("Storage enc.ct must not contain JSON plaintext");
 }
 
 /**

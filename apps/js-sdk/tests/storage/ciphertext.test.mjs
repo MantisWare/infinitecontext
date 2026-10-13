@@ -8,6 +8,8 @@ import {
   buildStorageObjectBytes,
   isValidStorageAad,
 } from "../../lib/storage/ciphertext.mjs";
+import { ObjectStoreSyncTransport } from "../../lib/storage/object-store-sync-transport.mjs";
+import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 
 const SAMPLE_NONCE_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const VALID_CT_B64 = Buffer.alloc(16, 0).toString("base64");
@@ -29,7 +31,7 @@ describe("assertStorageCiphertext", () => {
     assert.ok(isValidStorageAad(aad));
   });
 
-  it("rejects short ct and plaintext base64 ct without ASCII heuristics", () => {
+  it("rejects ct shorter than Poly1305 tag size", () => {
     assert.throws(() =>
       buildStorageObjectBytes(KEY, {
         __ic_enc: 1,
@@ -40,8 +42,10 @@ describe("assertStorageCiphertext", () => {
         ct: "AA==",
       }),
     );
+  });
 
-    const plaintextCt = new TextEncoder().encode(
+  it("adapter shape check cannot detect base64 JSON in ct (ObjectStore requires seal)", async () => {
+    const manualCt = new TextEncoder().encode(
       JSON.stringify({
         ic_storage_v: 1,
         aad: buildStorageAadForKey(KEY),
@@ -55,7 +59,11 @@ describe("assertStorageCiphertext", () => {
         },
       }),
     );
-    assert.throws(() => assertStorageCiphertext(plaintextCt, { objectKey: KEY }));
+    assert.doesNotThrow(() => assertStorageCiphertext(manualCt, { objectKey: KEY }));
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const transport = new ObjectStoreSyncTransport(adapter);
+    await assert.rejects(() => transport.putObject(KEY, manualCt, { ifNoneMatch: "*" }));
   });
 
   it("rejects AAD/key mismatch on put", () => {
