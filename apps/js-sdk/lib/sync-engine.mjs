@@ -3,7 +3,8 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
-import { fetchSyncStatus, pullSyncChanges, pushSyncMutations } from "./sync-api.mjs";
+import { getDefaultSyncTransport } from "./sync-transport.mjs";
+import "./hosted-sync-transport.mjs";
 
 const SYNC_DIR = path.join(os.homedir(), ".infinitecontext");
 const SYNC_STATE_FILE = path.join(SYNC_DIR, "sync-state.json");
@@ -123,12 +124,13 @@ function settledClientIds(result) {
   return settled;
 }
 
-export async function flushSyncOutbox({ baseUrl, log } = {}) {
+export async function flushSyncOutbox({ baseUrl, log, transport } = {}) {
   const state = readSyncState();
   const outbox = Array.isArray(state.outbox) ? state.outbox : [];
   if (outbox.length === 0) return { pushed: 0 };
 
-  const result = await pushSyncMutations(outbox, { baseUrl });
+  const syncTransport = transport ?? getDefaultSyncTransport();
+  const result = await syncTransport.pushSyncMutations(outbox, { baseUrl });
   const settled = settledClientIds(result);
   const remaining = outbox.filter((m) => !settled.has(m.client_id));
   const parkedExisting = Array.isArray(state.parked_failures) ? state.parked_failures : [];
@@ -253,7 +255,8 @@ export function applySyncChangeToReplica(replica, change, persist) {
   }
 }
 
-export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor } = {}) {
+export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor, transport } = {}) {
+  const syncTransport = transport ?? getDefaultSyncTransport();
   const readCursor = getCursor ?? (() => getSyncCursor());
   const writeCursor =
     setCursor ??
@@ -272,7 +275,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
   };
 
   while (hasMore) {
-    lastPage = await pullSyncChanges({ since, limit: 500, baseUrl });
+    lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange) {
         if (replica) {
