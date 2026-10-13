@@ -27,13 +27,27 @@ export async function createKeyringSecretBackend() {
 /** @returns {Promise<boolean>} */
 export async function keyringBackendAvailable() {
   try {
-    const { Entry } = await import("@napi-rs/keyring");
-    const probeName = `__ic_keyring_probe_${process.pid}_${Date.now()}`;
-    const entry = new Entry(SECRET_STORE_SERVICE, probeName);
-    entry.setSecret(new Uint8Array([0x1c]));
-    entry.deleteCredential();
+    await import("@napi-rs/keyring");
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * OS keychains that survive reboot (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+ * Headless Linux often binds @napi-rs/keyring to the kernel keyring, which is cleared on reboot — not used for `auto`.
+ * @returns {boolean}
+ */
+export function isKeyringDurableForAuto() {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  if (process.env.INFINITECONTEXT_KEYRING_DURABLE === "1") {
+    return true;
+  }
+  if (process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
+    return false;
+  }
+  return Boolean(process.env.DBUS_SESSION_BUS_ADDRESS?.trim());
 }

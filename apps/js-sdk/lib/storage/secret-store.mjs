@@ -1,7 +1,11 @@
 import { infinitecontextHome } from "../client-config.mjs";
 import { StorageError } from "./errors.mjs";
-import { createEncryptedFileSecretBackend } from "./secret-store-file.mjs";
-import { createKeyringSecretBackend, keyringBackendAvailable } from "./secret-store-keyring.mjs";
+import { createEncryptedFileSecretBackend, fileBackendHasPersistedStore } from "./secret-store-file.mjs";
+import {
+  createKeyringSecretBackend,
+  isKeyringDurableForAuto,
+  keyringBackendAvailable,
+} from "./secret-store-keyring.mjs";
 
 export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 
@@ -43,19 +47,35 @@ export async function resolveSecretStoreBackend(options = {}) {
     return createKeyringSecretBackend();
   }
 
-  if (await keyringBackendAvailable()) {
+  return resolveAutoSecretStoreBackend(rootDir);
+}
+
+/**
+ * @param {string} rootDir
+ * @returns {Promise<SecretStoreBackend>}
+ */
+async function resolveAutoSecretStoreBackend(rootDir) {
+  if (fileBackendHasPersistedStore(rootDir)) {
+    return createEncryptedFileSecretBackend({ rootDir });
+  }
+
+  if ((await keyringBackendAvailable()) && isKeyringDurableForAuto()) {
     return createKeyringSecretBackend();
   }
+
   return createEncryptedFileSecretBackend({ rootDir });
 }
 
 /** @returns {SecretStoreBackendMode} */
-function readSecretStoreModeFromEnv() {
+export function readSecretStoreModeFromEnv() {
   const raw = String(process.env.INFINITECONTEXT_SECRET_STORE ?? "auto").trim().toLowerCase();
   if (raw === "keyring" || raw === "file" || raw === "auto") {
     return raw;
   }
-  return "auto";
+  throw new StorageError(
+    `Invalid INFINITECONTEXT_SECRET_STORE="${raw}" (expected auto, keyring, or file)`,
+    "invalid_argument",
+  );
 }
 
 export class SecretStore {
