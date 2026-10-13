@@ -157,6 +157,8 @@ export class InfiniteContext {
     private readonly fetchFn: typeof fetch;
     private readonly headers?: Record<string, string>;
     private readonly timeoutMs?: number;
+    /** Last sync_base_sequence from GET /contexts/:id or append — not updated by PATCH. */
+    private lastSyncBaseSequence: number | null = null;
 
     constructor(cfg: InfiniteContextConfig) {
         this.baseUrl = resolveBaseUrlFromConfig(cfg);
@@ -179,10 +181,12 @@ export class InfiniteContext {
     }
 
     async append<T = unknown>(contextId: string, input: AppendInput): Promise<AppendResponse<T>> {
-        return this.request<AppendResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
+        const res = await this.request<AppendResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'POST',
             body: input,
         });
+        this.captureSyncBaseFromRead(res);
+        return res;
     }
 
     async get(options?: ListContextsInput): Promise<ListContextsResponse>;
@@ -213,10 +217,15 @@ export class InfiniteContext {
         if (options?.before) params.set('before', options.before);
         if (options?.history) params.set('history', 'true');
         const query = params.toString();
-        return this.request<GetContextResponse<T>>(`/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`, {
-            method: 'GET',
-            headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
-        });
+        const res = await this.request<GetContextResponse<T>>(
+            `/contexts/${encodeURIComponent(idOrOptions)}${query ? `?${query}` : ''}`,
+            {
+                method: 'GET',
+                headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
+            },
+        );
+        this.captureSyncBaseFromRead(res);
+        return res;
     }
 
     async update<T = unknown>(contextId: string, input: UpdateInput, options?: MutationOptions): Promise<UpdateResponse<T>> {
@@ -224,14 +233,15 @@ export class InfiniteContext {
             options?.metadata !== undefined
                 ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
                 : (input as Record<string, unknown>);
-        if (options?.base_sequence !== undefined) {
-            body = { ...body, base_sequence: options.base_sequence };
+        const baseSequence = options?.base_sequence ?? this.lastSyncBaseSequence ?? undefined;
+        if (baseSequence !== undefined) {
+            body = { ...body, base_sequence: baseSequence };
         }
 
         return this.request<UpdateResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'PATCH',
             body,
-            headers: mutationBaseHeaders(options),
+            headers: mutationBaseHeaders({ ...options, base_sequence: baseSequence }),
         });
     }
 
@@ -256,16 +266,23 @@ export class InfiniteContext {
             });
         }
 
+        const baseSequence = options?.base_sequence ?? this.lastSyncBaseSequence ?? undefined;
+        if (this.usesSessionSync() && baseSequence === undefined) {
+            throw new Error(
+                'base_sequence is required for message delete — run sync pull or GET /contexts/:id first, or pass options.base_sequence',
+            );
+        }
+
         const body: Record<string, unknown> = {
             ids: input as DeleteInput,
             metadata: options?.metadata,
         };
-        if (options?.base_sequence !== undefined) body.base_sequence = options.base_sequence;
+        if (baseSequence !== undefined) body.base_sequence = baseSequence;
 
         return this.request<DeleteResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'DELETE',
             body,
-            headers: mutationBaseHeaders(options),
+            headers: mutationBaseHeaders({ ...options, base_sequence: baseSequence }),
         });
     }
 
@@ -283,6 +300,16 @@ export class InfiniteContext {
             `/contexts/${encodeURIComponent(contextId)}/prune-plaintext-versions`,
             { method: 'POST', body: {} },
         );
+    }
+
+    private usesSessionSync(): boolean {
+        return Boolean(this.accessToken || this.getAccessTokenFn);
+    }
+
+    private captureSyncBaseFromRead(res: { sync_base_sequence?: number }) {
+        if (typeof res?.sync_base_sequence === 'number' && Number.isFinite(res.sync_base_sequence)) {
+            this.lastSyncBaseSequence = res.sync_base_sequence;
+        }
     }
 
     private async resolveBearerToken(): Promise<string> {

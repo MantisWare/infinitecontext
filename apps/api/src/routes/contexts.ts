@@ -26,7 +26,7 @@ import {
     validateVaultPrunePlaintextVersions,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
-import type { SyncRepository } from '@infinitecontext/core/sync';
+import { generateSyncConflictPublicId, type SyncRepository } from '@infinitecontext/core/sync';
 
 import {
     recordContextCreateChange,
@@ -239,7 +239,10 @@ export function registerContextRoutes(
             if (denied) return denied;
         }
 
-        const baseSequence = parseBaseSequence(c, body);
+        const parsedBase = parseBaseSequence(c, body);
+        if (parsedBase.status === 'invalid') {
+            return c.json({ error: 'Invalid base_sequence' }, 400);
+        }
         const result = await updateMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
@@ -259,10 +262,7 @@ export function registerContextRoutes(
         const responseBody = {
             ...result.data,
             ...(syncMeta && syncRepo
-                ? {
-                      sync_base_sequence:
-                          baseSequence ?? (await syncRepo.getHeadSequence(syncMeta.userId)),
-                  }
+                ? { sync_base_sequence: await syncRepo.getHeadSequence(syncMeta.userId) }
                 : {}),
         };
         return c.json(responseBody);
@@ -333,13 +333,16 @@ export function registerContextRoutes(
         }
 
         // message delete — pass ids + optional metadata to core (core validates shapes)
-        const { ids, metadata: userMetadata, base_sequence: bodyBase } = body;
-        const baseSequence = parseBaseSequence(c, body);
+        const { ids, metadata: userMetadata } = body;
+        const parsedBase = parseBaseSequence(c, body);
         const idList: (string | number)[] = Array.isArray(ids) ? ids : [ids as string | number];
 
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
         if (syncMeta && syncRepo) {
-            if (baseSequence === null && bodyBase === undefined) {
+            if (parsedBase.status === 'invalid') {
+                return c.json({ error: 'Invalid base_sequence' }, 400);
+            }
+            if (parsedBase.status === 'missing') {
                 return c.json(
                     {
                         error:
@@ -348,26 +351,36 @@ export function registerContextRoutes(
                     400,
                 );
             }
-            if (baseSequence !== null) {
-                const targets = await resolveDeleteTargetClientIds(storage, projectId, contextPublicId, idList);
-                if (!targets.ok) return c.json({ error: targets.message }, status(targets.code));
-                const stale = await assertRestMessageDeleteNotStale(
-                    syncRepo,
-                    syncMeta.userId,
-                    contextPublicId,
-                    baseSequence,
-                    targets.data,
+            const baseSequence = parsedBase.value;
+            const targets = await resolveDeleteTargetClientIds(storage, projectId, contextPublicId, idList);
+            if (!targets.ok) return c.json({ error: targets.message }, status(targets.code));
+            const stale = await assertRestMessageDeleteNotStale(
+                syncRepo,
+                syncMeta.userId,
+                contextPublicId,
+                baseSequence,
+                targets.data,
+            );
+            if (stale) {
+                const head = await syncRepo.getHeadSequence(syncMeta.userId);
+                await syncRepo.insertConflict({
+                    userId: syncMeta.userId,
+                    contextId: contextPublicId,
+                    kind: 'delete_stale_base',
+                    clientId: null,
+                    sequence: head,
+                    publicId: generateSyncConflictPublicId(),
+                    leftPayload: { base_sequence: baseSequence, server_sequence: head, op: 'message_delete' },
+                    rightPayload: { delete_targets: targets.data },
+                });
+                return c.json(
+                    {
+                        error: 'Delete rejected: target message changed since base_sequence',
+                        conflict: 'delete_stale_base',
+                        base_sequence: baseSequence,
+                    },
+                    409,
                 );
-                if (stale) {
-                    return c.json(
-                        {
-                            error: 'Delete rejected: target message changed since base_sequence',
-                            conflict: 'delete_stale_base',
-                            base_sequence: baseSequence,
-                        },
-                        409,
-                    );
-                }
             }
         }
 

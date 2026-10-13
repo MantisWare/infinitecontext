@@ -1,5 +1,6 @@
 import { findHead, getOrderedNodes } from './context-chain';
-import { clientNodeIdFromMetadata, resolveMessagePublicId } from './message-target';
+import { stableClientNodeIdForMessage } from './ic-client-node-id';
+import { resolveMessagePublicId } from './message-target';
 import type { NodeRow, StorageAdapter } from './storage';
 import { err, ok, type Result } from './result';
 
@@ -7,10 +8,10 @@ const CLIENT_NODE_ID_PATTERN = /^icn_[0-9a-f]{24}$/;
 
 type OrderedNode = Pick<NodeRow, 'public_id' | 'metadata'>;
 
-export function stableClientNodeIdFromNode(node: OrderedNode): string | null {
-    return clientNodeIdFromMetadata(
-        node.metadata && typeof node.metadata === 'object' ? (node.metadata as Record<string, unknown>) : null,
-    );
+export function stableClientNodeIdFromNode(node: OrderedNode): string {
+    const meta =
+        node.metadata && typeof node.metadata === 'object' ? (node.metadata as Record<string, unknown>) : null;
+    return stableClientNodeIdForMessage(node.public_id, meta);
 }
 
 export function resolveSelectorToClientNodeId(
@@ -22,13 +23,10 @@ export function resolveSelectorToClientNodeId(
     if ('code' in resolved) return err(resolved.code, resolved.message);
     const node = orderedNodes.find((n) => n.public_id === resolved.publicId);
     if (!node) return err('not_found', `Message not found: ${selector}`);
-    const fromNode = stableClientNodeIdFromNode(node);
     const clientNodeId =
-        fromNode ??
-        (hintClientNodeId && CLIENT_NODE_ID_PATTERN.test(hintClientNodeId) ? hintClientNodeId : null);
-    if (!clientNodeId || !CLIENT_NODE_ID_PATTERN.test(clientNodeId)) {
-        return err('invalid_input', `Message lacks stable ic_client_node_id: ${selector}`);
-    }
+        hintClientNodeId && CLIENT_NODE_ID_PATTERN.test(hintClientNodeId)
+            ? hintClientNodeId
+            : stableClientNodeIdFromNode(node);
     return ok({ publicId: resolved.publicId, clientNodeId });
 }
 

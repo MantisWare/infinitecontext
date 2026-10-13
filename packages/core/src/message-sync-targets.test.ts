@@ -28,11 +28,11 @@ describe('message-sync-targets', () => {
         if (updates.ok) assert.equal(updates.data[0], 'icn_' + '1'.repeat(24));
     });
 
-    it('rejects selectors when ic_client_node_id is missing', () => {
+    it('falls back to deterministic icn when metadata lacks ic_client_node_id', () => {
         const ordered = [{ public_id: 'msg_x', metadata: {} }];
         const result = resolveSelectorsToClientNodeIds(ordered, [0]);
-        assert.equal(result.ok, false);
-        if (!result.ok) assert.equal(result.code, 'invalid_input');
+        assert.equal(result.ok, true);
+        if (result.ok) assert.match(result.data[0]!, /^icn_[0-9a-f]{24}$/);
     });
 
     it('accepts update metadata ic_client_node_id hint for legacy rows', () => {

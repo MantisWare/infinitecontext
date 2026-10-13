@@ -177,10 +177,13 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
         clientNodeIds: string[],
     ): Promise<boolean> {
         if (clientNodeIds.length === 0) return false;
-        const idsArray = sql`ARRAY[${sql.join(
-            clientNodeIds.map((id) => sql`${id}`),
-            sql`, `,
-        )}]::text[]`;
+        const overlap = sql.join(
+            clientNodeIds.flatMap((id) => [
+                sql`COALESCE(${sync_change_log.payload}->'affected_client_ids', '[]'::jsonb) @> ${JSON.stringify([id])}::jsonb`,
+                sql`COALESCE(${sync_change_log.payload}->'deleted_client_ids', '[]'::jsonb) @> ${JSON.stringify([id])}::jsonb`,
+            ]),
+            sql` OR `,
+        );
         const rows = await db.execute(sql`
             SELECT EXISTS (
                 SELECT 1
@@ -189,22 +192,7 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
                   AND ${sync_change_log.context_id} = ${contextId}
                   AND ${sync_change_log.sequence} > ${sinceSequence}
                   AND ${sync_change_log.op} IN ('message_update', 'message_delete')
-                  AND (
-                    EXISTS (
-                      SELECT 1
-                      FROM jsonb_array_elements_text(
-                        COALESCE(${sync_change_log.payload}->'affected_client_ids', '[]'::jsonb)
-                      ) AS elem
-                      WHERE elem = ANY(${idsArray})
-                    )
-                    OR EXISTS (
-                      SELECT 1
-                      FROM jsonb_array_elements_text(
-                        COALESCE(${sync_change_log.payload}->'deleted_client_ids', '[]'::jsonb)
-                      ) AS elem
-                      WHERE elem = ANY(${idsArray})
-                    )
-                  )
+                  AND (${overlap})
             ) AS stale
         `);
         const row = (Array.isArray(rows) ? rows[0] : (rows as { rows?: unknown[] }).rows?.[0]) as

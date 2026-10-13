@@ -230,10 +230,19 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
   };
   const allowPlaintext = migrationMode;
 
-  function mapGetResponse(res, contextId) {
+  function captureSyncBaseFromRead(res) {
     if (typeof res?.sync_base_sequence === "number" && Number.isFinite(res.sync_base_sequence)) {
       ctx.lastSyncBaseSequence = res.sync_base_sequence;
     }
+  }
+
+  function mapGetResponse(res, contextId) {
+    captureSyncBaseFromRead(res);
+    res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
+    return res;
+  }
+
+  function mapMutationResponse(res, contextId) {
     res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
     return res;
   }
@@ -397,7 +406,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         body = { ...body, base_sequence: options.base_sequence };
       }
       const res = await client.update(contextId, body, withLastSeenBase(options));
-      return mapGetResponse(res, contextId);
+      return mapMutationResponse(res, contextId);
     },
 
     async delete(contextId, input, options) {
@@ -413,7 +422,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         };
       }
       const res = await client.delete(contextId, input, nextOptions);
-      if (res?.data?.length) return mapGetResponse(res, contextId);
+      if (res?.data?.length) return mapMutationResponse(res, contextId);
       return res;
     },
 

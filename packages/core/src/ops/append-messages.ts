@@ -6,6 +6,7 @@ import { appendErrorCode } from './append-errors';
 import { buildNodeInsertRecords, findHead, findTail, getOrderedNodes, getVersions } from '../context-chain';
 import type { MessageView } from '../message-view';
 import type { StorageAdapter } from '../storage';
+import { ensurePlaintextAppendClientNodeId } from '../ic-client-node-id';
 import { ok, err, type Result } from '../result';
 
 // -- intermediate tx outcome --------------------------------------------------
@@ -53,10 +54,13 @@ export async function appendMessages(
                 if (clientPublicId !== undefined && !CLIENT_NODE_ID_PATTERN.test(clientPublicId)) {
                     return { invalidId: true as const };
                 }
+                const contentRecord = content as Record<string, unknown>;
+                const baseMeta = (metadata ?? {}) as Record<string, unknown>;
+                const stampedMeta = ensurePlaintextAppendClientNodeId(contentRecord, baseMeta, clientPublicId);
                 return {
                     type: 'message',
-                    content: content as Record<string, unknown>,
-                    metadata: (metadata ?? {}) as Record<string, unknown>,
+                    content: contentRecord,
+                    metadata: stampedMeta,
                     clientPublicId,
                 };
             });

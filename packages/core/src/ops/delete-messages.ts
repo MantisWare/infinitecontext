@@ -5,6 +5,7 @@
 
 import { findHead, getOrderedNodes, getVersions } from '../context-chain';
 import { resolveMessagePublicId } from '../message-target';
+import { stampMetadataClientNodeId } from '../ic-client-node-id';
 import { resolveSelectorsToClientNodeIds } from '../message-sync-targets';
 import { generatePublicId } from '../public-ids';
 import { isPlainObject } from '../request-parsing';
@@ -118,7 +119,7 @@ export async function deleteMessages(
         parent_id: n.public_id,
         prev_id: null as string | null,
         content: n.content,
-        metadata: n.metadata,
+        metadata: stampMetadataClientNodeId(n.public_id, n.metadata as Record<string, unknown>),
     }));
 
     // link the copies in order via prev_id

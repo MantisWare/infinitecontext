@@ -11,7 +11,8 @@ describe('DrizzleSyncRepository stale EXISTS', () => {
         const src = fs.readFileSync(repoPath, 'utf8');
         assert.match(src, /hasMessageClientMutationSinceOnDb/);
         assert.match(src, /SELECT EXISTS/);
-        assert.match(src, /jsonb_array_elements_text/);
+        assert.match(src, /@>/);
+        assert.doesNotMatch(src, /jsonb_array_elements_text/);
         assert.match(src, /affected_client_ids/);
         assert.match(src, /deleted_client_ids/);
     });

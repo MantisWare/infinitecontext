@@ -340,6 +340,18 @@ describe('sync-postgres-live', () => {
         );
         assert.equal(delStale.res.status, 409);
         assert.equal((delStale.body as any).conflict, 'delete_stale_base');
+
+        const conflicts = await fx.json('GET', '/sync/conflicts?since=0&limit=50', undefined, fx.accessA);
+        const staleConflict = (conflicts.body.data as any[])?.find((c) => c.kind === 'delete_stale_base');
+        assert.ok(staleConflict, 'expected sync_conflicts row for REST 409 stale delete');
+
+        const badBase = await fx.json(
+            'DELETE',
+            `/contexts/${contextId}`,
+            { ids: [0], base_sequence: 'abc' },
+            fx.accessA,
+        );
+        assert.equal(badBase.res.status, 400);
     });
 
     it('message_delete with stale base_sequence records conflict instead of deleting', async () => {

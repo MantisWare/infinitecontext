@@ -6,6 +6,7 @@
 import type { StorageAdapter } from '../storage';
 import { findHead, getOrderedNodes, getVersions } from '../context-chain';
 import { resolveMessagePublicId } from '../message-target';
+import { stampMetadataClientNodeId } from '../ic-client-node-id';
 import { resolveUpdateSelectorsToClientNodeIds } from '../message-sync-targets';
 import { generatePublicId } from '../public-ids';
 import { isPlainObject, parseUpdateRequestBody } from '../request-parsing';
@@ -150,7 +151,7 @@ export async function updateMessages(
             parent_id: n.public_id,
             prev_id: null as string | null,
             content,
-            metadata,
+            metadata: stampMetadataClientNodeId(n.public_id, metadata),
         };
     });
 
