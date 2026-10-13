@@ -1,4 +1,9 @@
-export { assertStorageCiphertext } from "./ciphertext.mjs";
-export { createMemoryStorageAdapter, PreconditionFailedError } from "./memory-adapter.mjs";
-export { runStorageAdapterContractSuite, sampleEncryptedObjectBytes } from "./contract-suite.mjs";
+export { assertStorageCiphertext, buildStorageObjectBytes, isValidStorageAad, STORAGE_OBJECT_VERSION } from "./ciphertext.mjs";
+export {
+  AuthExpiredError,
+  NotSupportedError,
+  PreconditionFailedError,
+  RateLimitedError,
+  StorageError,
+} from "./errors.mjs";
 export { STORAGE_CAPABILITIES, storageCapabilitySet } from "./types.mjs";

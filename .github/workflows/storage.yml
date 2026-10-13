@@ -2,19 +2,9 @@ name: Storage (Phase 4.5)
 
 on:
   pull_request:
-    paths:
-      - "apps/js-sdk/lib/storage/**"
-      - "apps/js-sdk/tests/storage/**"
-      - "scripts/storage-issue12-guard.sh"
-      - ".github/workflows/storage.yml"
   push:
     branches:
       - main
-    paths:
-      - "apps/js-sdk/lib/storage/**"
-      - "apps/js-sdk/tests/storage/**"
-      - "scripts/storage-issue12-guard.sh"
-      - ".github/workflows/storage.yml"
 
 jobs:
   issue12-guard:
@@ -27,6 +17,7 @@ jobs:
         run: bash scripts/storage-issue12-guard.sh
         env:
           STORAGE_GUARD_BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+          ALLOW_ISSUE12_PATHS: ${{ contains(github.event.pull_request.labels.*.name, 'allow-12-paths') && '1' || '' }}
 
   storage-tests:
     runs-on: ubuntu-latest
@@ -41,10 +32,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Guard negative cases
+        run: bash scripts/test-storage-issue12-guard.sh
+
       - name: Syntax check storage modules
         run: |
           node --check apps/js-sdk/lib/storage/ciphertext.mjs
           node --check apps/js-sdk/lib/storage/types.mjs
+          node --check apps/js-sdk/lib/storage/errors.mjs
           node --check apps/js-sdk/lib/storage/memory-adapter.mjs
           node --check apps/js-sdk/lib/storage/contract-suite.mjs
           node --check apps/js-sdk/lib/storage/index.mjs
