@@ -1,0 +1,35 @@
+name: Storage (Phase 4.5)
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  storage-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Syntax check storage modules
+        run: |
+          node --check apps/js-sdk/lib/storage/ciphertext.mjs
+          node --check apps/js-sdk/lib/storage/types.mjs
+          node --check apps/js-sdk/lib/storage/errors.mjs
+          node --check apps/js-sdk/lib/storage/memory-adapter.mjs
+          node --check apps/js-sdk/lib/storage/contract-suite.mjs
+          node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
+          node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
+          node --check apps/js-sdk/lib/storage/index.mjs
+
+      - name: Storage adapter contract tests
+        run: node --test --test-concurrency=1 apps/js-sdk/tests/storage/*.test.mjs

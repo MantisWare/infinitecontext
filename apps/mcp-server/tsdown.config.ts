@@ -17,6 +17,8 @@ export default defineConfig({
         js: '#!/usr/bin/env node',
     },
     noExternal: [/^infinitecontext/, /^@infinitecontext\//, /^zod/, /^@modelcontextprotocol\//],
+    /** Standalone MCP stdio bundle (PR #7); dependencies above are intentionally inlined. */
+    inlineOnly: false,
     alias: {
         infinitecontext: path.join(jsSdkRoot, 'dist/index.mjs'),
         'infinitecontext/credentials': path.join(jsSdkRoot, 'lib/credentials.mjs'),

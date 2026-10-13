@@ -63,15 +63,23 @@ afterEach(() => {
 
 // spawn the wizard and return helpers to drive it
 function spawnWizard() {
+  // GitHub Actions sets CI=true; Ink/onboarding PTY output hangs with no data when CI is set.
+  const childEnv = {
+    ...process.env,
+    HOME: HOME_DIR,
+    TERM: process.env.TERM || "xterm-256color",
+    COLORTERM: process.env.COLORTERM || "truecolor",
+    COLUMNS: "120",
+    LINES: "40",
+  };
+  delete childEnv.CI;
+
   const proc = pty.spawn(process.execPath, [CLI_ENTRY, "config"], {
-    name: "xterm-color",
+    name: "xterm-256color",
     cols: 120,
     rows: 40,
     cwd: path.dirname(CLI_ENTRY),
-    env: {
-      ...process.env,
-      HOME: HOME_DIR,
-    },
+    env: childEnv,
   });
 
   let buffer = "";

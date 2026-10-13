@@ -68,9 +68,39 @@ apply_down() {
 }
 
 use_docker=false
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+if [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   use_docker=true
 fi
+
+ensure_host_database() {
+  export PGPASSWORD="$DB_PASS"
+  if ! command -v psql >/dev/null 2>&1; then
+    echo "psql not found. Install PostgreSQL client/server." >&2
+    exit 1
+  fi
+  for admin_db in infinitecontext postgres; do
+    if psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$admin_db" -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
+      psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$admin_db" -v ON_ERROR_STOP=1 \
+        -c "CREATE DATABASE \"${DB_NAME}\" OWNER \"${DB_USER}\";" 2>/dev/null || true
+      break
+    fi
+  done
+  if ! psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -u postgres psql -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+          CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASS}';
+        END IF;
+      END \$\$;"
+      sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${DB_NAME}\" OWNER \"${DB_USER}\";" 2>/dev/null || true
+      sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"${DB_NAME}\" OWNER TO \"${DB_USER}\";" 2>/dev/null || true
+    else
+      echo "Could not create or connect to database '${DB_NAME}' on ${PG_HOST}:${PG_PORT}." >&2
+      exit 1
+    fi
+  fi
+  PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
+}
 
 if [[ "$use_docker" == true ]]; then
   echo "Starting isolated postgres via docker compose..."
@@ -84,20 +114,8 @@ if [[ "$use_docker" == true ]]; then
   done
   PSQL=(docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 else
-  echo "Docker unavailable — using local PostgreSQL (${DB_NAME})..."
-  export PGPASSWORD="$DB_PASS"
-  if ! command -v psql >/dev/null 2>&1; then
-    echo "psql not found. Install PostgreSQL client/server." >&2
-    exit 1
-  fi
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
-      CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASS}';
-    END IF;
-  END \$\$;"
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" 2>/dev/null || true
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};" 2>/dev/null || true
-  PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -U "$DB_USER" -d "$DB_NAME")
+  echo "Using PostgreSQL at ${PG_HOST}:${PG_PORT} (database ${DB_NAME})..."
+  ensure_host_database
 fi
 
 assert_sync_schema() {
