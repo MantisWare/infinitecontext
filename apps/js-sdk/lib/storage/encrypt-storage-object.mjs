@@ -4,8 +4,25 @@ import { timingSafeEqual } from "node:crypto";
 import { encryptAead } from "../ic-crypto.mjs";
 import { buildStorageAadForKey, buildStorageObjectBytes, normalizeStorageObjectKey } from "./ciphertext.mjs";
 
+const STORAGE_DEK_BYTES = 32;
+
 /** @type {WeakMap<Uint8Array, Uint8Array>} Digest captured when body leaves encryptVaultPlaintextForStoragePut */
 const sealedPutBodyDigests = new WeakMap();
+
+/**
+ * @param {Uint8Array} dek
+ */
+function assertValidStorageEncryptionKey(dek) {
+  if (!(dek instanceof Uint8Array) || dek.length !== STORAGE_DEK_BYTES) {
+    throw new TypeError(`storage encryption key must be a ${STORAGE_DEK_BYTES}-byte Uint8Array`);
+  }
+  for (let i = 0; i < dek.length; i += 1) {
+    if (dek[i] !== 0) {
+      return;
+    }
+  }
+  throw new Error("storage encryption key must not be all-zero");
+}
 
 /**
  * @param {Uint8Array} body
@@ -20,6 +37,11 @@ function sealVaultEncryptPutBody(body) {
 /**
  * @param {Uint8Array} body
  */
+function digestMatchesSealedBody(body, expectedDigest) {
+  const actual = sha256(body);
+  return expectedDigest.length === actual.length && timingSafeEqual(expectedDigest, actual);
+}
+
 export function assertStoragePutBodySealed(body) {
   if (!(body instanceof Uint8Array)) {
     throw new Error("Storage put body must be produced by encryptVaultPlaintextForStoragePut");
@@ -28,10 +50,23 @@ export function assertStoragePutBodySealed(body) {
   if (!expected) {
     throw new Error("Storage put body must be produced by encryptVaultPlaintextForStoragePut");
   }
-  const actual = sha256(body);
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+  if (!digestMatchesSealedBody(body, expected)) {
     throw new Error("Storage put body was modified after encryption");
   }
+}
+
+/**
+ * Immutable snapshot for adapter.put after seal verification on the caller buffer.
+ * @param {Uint8Array} sealedBody
+ */
+export function copyVerifiedStoragePutBodyForAdapter(sealedBody) {
+  assertStoragePutBodySealed(sealedBody);
+  const expected = sealedPutBodyDigests.get(sealedBody);
+  const copy = new Uint8Array(sealedBody);
+  if (!expected || !digestMatchesSealedBody(copy, expected)) {
+    throw new Error("Storage put body was modified after encryption");
+  }
+  return copy;
 }
 
 /**
@@ -42,6 +77,7 @@ export function assertStoragePutBodySealed(body) {
  * @param {{ seq?: number, dekVersion?: number }} [options]
  */
 export function encryptVaultPlaintextForStoragePut(dek, objectKey, plaintext, options = {}) {
+  assertValidStorageEncryptionKey(dek);
   const normalized = normalizeStorageObjectKey(objectKey);
   const aadString = buildStorageAadForKey(normalized, options.seq ?? 0);
   const aadBytes = new TextEncoder().encode(aadString);

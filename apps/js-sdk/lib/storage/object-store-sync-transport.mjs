@@ -1,4 +1,4 @@
-import { assertStoragePutBodySealed } from "./encrypt-storage-object.mjs";
+import { copyVerifiedStoragePutBodyForAdapter } from "./encrypt-storage-object.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
 /** @typedef {import("./types.mjs").StoragePutOptions} StoragePutOptions */
@@ -18,8 +18,8 @@ export class ObjectStoreSyncTransport {
 
   /** @param {string} key @param {Uint8Array} sealedBody @param {StoragePutOptions} [options] */
   async putObject(key, sealedBody, options = {}) {
-    assertStoragePutBodySealed(sealedBody);
-    return this.#adapter.put(key, sealedBody, options);
+    const bodyForAdapter = copyVerifiedStoragePutBodyForAdapter(sealedBody);
+    return this.#adapter.put(key, bodyForAdapter, options);
   }
 
   /** @param {string} key @param {StorageRequestOptions} [options] */

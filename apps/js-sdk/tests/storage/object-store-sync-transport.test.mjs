@@ -66,6 +66,37 @@ describe("ObjectStoreSyncTransport put sealing", () => {
     await assert.rejects(() => transport.putObject(KEY, malicious, { ifNoneMatch: "*" }));
   });
 
+  it("rejects all-zero DEK at encrypt time", () => {
+    const zeroDek = new Uint8Array(32);
+    assert.throws(
+      () => encryptVaultPlaintextForStoragePut(zeroDek, KEY, { x: 1 }),
+      /all-zero/,
+    );
+  });
+
+  it("rejects invalid DEK length at encrypt time", () => {
+    assert.throws(
+      () => encryptVaultPlaintextForStoragePut(new Uint8Array(16).fill(1), KEY, { x: 1 }),
+      /32-byte/,
+    );
+  });
+
+  it("stores a copy so mutating caller buffer after put does not change backing object", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const transport = new ObjectStoreSyncTransport(adapter);
+    const dek = new Uint8Array(32).fill(9);
+    const sealed = encryptVaultPlaintextForStoragePut(dek, KEY, { v: 1 });
+    await transport.putObject(KEY, sealed, { ifNoneMatch: "*" });
+    const got = await transport.getObject(KEY);
+    assert.ok(got?.body);
+    const storedSnapshot = new Uint8Array(got.body);
+    sealed[0] ^= 0xff;
+    const afterMutate = await transport.getObject(KEY);
+    assert.ok(afterMutate?.body);
+    assert.deepEqual(afterMutate.body, storedSnapshot);
+  });
+
   it("rejects bodies mutated after encryption", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
