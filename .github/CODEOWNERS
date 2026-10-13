@@ -1,0 +1,3 @@
+# Storage guard + workflow require maintainer review for infra edits.
+/.github/workflows/storage.yml @MantisWare
+/scripts/storage-issue12-guard.sh @MantisWare

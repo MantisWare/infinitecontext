@@ -1,42 +1,72 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Phase 4.5 storage PRs must not overlap issue #12 (lost-update / CAS fixes).
-if [[ "${ALLOW_ISSUE12_PATHS:-}" == "1" ]]; then
-  echo "storage.yml guard: ALLOW_ISSUE12_PATHS=1 — skipping issue #12 path enforcement."
-  exit 0
-fi
-
 BASE="${STORAGE_GUARD_BASE:-origin/main}"
 if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
   BASE="main"
 fi
 
-GUARD_PATHS=(
+# Never bypassable (workflow/guard tamper protection).
+INFRA_GUARD_PATHS=(
+  ".github/workflows/storage.yml"
+  "scripts/storage-issue12-guard.sh"
+)
+
+# Issue #12 + #13 overlap paths (allow-12-paths may skip only this set).
+ISSUE12_GUARD_PATHS=(
   "apps/api/src/routes/contexts.ts"
   "apps/api/src/routes/sync.ts"
   "packages/core/src/ops/update-messages.ts"
   "apps/js-sdk/lib/encrypted-client.mjs"
-  "scripts/storage-issue12-guard.sh"
+  "packages/storage/src/sync/drizzle-sync-repository.ts"
+  "packages/core/src/sync/sync-service.ts"
+  "packages/storage/src/drizzle.ts"
+  "packages/core/src/root-context-lock.ts"
 )
 
-GUARD_PREFIXES=(
+ISSUE12_GUARD_PREFIXES=(
   "apps/api/src/sync/"
 )
 
-is_guarded_path() {
+SKIP_ISSUE12="${ALLOW_ISSUE12_PATHS:-0}"
+if [[ "$SKIP_ISSUE12" == "1" ]]; then
+  echo "storage.yml guard: ALLOW_ISSUE12_PATHS=1 — skipping issue #12/#13 path enforcement only."
+fi
+
+is_issue12_path() {
   local path="$1"
-  for guard in "${GUARD_PATHS[@]}"; do
+  for guard in "${ISSUE12_GUARD_PATHS[@]}"; do
     if [[ "$path" == "$guard" ]]; then
       return 0
     fi
   done
-  for prefix in "${GUARD_PREFIXES[@]}"; do
+  for prefix in "${ISSUE12_GUARD_PREFIXES[@]}"; do
     if [[ "$path" == "$prefix"* ]]; then
       return 0
     fi
   done
   return 1
+}
+
+is_infra_path() {
+  local path="$1"
+  for guard in "${INFRA_GUARD_PATHS[@]}"; do
+    if [[ "$path" == "$guard" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_guarded_path() {
+  local path="$1"
+  if is_infra_path "$path"; then
+    return 0
+  fi
+  if [[ "$SKIP_ISSUE12" == "1" ]]; then
+    return 1
+  fi
+  is_issue12_path "$path"
 }
 
 violations=()
@@ -60,49 +90,67 @@ while IFS=$'\t' read -r status path_a path_b; do
       fi
       ;;
   esac
-done < <(git diff --name-status -M -C50 "$BASE"...HEAD)
+done < <(git diff --name-status -M -C30 "$BASE"...HEAD)
 
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
-  if git cat-file -e "HEAD:$path" 2>/dev/null; then
-    mode=$(git ls-tree HEAD "$path" | awk '{print $1}')
-    if [[ "$mode" == "120000" ]]; then
-      target=$(git show "HEAD:$path")
-      for guard in "${GUARD_PATHS[@]}"; do
-        if [[ "$target" == *"$guard"* ]] || [[ "$target" == "$guard" ]]; then
-          violations+=("symlink to guarded path: $path -> $target")
-        fi
-      done
+  if ! git cat-file -e "HEAD:$path" 2>/dev/null; then
+    continue
+  fi
+  mode=$(git ls-tree HEAD "$path" | awk '{print $1}')
+  if [[ "$mode" == "120000" ]]; then
+    target=$(git show "HEAD:$path" | tr -d '\n')
+    for guard in "${ISSUE12_GUARD_PATHS[@]}" "${INFRA_GUARD_PATHS[@]}"; do
+      if [[ "$target" == "$guard" || "$target" == *"/$guard" || "$target" == *"$guard" ]]; then
+        violations+=("symlink to guarded path: $path -> $target")
+      fi
+    done
+    if [[ "$target" == ../* || "$target" == */../* ]]; then
+      violations+=("relative symlink: $path -> $target")
     fi
   fi
 done < <(git diff --name-only "$BASE"...HEAD)
 
-for path in $(git diff --name-only --diff-filter=A "$BASE"...HEAD); do
-  for guard in "${GUARD_PATHS[@]}" "${GUARD_PREFIXES[@]}"*; do
-    if [[ "$guard" == *"*"* ]]; then continue; fi
-    if git cat-file -e "$BASE:$guard" 2>/dev/null && git cat-file -e "HEAD:$path" 2>/dev/null; then
-      if git diff --quiet "$BASE:$guard" "HEAD:$path"; then
-        violations+=("added file matches guarded content: $path (copy of $guard)")
-      fi
+guard_list_files() {
+  printf '%s\n' "${INFRA_GUARD_PATHS[@]}"
+  if [[ "$SKIP_ISSUE12" != "1" ]]; then
+    printf '%s\n' "${ISSUE12_GUARD_PATHS[@]}"
+    git ls-tree -r --name-only "$BASE" apps/api/src/sync/ 2>/dev/null || true
+  fi
+}
+
+while IFS= read -r path; do
+  [[ -z "$path" ]] && continue
+  git cat-file -e "HEAD:$path" 2>/dev/null || continue
+  while IFS= read -r guarded; do
+    [[ -z "$guarded" ]] && continue
+    git cat-file -e "$BASE:$guarded" 2>/dev/null || continue
+    if git diff --quiet "$BASE:$guarded" "HEAD:$path" 2>/dev/null; then
+      violations+=("added/modified file matches guarded content: $path (copy of $guarded)")
+      continue
     fi
-  done
-  for prefix in "${GUARD_PREFIXES[@]}"; do
-    while IFS= read -r guarded; do
-      [[ -z "$guarded" ]] && continue
-      if git cat-file -e "$BASE:$guarded" 2>/dev/null && git diff --quiet "$BASE:$guarded" "HEAD:$path" 2>/dev/null; then
-        violations+=("added file matches guarded sync content: $path (copy of $guarded)")
-      fi
-    done < <(git ls-tree -r --name-only "$BASE" "$prefix" 2>/dev/null || true)
-  done
-done
+    base_lines=$(git show "$BASE:$guarded" | wc -l | tr -d ' ')
+    if [[ "$base_lines" == "0" ]]; then
+      continue
+    fi
+    common=$(
+      comm -12 \
+        <(git show "$BASE:$guarded" | sort -u) \
+        <(git show "HEAD:$path" | sort -u) | wc -l | tr -d ' '
+    )
+    threshold=$((base_lines * 25 / 100))
+    if (( common > threshold )); then
+      violations+=("partial/near copy (>=25% shared lines): $path ~ $guarded")
+    fi
+  done < <(guard_list_files)
+done < <(git diff --name-only --diff-filter=AM "$BASE"...HEAD)
 
 if ((${#violations[@]} > 0)); then
-  # de-dupe
   mapfile -t unique < <(printf '%s\n' "${violations[@]}" | sort -u)
-  echo "storage.yml guard: this PR touches issue #12 paths (not allowed in Phase 4.5 storage PRs):"
+  echo "storage.yml guard: blocked guarded-path overlap (diff vs ${BASE}):"
   printf '  - %s\n' "${unique[@]}"
-  echo "Add label allow-12-paths to bypass when intentional."
+  echo "Label allow-12-paths (maintainer-approved) skips issue #12/#13 paths only."
   exit 1
 fi
 
-echo "storage.yml guard: OK (no issue #12 paths in diff vs ${BASE})"
+echo "storage.yml guard: OK (no blocked paths in diff vs ${BASE})"

@@ -4,49 +4,47 @@ import { gzipSync } from "node:zlib";
 
 import {
   assertStorageCiphertext,
+  buildStorageAadForKey,
   buildStorageObjectBytes,
   isValidStorageAad,
 } from "../../lib/storage/ciphertext.mjs";
 
-const AAD = "ic-storage|log|devH|42";
 const SAMPLE_NONCE_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const VALID_CT_B64 = Buffer.alloc(16, 0).toString("base64");
+const KEY = "accounts/demo/object.enc";
 
 describe("assertStorageCiphertext", () => {
-  it("accepts strict storage object with AAD", () => {
-    const body = buildStorageObjectBytes(AAD, {
+  it("accepts strict storage object with key-bound AAD", () => {
+    const aad = buildStorageAadForKey(KEY);
+    const body = buildStorageObjectBytes(KEY, {
       __ic_enc: 1,
       kid: "dek_v1",
       v: 1,
       alg: "XC20P",
       nonce: SAMPLE_NONCE_B64,
-      ct: "AA==",
+      ct: VALID_CT_B64,
     });
-    assert.doesNotThrow(() => assertStorageCiphertext(body));
-    assert.ok(isValidStorageAad(AAD));
+    assert.doesNotThrow(() => assertStorageCiphertext(body, { objectKey: KEY }));
+    assert.equal(aad, buildStorageAadForKey(KEY));
+    assert.ok(isValidStorageAad(aad));
   });
 
-  it("rejects envelope bypass fields and plaintext ct", () => {
-    const bypass = new TextEncoder().encode(
-      JSON.stringify({
-        ic_storage_v: 1,
-        aad: AAD,
-        enc: {
-          __ic_enc: 1,
-          kid: "dek_v1",
-          v: 1,
-          alg: "XC20P",
-          nonce: SAMPLE_NONCE_B64,
-          ct: "AA==",
-        },
-        messages: [{ text: "leak" }],
+  it("rejects short ct and plaintext base64 ct without ASCII heuristics", () => {
+    assert.throws(() =>
+      buildStorageObjectBytes(KEY, {
+        __ic_enc: 1,
+        kid: "dek_v1",
+        v: 1,
+        alg: "XC20P",
+        nonce: SAMPLE_NONCE_B64,
+        ct: "AA==",
       }),
     );
-    assert.throws(() => assertStorageCiphertext(bypass));
 
     const plaintextCt = new TextEncoder().encode(
       JSON.stringify({
         ic_storage_v: 1,
-        aad: AAD,
+        aad: buildStorageAadForKey(KEY),
         enc: {
           __ic_enc: 1,
           kid: "dek_v1",
@@ -57,7 +55,19 @@ describe("assertStorageCiphertext", () => {
         },
       }),
     );
-    assert.throws(() => assertStorageCiphertext(plaintextCt));
+    assert.throws(() => assertStorageCiphertext(plaintextCt, { objectKey: KEY }));
+  });
+
+  it("rejects AAD/key mismatch on put", () => {
+    const body = buildStorageObjectBytes(KEY, {
+      __ic_enc: 1,
+      kid: "dek_v1",
+      v: 1,
+      alg: "XC20P",
+      nonce: SAMPLE_NONCE_B64,
+      ct: VALID_CT_B64,
+    });
+    assert.throws(() => assertStorageCiphertext(body, { objectKey: "other/key.enc" }));
   });
 
   it("rejects gzip plaintext and binary without wrapper", () => {

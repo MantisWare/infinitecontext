@@ -1,30 +1,34 @@
 import assert from "node:assert/strict";
 
-import { assertStorageCiphertext, buildStorageObjectBytes } from "./ciphertext.mjs";
+import {
+  assertStorageCiphertext,
+  buildStorageObjectBytes,
+  scanStorageObjectForLeaks,
+} from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
 
-const SAMPLE_AAD = "ic-storage|log|devH|0";
 const SAMPLE_NONCE_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const VALID_CT_B64 = Buffer.alloc(16, 0).toString("base64");
 
-/** @returns {Uint8Array} */
-export function sampleEncryptedObjectBytes() {
-  return buildStorageObjectBytes(SAMPLE_AAD, {
+/** @param {string} objectKey */
+export function sampleEncryptedObjectBytesForKey(objectKey) {
+  return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
     kid: "dek_v1",
     v: 1,
     alg: "XC20P",
     nonce: SAMPLE_NONCE_B64,
-    ct: "AA==",
+    ct: VALID_CT_B64,
   });
 }
 
-/** @returns {Uint8Array} */
-function sampleEncryptedObjectBytesVariant(tagByte) {
-  const ct = Buffer.from([tagByte, 0x01, 0x02, 0x03]).toString("base64");
-  return buildStorageObjectBytes(SAMPLE_AAD, {
+/** @param {string} objectKey @param {number} tagByte */
+function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
+  const ct = Buffer.alloc(16, tagByte).toString("base64");
+  return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
     kid: "dek_v1",
     v: 1,
@@ -35,13 +39,19 @@ function sampleEncryptedObjectBytesVariant(tagByte) {
 }
 
 /**
- * @typedef {Object} StorageAdapterTestHarness
- * @property {StorageAdapter} adapter
- * @property {() => { keys: string[], bodies: Uint8Array[] }} [inspectBacking]
+ * @typedef {Object} StorageBackingSnapshot
+ * @property {string[]} keys
+ * @property {Uint8Array[]} bodies
+ * @property {Record<string, unknown>[]} metadata
  */
 
 /**
- * Shared contract every StorageAdapter must satisfy.
+ * @typedef {Object} StorageAdapterTestHarness
+ * @property {StorageAdapter} adapter
+ * @property {() => StorageBackingSnapshot} inspectBacking
+ */
+
+/**
  * @param {() => StorageAdapterTestHarness | Promise<StorageAdapterTestHarness>} createHarness
  * @param {{ describe: Function, it: Function }} test
  */
@@ -49,7 +59,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
   describe("StorageAdapter contract", () => {
     /** @type {StorageAdapter} */
     let adapter;
-    /** @type {(() => { keys: string[], bodies: Uint8Array[] }) | undefined} */
+    /** @type {(() => StorageBackingSnapshot) | undefined} */
     let inspectBacking;
 
     /** @param {StorageAdapterTestHarness} harness */
@@ -58,19 +68,38 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       inspectBacking = harness.inspectBacking;
     };
 
+    const requireInspectBacking = () => {
+      assert.equal(typeof inspectBacking, "function", "contract suite requires inspectBacking harness");
+    };
+
     const assertBackingIsCiphertextOnly = () => {
-      if (!inspectBacking) return;
-      const { keys, bodies } = inspectBacking();
-      for (const key of keys) {
-        assert.doesNotMatch(String(key), /password|plaintext|secret/i, `backing key leaks plaintext hint: ${key}`);
-      }
-      for (const body of bodies) {
-        assert.doesNotThrow(() => assertStorageCiphertext(body));
+      requireInspectBacking();
+      const { keys, bodies, metadata } = inspectBacking();
+      assert.ok(Array.isArray(keys));
+      assert.ok(Array.isArray(bodies));
+      assert.ok(Array.isArray(metadata));
+      for (let i = 0; i < bodies.length; i += 1) {
+        const key = keys[i] ?? `idx-${i}`;
+        const body = bodies[i];
+        assert.doesNotThrow(() => assertStorageCiphertext(body, { objectKey: key }));
+        assert.doesNotThrow(() => scanStorageObjectForLeaks(key, body));
+        const meta = metadata[i];
+        if (meta && typeof meta === "object") {
+          assert.ok(meta.aad, "stored metadata must retain aad");
+          assert.ok(meta.enc, "stored metadata must retain enc");
+        }
       }
     };
 
+    it("requires inspectBacking harness", async () => {
+      const harness = await createHarness();
+      useHarness(harness);
+      requireInspectBacking();
+    });
+
     it("exposes required capabilities", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       for (const cap of [
         STORAGE_CAPABILITIES.get,
         STORAGE_CAPABILITIES.head,
@@ -89,19 +118,21 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
 
     it("round-trips ciphertext with head/get/list/delete", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
-      const body = sampleEncryptedObjectBytes();
-      const ref = await adapter.put("accounts/demo/blobs/a.enc", body);
-      assert.equal(ref.key, "accounts/demo/blobs/a.enc");
+      const key = "accounts/demo/blobs/a.enc";
+      const body = sampleEncryptedObjectBytesForKey(key);
+      const ref = await adapter.put(key, body);
+      assert.equal(ref.key, key);
       assert.ok(ref.etag);
       assert.equal(ref.size, body.length);
 
-      const head = await adapter.head("accounts/demo/blobs/a.enc");
+      const head = await adapter.head(key);
       assert.ok(head);
       assert.equal(head.size, body.length);
       assert.equal(head.etag, ref.etag);
 
-      const got = await adapter.get("accounts/demo/blobs/a.enc");
+      const got = await adapter.get(key);
       assert.ok(got);
       assert.deepEqual(got.body, body);
       assert.equal(got.etag, ref.etag);
@@ -111,16 +142,18 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       assert.ok(row);
       assert.equal(row.size, body.length);
 
-      await adapter.delete("accounts/demo/blobs/a.enc");
-      assert.equal(await adapter.get("accounts/demo/blobs/a.enc"), null);
+      await adapter.delete(key);
+      assert.equal(await adapter.get(key), null);
       assertBackingIsCiphertextOnly();
     });
 
     it("lists root prefix and paginates with cursor", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
       for (let i = 0; i < 5; i += 1) {
-        await adapter.put(`root/obj-${i}.enc`, sampleEncryptedObjectBytesVariant(i + 1));
+        const key = `root/obj-${i}.enc`;
+        await adapter.put(key, sampleEncryptedObjectBytesVariant(key, i + 1));
       }
       const page1 = await adapter.list("", { limit: 2 });
       assert.equal(page1.objects.length, 2);
@@ -133,55 +166,62 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
 
     it("enforces ifNoneMatch create-only and ifMatch updates", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
-      const first = sampleEncryptedObjectBytes();
-      const second = sampleEncryptedObjectBytesVariant(0xff);
+      const key = "manifest.json";
+      const first = sampleEncryptedObjectBytesForKey(key);
+      const second = sampleEncryptedObjectBytesVariant(key, 0xff);
 
-      await adapter.put("manifest.json", first, { ifNoneMatch: "*" });
+      await adapter.put(key, first, { ifNoneMatch: "*" });
       await assert.rejects(
-        () => adapter.put("manifest.json", second, { ifNoneMatch: "*" }),
+        () => adapter.put(key, second, { ifNoneMatch: "*" }),
         (err) => err instanceof PreconditionFailedError,
       );
 
-      const head = await adapter.head("manifest.json");
-      await adapter.put("manifest.json", second, { ifMatch: head?.etag });
-      const got = await adapter.get("manifest.json");
+      const head = await adapter.head(key);
+      await adapter.put(key, second, { ifMatch: head?.etag });
+      const got = await adapter.get(key);
       assert.deepEqual(got?.body, second);
 
       await assert.rejects(
-        () => adapter.put("manifest.json", first, { ifMatch: head?.etag }),
+        () => adapter.put(key, first, { ifMatch: head?.etag }),
         (err) => err instanceof PreconditionFailedError,
       );
       assertBackingIsCiphertextOnly();
     });
 
-    it("rejects stale ifMatch for same-length ciphertext payloads", async () => {
+    it("rejects stale ifMatch across distinct objects", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
-      const a = sampleEncryptedObjectBytes();
-      const b = sampleEncryptedObjectBytesVariant(0x0f);
-
-      const created = await adapter.put("same-len/a.enc", a, { ifNoneMatch: "*" });
-      await adapter.put("same-len/b.enc", b, { ifNoneMatch: "*" });
+      const keyA = "same-len/a.enc";
+      const keyB = "same-len/b.enc";
+      const created = await adapter.put(keyA, sampleEncryptedObjectBytesForKey(keyA), { ifNoneMatch: "*" });
+      const b = sampleEncryptedObjectBytesVariant(keyB, 0x0f);
+      await adapter.put(keyB, b, { ifNoneMatch: "*" });
       await assert.rejects(
-        () => adapter.put("same-len/b.enc", b, { ifMatch: created.etag }),
+        () => adapter.put(keyB, b, { ifMatch: created.etag }),
         (err) => err instanceof PreconditionFailedError,
       );
     });
 
     it("two-writer CAS: only one ifMatch succeeds", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
-      const initial = sampleEncryptedObjectBytes();
-      const ref = await adapter.put("cas/object.enc", initial, { ifNoneMatch: "*" });
-      const head = await adapter.head("cas/object.enc");
-      assert.ok(head?.etag);
+      const key = "cas/object.enc";
+      const initial = sampleEncryptedObjectBytesForKey(key);
+      const head = await adapter.head(key);
+      assert.equal(head, null);
+      await adapter.put(key, initial, { ifNoneMatch: "*" });
+      const afterCreate = await adapter.head(key);
+      assert.ok(afterCreate?.etag);
 
-      const writerA = sampleEncryptedObjectBytesVariant(0x01);
-      const writerB = sampleEncryptedObjectBytesVariant(0x02);
+      const writerA = sampleEncryptedObjectBytesVariant(key, 0x01);
+      const writerB = sampleEncryptedObjectBytesVariant(key, 0x02);
       const results = await Promise.allSettled([
-        adapter.put("cas/object.enc", writerA, { ifMatch: head.etag }),
-        adapter.put("cas/object.enc", writerB, { ifMatch: head.etag }),
+        adapter.put(key, writerA, { ifMatch: afterCreate.etag }),
+        adapter.put(key, writerB, { ifMatch: afterCreate.etag }),
       ]);
       const fulfilled = results.filter((row) => row.status === "fulfilled");
       const rejected = results.filter((row) => row.status === "rejected");
@@ -192,6 +232,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
 
     it("delete(ifMatch) fails when object missing", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
       await assert.rejects(
         () => adapter.delete("missing.enc", { ifMatch: '"ghost"' }),
@@ -201,45 +242,50 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
 
     it("delete(ifMatch) fails on etag mismatch", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
-      const ref = await adapter.put("del/me.enc", sampleEncryptedObjectBytes(), { ifNoneMatch: "*" });
+      const key = "del/me.enc";
+      const ref = await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
       await assert.rejects(
-        () => adapter.delete("del/me.enc", { ifMatch: '"stale"' }),
+        () => adapter.delete(key, { ifMatch: '"stale"' }),
         (err) => err instanceof PreconditionFailedError,
       );
-      assert.ok(await adapter.get("del/me.enc"));
-      await adapter.delete("del/me.enc", { ifMatch: ref.etag });
-      assert.equal(await adapter.get("del/me.enc"), null);
+      assert.ok(await adapter.get(key));
+      await adapter.delete(key, { ifMatch: ref.etag });
+      assert.equal(await adapter.get(key), null);
     });
 
     it("rejects plaintext and envelope bypass writes", async () => {
       useHarness(await createHarness());
+      requireInspectBacking();
       await adapter.init();
       const plaintext = new TextEncoder().encode(JSON.stringify({ hello: "world" }));
       await assert.rejects(() => adapter.put("blobs/plain.json", plaintext));
       assert.throws(() => assertStorageCiphertext(plaintext));
 
+      const key = "blobs/bypass.json";
       const envelopeBypass = new TextEncoder().encode(
         JSON.stringify({
           ic_storage_v: 1,
-          aad: SAMPLE_AAD,
+          aad: "ic-storage|blobs|0000000000000000|0",
           enc: {
             __ic_enc: 1,
             kid: "dek_v1",
             v: 1,
             alg: "XC20P",
             nonce: SAMPLE_NONCE_B64,
-            ct: "AA==",
+            ct: VALID_CT_B64,
           },
           title: "plaintext leak",
         }),
       );
-      await assert.rejects(() => adapter.put("blobs/bypass.json", envelopeBypass));
+      await assert.rejects(() => adapter.put(key, envelopeBypass));
 
       const ascii = new TextEncoder().encode("not encrypted");
       await assert.rejects(() => adapter.put("blobs/x.enc", ascii));
       assert.equal(await adapter.get("blobs/x.enc"), null);
       assertBackingIsCiphertextOnly();
     });
+
   });
 }

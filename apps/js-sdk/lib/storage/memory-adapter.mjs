@@ -1,6 +1,11 @@
 import { bytesToHex } from "@noble/hashes/utils";
 
-import { assertStorageCiphertext, storageObjectDigest } from "./ciphertext.mjs";
+import {
+  assertStorageCiphertext,
+  scanStorageObjectForLeaks,
+  storageObjectDigest,
+  verifyStorageObjectForKey,
+} from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
 import { STORAGE_CAPABILITIES, assertNotAborted, storageCapabilitySet } from "./types.mjs";
 
@@ -31,7 +36,7 @@ function computeEtag(key, body, revision) {
 }
 
 /**
- * @param {{ id?: string, maxObjectBytes?: number, exposeInternalsForTests?: boolean }} [options]
+ * @param {{ id?: string, maxObjectBytes?: number, exposeInternalsForTests?: boolean, corruptStripAadForTests?: boolean }} [options]
  * @returns {StorageAdapter & { exposeInternalsForTests?: () => { keys: string[], bodies: Uint8Array[] } }}
  */
 export function createMemoryStorageAdapter(options = {}) {
@@ -77,8 +82,9 @@ export function createMemoryStorageAdapter(options = {}) {
 
     async get(key, requestOptions = {}) {
       assertNotAborted(requestOptions.signal);
-      const { entry } = readEntry(key);
+      const { normalized, entry } = readEntry(key);
       if (!entry) return null;
+      verifyStorageObjectForKey(entry.body, normalized);
       return { body: entry.body.slice(), etag: entry.etag, size: entry.body.length };
     },
 
@@ -91,11 +97,12 @@ export function createMemoryStorageAdapter(options = {}) {
 
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
-      assertStorageCiphertext(body);
+      const { normalized, entry } = readEntry(key);
+      assertStorageCiphertext(body, { objectKey: normalized });
+      scanStorageObjectForLeaks(normalized, body);
       if (body.length > maxObjectBytes) {
         throw new Error(`Object exceeds maxObjectBytes (${maxObjectBytes})`);
       }
-      const { normalized, entry } = readEntry(key);
       const ifMatch = putOptions.ifMatch;
       const ifNoneMatch = putOptions.ifNoneMatch;
 
@@ -114,7 +121,12 @@ export function createMemoryStorageAdapter(options = {}) {
       }
 
       revisionCounter += 1;
-      const stored = body.slice();
+      let stored = body.slice();
+      if (options.corruptStripAadForTests) {
+        const parsed = JSON.parse(new TextDecoder().decode(stored));
+        delete parsed.aad;
+        stored = new TextEncoder().encode(JSON.stringify(parsed));
+      }
       const etag = computeEtag(normalized, stored, revisionCounter);
       const modifiedAt = new Date().toISOString();
       const latest = objects.get(normalized) ?? null;
@@ -202,6 +214,13 @@ export function createMemoryStorageAdapter(options = {}) {
     adapter.exposeInternalsForTests = () => ({
       keys: [...objects.keys()],
       bodies: [...objects.values()].map((row) => row.body),
+      metadata: [...objects.values()].map((row) => {
+        try {
+          return JSON.parse(new TextDecoder().decode(row.body));
+        } catch {
+          return {};
+        }
+      }),
     });
   }
 

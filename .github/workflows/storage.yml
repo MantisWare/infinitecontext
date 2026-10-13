@@ -2,22 +2,46 @@ name: Storage (Phase 4.5)
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches:
       - main
 
 jobs:
+  allow-12-paths-gate:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'allow-12-paths')
+    runs-on: ubuntu-latest
+    environment: storage-issue12-bypass
+    steps:
+      - name: Log maintainer bypass approval
+        run: |
+          echo "::notice title=allow-12-paths::Bypass gate for PR #${{ github.event.pull_request.number }} actor=${{ github.actor }} sender=${{ github.event.sender.login }} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
   issue12-guard:
+    needs: [allow-12-paths-gate]
+    if: |
+      always() && (
+        github.event_name == 'push' ||
+        needs.allow-12-paths-gate.result == 'success' ||
+        needs.allow-12-paths-gate.result == 'skipped'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Block overlap with issue #12 paths
-        run: bash scripts/storage-issue12-guard.sh
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Run base-branch guard script (tamper-resistant)
         env:
           STORAGE_GUARD_BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-          ALLOW_ISSUE12_PATHS: ${{ contains(github.event.pull_request.labels.*.name, 'allow-12-paths') && '1' || '' }}
+          ALLOW_ISSUE12_PATHS: ${{ needs.allow-12-paths-gate.result == 'success' && '1' || '' }}
+        run: |
+          BASE_SHA="${STORAGE_GUARD_BASE}"
+          git fetch origin "$BASE_SHA" 2>/dev/null || true
+          git show "$BASE_SHA:scripts/storage-issue12-guard.sh" > /tmp/storage-issue12-guard-from-base.sh
+          chmod +x /tmp/storage-issue12-guard-from-base.sh
+          /tmp/storage-issue12-guard-from-base.sh
 
   storage-tests:
     runs-on: ubuntu-latest
@@ -32,7 +56,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Guard negative cases
+      - name: Guard negative cases (PR head script)
         run: bash scripts/test-storage-issue12-guard.sh
 
       - name: Syntax check storage modules

@@ -1,4 +1,17 @@
-export { assertStorageCiphertext, buildStorageObjectBytes, isValidStorageAad, STORAGE_OBJECT_VERSION } from "./ciphertext.mjs";
+export {
+  assertStorageCiphertext,
+  assertStorageAadMatchesKey,
+  assertXc20pCtLength,
+  buildStorageAadForKey,
+  buildStorageObjectBytes,
+  isValidStorageAad,
+  normalizeStorageObjectKey,
+  parseStorageObject,
+  scanStorageObjectForLeaks,
+  verifyStorageObjectForKey,
+  STORAGE_OBJECT_VERSION,
+  XC20P_POLY1305_TAG_BYTES,
+} from "./ciphertext.mjs";
 export {
   AuthExpiredError,
   NotSupportedError,

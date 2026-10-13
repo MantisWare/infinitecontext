@@ -1,13 +1,48 @@
 import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 
-import { assertStrictEncryptedEnvelope, base64ToBytes, isEncryptedContent } from "../ic-crypto.mjs";
+import { AEAD_ALG, assertStrictEncryptedEnvelope, base64ToBytes, isEncryptedContent } from "../ic-crypto.mjs";
 
 /** Wire format version for objects written to StorageAdapter backends. */
 export const STORAGE_OBJECT_VERSION = 1;
 
+/** XChaCha20-Poly1305: ct field holds ciphertext || 16-byte Poly1305 tag (nonce is separate). */
+export const XC20P_POLY1305_TAG_BYTES = 16;
+
 const ALLOWED_STORAGE_OBJECT_KEYS = new Set(["ic_storage_v", "aad", "enc"]);
-const STORAGE_AAD_PATTERN = /^ic-storage\|[^|]+\|[^|]+\|\d+$/;
+const STORAGE_AAD_PATTERN = /^ic-storage\|[a-z0-9._-]+\|[0-9a-f]{16}\|\d+$/;
 const GZIP_MAGIC = [0x1f, 0x8b];
+
+const PLAINTEXT_LEAK_KEY_PATTERN = /password|secret|plaintext|message|title|email|token/i;
+
+/** @param {string} key */
+export function normalizeStorageObjectKey(key) {
+  const normalized = String(key ?? "").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("..")) {
+    throw new Error("Invalid storage object key");
+  }
+  return normalized;
+}
+
+/**
+ * Strict AAD grammar bound to object key: ic-storage|log|devH|seq
+ * devH = first 8 bytes of sha256(key) as hex (16 chars).
+ * @param {string} objectKey
+ * @param {number} [seq]
+ */
+export function buildStorageAadForKey(objectKey, seq = 0) {
+  const normalized = normalizeStorageObjectKey(objectKey);
+  const log = normalized.split("/")[0] ?? "object";
+  if (!/^[a-z0-9._-]+$/i.test(log)) {
+    throw new Error("Storage AAD log segment invalid");
+  }
+  const devH = bytesToHex(sha256(new TextEncoder().encode(normalized)).slice(0, 8));
+  const aad = `ic-storage|${log}|${devH}|${seq}`;
+  if (!isValidStorageAad(aad)) {
+    throw new Error("Failed to build storage AAD");
+  }
+  return aad;
+}
 
 /**
  * @param {string} aad
@@ -17,15 +52,67 @@ export function isValidStorageAad(aad) {
 }
 
 /**
- * @param {string} aad e.g. ic-storage|log|devH|seq
- * @param {Record<string, unknown>} envelope strict __ic_enc envelope
+ * @param {string} aad
+ * @param {string} objectKey
  */
-export function buildStorageObjectBytes(aad, envelope) {
+export function assertStorageAadMatchesKey(aad, objectKey) {
   if (!isValidStorageAad(aad)) {
-    throw new Error("Invalid storage AAD (expected ic-storage|log|devH|seq)");
+    throw new Error("Storage object aad must match ic-storage|log|devH|seq");
   }
+  const normalized = normalizeStorageObjectKey(objectKey);
+  const expectedPrefix = buildStorageAadForKey(normalized, Number(aad.split("|").pop()));
+  if (aad !== expectedPrefix) {
+    throw new Error("Storage object aad does not match object key binding");
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} envelope
+ */
+export function assertXc20pCtLength(envelope) {
+  if (envelope.alg !== AEAD_ALG) {
+    throw new Error("Storage enc must use XC20P");
+  }
+  let ctBytes;
+  try {
+    ctBytes = base64ToBytes(String(envelope.ct ?? ""));
+  } catch {
+    throw new Error("Storage enc.ct has invalid base64");
+  }
+  if (ctBytes.length < XC20P_POLY1305_TAG_BYTES) {
+    throw new Error(`Storage enc.ct must be at least ${XC20P_POLY1305_TAG_BYTES} bytes (ciphertext + Poly1305 tag)`);
+  }
+  rejectJsonPlaintextInCtBytes(ctBytes);
+}
+
+/** @param {Uint8Array} ctBytes */
+function rejectJsonPlaintextInCtBytes(ctBytes) {
+  const asText = tryDecodeUtf8(ctBytes);
+  if (asText === null) {
+    return;
+  }
+  const trimmed = asText.trimStart();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return;
+  }
+  try {
+    JSON.parse(asText);
+  } catch {
+    return;
+  }
+  throw new Error("Storage enc.ct must not contain JSON plaintext");
+}
+
+/**
+ * @param {string} objectKey
+ * @param {Record<string, unknown>} envelope strict __ic_enc envelope
+ * @param {{ seq?: number }} [options]
+ */
+export function buildStorageObjectBytes(objectKey, envelope, options = {}) {
+  const seq = options.seq ?? 0;
+  const aad = buildStorageAadForKey(objectKey, seq);
   assertStrictEncryptedEnvelope(envelope, "enc");
-  rejectPlaintextInCiphertextField(String(envelope.ct ?? ""));
+  assertXc20pCtLength(envelope);
   const json = JSON.stringify({
     ic_storage_v: STORAGE_OBJECT_VERSION,
     aad,
@@ -35,10 +122,31 @@ export function buildStorageObjectBytes(aad, envelope) {
 }
 
 /**
- * Storage backends must only persist ciphertext bytes (strict storage object or opaque binary with AAD envelope).
- * @param {unknown} body
+ * @param {Uint8Array} body
+ * @returns {Record<string, unknown>}
  */
-export function assertStorageCiphertext(body) {
+export function parseStorageObject(body) {
+  assertStorageCiphertext(body);
+  const text = new TextDecoder("utf-8").decode(body);
+  return JSON.parse(text);
+}
+
+/**
+ * @param {Uint8Array} body
+ * @param {string} objectKey
+ */
+export function verifyStorageObjectForKey(body, objectKey) {
+  const record = parseStorageObject(body);
+  assertStorageObjectRecord(record);
+  assertStorageAadMatchesKey(String(record.aad), objectKey);
+  return record;
+}
+
+/**
+ * @param {unknown} body
+ * @param {{ objectKey?: string }} [options]
+ */
+export function assertStorageCiphertext(body, options = {}) {
   if (!(body instanceof Uint8Array)) {
     throw new TypeError("Storage put body must be Uint8Array ciphertext");
   }
@@ -70,6 +178,9 @@ export function assertStorageCiphertext(body) {
   }
 
   assertStorageObjectRecord(parsed);
+  if (options.objectKey !== undefined) {
+    assertStorageAadMatchesKey(String(parsed.aad), options.objectKey);
+  }
 }
 
 /**
@@ -85,7 +196,7 @@ function assertStorageObjectRecord(record) {
     throw new Error("Storage object has unsupported ic_storage_v");
   }
   const aad = record.aad;
-  if (!isValidStorageAad(aad)) {
+  if (typeof aad !== "string" || !isValidStorageAad(aad)) {
     throw new Error("Storage object aad must match ic-storage|log|devH|seq");
   }
   const enc = record.enc;
@@ -93,27 +204,26 @@ function assertStorageObjectRecord(record) {
     throw new Error("Storage object enc must be an encrypted envelope");
   }
   assertStrictEncryptedEnvelope(enc, "enc");
-  rejectPlaintextInCiphertextField(String(enc.ct ?? ""));
+  assertXc20pCtLength(enc);
 }
 
-/** @param {string} ctB64 */
-function rejectPlaintextInCiphertextField(ctB64) {
-  let ctBytes;
-  try {
-    ctBytes = base64ToBytes(ctB64);
-  } catch {
-    throw new Error("Storage enc.ct has invalid base64");
+/** @param {Uint8Array} body */
+export function storageObjectDigest(body) {
+  return sha256(body);
+}
+
+/** @param {string} key @param {Uint8Array} body */
+export function scanStorageObjectForLeaks(key, body) {
+  if (PLAINTEXT_LEAK_KEY_PATTERN.test(key)) {
+    throw new Error(`Storage key appears to leak plaintext metadata: ${key}`);
   }
-  if (ctBytes.length === 0) {
-    return;
+  const record = parseStorageObject(body);
+  const serialized = JSON.stringify(record);
+  if (PLAINTEXT_LEAK_KEY_PATTERN.test(serialized)) {
+    throw new Error("Storage object JSON appears to contain sensitive plaintext fields");
   }
-  const asText = tryDecodeUtf8(ctBytes);
-  if (asText === null) {
-    return;
-  }
-  const compact = asText.trim();
-  if (compact.startsWith("{") || compact.startsWith("[") || /^[\x20-\x7e]+$/.test(compact)) {
-    throw new Error("Storage enc.ct appears to embed plaintext");
+  if (record.aad === undefined || record.aad === null || record.aad === "") {
+    throw new Error("Storage object missing aad at rest");
   }
 }
 
@@ -124,9 +234,4 @@ function tryDecodeUtf8(bytes) {
   } catch {
     return null;
   }
-}
-
-/** @param {Uint8Array} body */
-export function storageObjectDigest(body) {
-  return sha256(body);
 }
