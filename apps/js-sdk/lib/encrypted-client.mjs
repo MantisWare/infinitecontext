@@ -226,12 +226,25 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     dekVersion: vaultCtx.dekVersion ?? 1,
     userPublicId: vaultCtx.userPublicId,
     contextId: null,
+    lastSyncBaseSequence: null,
   };
   const allowPlaintext = migrationMode;
 
   function mapGetResponse(res, contextId) {
+    if (typeof res?.sync_base_sequence === "number" && Number.isFinite(res.sync_base_sequence)) {
+      ctx.lastSyncBaseSequence = res.sync_base_sequence;
+    }
     res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
     return res;
+  }
+
+  function withLastSeenBase(options) {
+    const base =
+      options?.base_sequence !== undefined && options?.base_sequence !== null
+        ? options.base_sequence
+        : ctx.lastSyncBaseSequence;
+    if (base === undefined || base === null) return options;
+    return { ...(options ?? {}), base_sequence: base };
   }
 
   return {
@@ -383,17 +396,17 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       if (options?.base_sequence !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
         body = { ...body, base_sequence: options.base_sequence };
       }
-      const res = await client.update(contextId, body, options);
+      const res = await client.update(contextId, body, withLastSeenBase(options));
       return mapGetResponse(res, contextId);
     },
 
     async delete(contextId, input, options) {
       ctx.contextId = contextId;
-      let nextOptions = options;
-      if (options?.metadata) {
+      let nextOptions = withLastSeenBase(options);
+      if (nextOptions?.metadata) {
         nextOptions = {
-          ...options,
-          metadata: encryptNodeMetadata(ctx.dek, ctx.dekVersion, options.metadata, {
+          ...nextOptions,
+          metadata: encryptNodeMetadata(ctx.dek, ctx.dekVersion, nextOptions.metadata, {
             contextId,
             userPublicId: ctx.userPublicId,
           }),
@@ -413,6 +426,9 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       const beforeHead = await withRateLimitRetry(() =>
         client.get(contextId, { history: true, vaultMigrateRead: true }),
       );
+      if (typeof beforeHead?.sync_base_sequence === "number" && Number.isFinite(beforeHead.sync_base_sequence)) {
+        ctx.lastSyncBaseSequence = beforeHead.sync_base_sequence;
+      }
       const rows = beforeHead?.data ?? [];
       const plaintextRows = rows.filter((row) => !isEncryptedContent(row));
       if (plaintextRows.length === 0) {
@@ -435,7 +451,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         );
         return { index: row.index, ...content, metadata };
       });
-      await client.update(contextId, { updates: batchUpdates });
+      await client.update(contextId, { updates: batchUpdates }, withLastSeenBase({}));
       if (typeof client.prunePlaintextVersions === "function") {
         await withRateLimitRetry(() => client.prunePlaintextVersions(contextId));
       }

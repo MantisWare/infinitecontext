@@ -16,12 +16,16 @@ export function stableClientNodeIdFromNode(node: OrderedNode): string | null {
 export function resolveSelectorToClientNodeId(
     orderedNodes: OrderedNode[],
     selector: string | number,
+    hintClientNodeId?: string | null,
 ): Result<{ publicId: string; clientNodeId: string }> {
     const resolved = resolveMessagePublicId(orderedNodes, selector);
     if ('code' in resolved) return err(resolved.code, resolved.message);
     const node = orderedNodes.find((n) => n.public_id === resolved.publicId);
     if (!node) return err('not_found', `Message not found: ${selector}`);
-    const clientNodeId = stableClientNodeIdFromNode(node);
+    const fromNode = stableClientNodeIdFromNode(node);
+    const clientNodeId =
+        fromNode ??
+        (hintClientNodeId && CLIENT_NODE_ID_PATTERN.test(hintClientNodeId) ? hintClientNodeId : null);
     if (!clientNodeId || !CLIENT_NODE_ID_PATTERN.test(clientNodeId)) {
         return err('invalid_input', `Message lacks stable ic_client_node_id: ${selector}`);
     }
@@ -41,7 +45,15 @@ export function resolveSelectorsToClientNodeIds(
     return ok(ids);
 }
 
-export type UpdateSelectorInput = { id?: unknown; index?: unknown };
+export type UpdateSelectorInput = { id?: unknown; index?: unknown; metadata?: unknown };
+
+function clientNodeIdHintFromUpdate(update: UpdateSelectorInput): string | null {
+    if (!update.metadata || typeof update.metadata !== 'object' || Array.isArray(update.metadata)) {
+        return null;
+    }
+    const id = (update.metadata as Record<string, unknown>).ic_client_node_id;
+    return typeof id === 'string' && CLIENT_NODE_ID_PATTERN.test(id) ? id : null;
+}
 
 export function resolveUpdateSelectorsToClientNodeIds(
     orderedNodes: OrderedNode[],
@@ -54,7 +66,11 @@ export function resolveUpdateSelectorsToClientNodeIds(
         if (typeof selector !== 'string' && typeof selector !== 'number') {
             return err('invalid_input', 'id or index must be a string or integer');
         }
-        const resolved = resolveSelectorToClientNodeId(orderedNodes, selector);
+        const resolved = resolveSelectorToClientNodeId(
+            orderedNodes,
+            selector as string | number,
+            clientNodeIdHintFromUpdate(u),
+        );
         if (!resolved.ok) return resolved;
         ids.push(resolved.data.clientNodeId);
     }

@@ -157,6 +157,10 @@ export function registerContextRoutes(
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
         if (syncMeta) {
             await recordMessageAppendChanges(syncRepo, syncMeta, contextPublicId, body, result.data);
+            return c.json(
+                { ...result.data, sync_base_sequence: await syncRepo!.getHeadSequence(syncMeta.userId) },
+                201,
+            );
         }
         return c.json(result.data, 201);
     });
@@ -329,7 +333,7 @@ export function registerContextRoutes(
         // message delete — pass ids + optional metadata to core (core validates shapes)
         const { ids, metadata: userMetadata, base_sequence: bodyBase } = body;
         const baseSequence = parseBaseSequence(c, body);
-        const idList = ids as (string | number)[];
+        const idList: (string | number)[] = Array.isArray(ids) ? ids : [ids as string | number];
 
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
         if (syncMeta && syncRepo) {

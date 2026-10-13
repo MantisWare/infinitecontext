@@ -253,7 +253,8 @@ describe('vault postgres live e2e', () => {
         await vaultClient.append(created.id, { role: 'user', text: 'b' });
         const before = await vaultClient.get(created.id);
         const keepClientNodeId = (before.data[1]?.metadata as Record<string, unknown>)?.ic_client_node_id;
-        await vaultClient.delete(created.id, 0);
+        assert.ok(typeof before.sync_base_sequence === 'number', 'expected sync_base_sequence on GET before delete');
+        await vaultClient.delete(created.id, 0, { base_sequence: before.sync_base_sequence });
         const after = await vaultClient.get(created.id);
         assert.equal(after.data.length, 1);
         assert.equal((after.data[0]?.metadata as Record<string, unknown>)?.ic_client_node_id, keepClientNodeId);

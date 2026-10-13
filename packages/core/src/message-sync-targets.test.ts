@@ -34,4 +34,14 @@ describe('message-sync-targets', () => {
         assert.equal(result.ok, false);
         if (!result.ok) assert.equal(result.code, 'invalid_input');
     });
+
+    it('accepts update metadata ic_client_node_id hint for legacy rows', () => {
+        const ordered = [{ public_id: 'msg_x', metadata: {} }];
+        const icn = 'icn_' + 'f'.repeat(24);
+        const result = resolveUpdateSelectorsToClientNodeIds(ordered, [
+            { index: 0, metadata: { ic_client_node_id: icn } },
+        ]);
+        assert.equal(result.ok, true);
+        if (result.ok) assert.deepEqual(result.data, [icn]);
+    });
 });
