@@ -110,6 +110,8 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
                 listChanges: (userId, since, limit) => this.listChangesOnDb(txDb, userId, since, limit),
                 appendChange: (input) => this.appendChangeOnDb(txDb, input),
                 insertConflict: (input) => this.insertConflictOnDb(txDb, input),
+                hasMessageClientMutationSince: (userId, contextId, sinceSequence, clientNodeIds) =>
+                    this.hasMessageClientMutationSinceOnDb(txDb, userId, contextId, sinceSequence, clientNodeIds),
             };
             return fn(ctx);
         });
@@ -156,6 +158,59 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
 
     async listChanges(userId: number, since: number, limit: number): Promise<SyncChangeRecord[]> {
         return this.listChangesOnDb(this.db, userId, since, limit);
+    }
+
+    async hasMessageClientMutationSince(
+        userId: number,
+        contextId: string,
+        sinceSequence: number,
+        clientNodeIds: string[],
+    ): Promise<boolean> {
+        return this.hasMessageClientMutationSinceOnDb(this.db, userId, contextId, sinceSequence, clientNodeIds);
+    }
+
+    private async hasMessageClientMutationSinceOnDb(
+        db: ApiDb,
+        userId: number,
+        contextId: string,
+        sinceSequence: number,
+        clientNodeIds: string[],
+    ): Promise<boolean> {
+        if (clientNodeIds.length === 0) return false;
+        const idsArray = sql`ARRAY[${sql.join(
+            clientNodeIds.map((id) => sql`${id}`),
+            sql`, `,
+        )}]::text[]`;
+        const rows = await db.execute(sql`
+            SELECT EXISTS (
+                SELECT 1
+                FROM ${sync_change_log}
+                WHERE ${sync_change_log.user_id} = ${userId}
+                  AND ${sync_change_log.context_id} = ${contextId}
+                  AND ${sync_change_log.sequence} > ${sinceSequence}
+                  AND ${sync_change_log.op} IN ('message_update', 'message_delete')
+                  AND (
+                    EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements_text(
+                        COALESCE(${sync_change_log.payload}->'affected_client_ids', '[]'::jsonb)
+                      ) AS elem
+                      WHERE elem = ANY(${idsArray})
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements_text(
+                        COALESCE(${sync_change_log.payload}->'deleted_client_ids', '[]'::jsonb)
+                      ) AS elem
+                      WHERE elem = ANY(${idsArray})
+                    )
+                  )
+            ) AS stale
+        `);
+        const row = (Array.isArray(rows) ? rows[0] : (rows as { rows?: unknown[] }).rows?.[0]) as
+            | { stale?: boolean }
+            | undefined;
+        return Boolean(row?.stale);
     }
 
     async insertConflict(input: {

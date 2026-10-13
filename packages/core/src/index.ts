@@ -58,6 +58,14 @@ export type { DeleteContextParams } from './ops/delete-context';
 export { deleteMessages } from './ops/delete-messages';
 export type { DeleteMessagesParams } from './ops/delete-messages';
 
+export {
+    loadOrderedContextMessages,
+    resolveSelectorToClientNodeId,
+    resolveSelectorsToClientNodeIds,
+    resolveUpdateSelectorsToClientNodeIds,
+    stableClientNodeIdFromNode,
+} from './message-sync-targets';
+
 export { deleteManyContexts } from './ops/delete-many';
 export type { DeleteResult, DeleteManyResult } from './ops/delete-many';
 

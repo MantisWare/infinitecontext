@@ -6,6 +6,7 @@
 import type { StorageAdapter } from '../storage';
 import { findHead, getOrderedNodes, getVersions } from '../context-chain';
 import { resolveMessagePublicId } from '../message-target';
+import { resolveUpdateSelectorsToClientNodeIds } from '../message-sync-targets';
 import { generatePublicId } from '../public-ids';
 import { isPlainObject, parseUpdateRequestBody } from '../request-parsing';
 import type { MessageView } from '../message-view';
@@ -38,7 +39,7 @@ export async function updateMessages(
     projectId: number,
     contextId: string,
     body: object,
-): Promise<Result<{ data: MessageView[]; version: number }>> {
+): Promise<Result<{ data: MessageView[]; version: number; affected_client_ids: string[] }>> {
     // body-shape validation — parse into { updates, userMetadata } or fail 400
     const parsed = parseUpdateRequestBody(body);
     if ('error' in parsed) return err('invalid_input', parsed.error);
@@ -68,6 +69,10 @@ export async function updateMessages(
 
     // load current messages, indexed by public id for lookup
     const orderedNodes = await getOrderedNodes(storage, currentHead.public_id);
+
+    const affectedResolved = resolveUpdateSelectorsToClientNodeIds(orderedNodes, updates);
+    if (!affectedResolved.ok) return affectedResolved;
+    const affectedClientIds = affectedResolved.data;
 
     // resolve each update's selector (id, icn_* client id, or index) to a concrete target id
     const resolvedUpdates: Array<{ id: string; [key: string]: unknown }> = [];
@@ -174,5 +179,5 @@ export async function updateMessages(
         metadata: n.metadata,
     }));
 
-    return ok({ data: result, version: currentVersion });
+    return ok({ data: result, version: currentVersion, affected_client_ids: affectedClientIds });
 }

@@ -447,7 +447,7 @@ async function run() {
         break;
       }
 
-      if (subcommand === "pull" || subcommand === "push" || subcommand === "devices") {
+      if (subcommand === "pull" || subcommand === "push" || subcommand === "devices" || subcommand === "parked") {
         const { runSyncCli } = await import("./sync-cli.mjs");
         await runSyncCli(subcommand, process.argv.slice(4));
         break;

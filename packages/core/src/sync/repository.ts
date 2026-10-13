@@ -30,6 +30,12 @@ export interface SyncRepository {
     }): Promise<SyncConflictRecord>;
     listConflictsSince(userId: number, sinceSequence: number, limit: number): Promise<SyncConflictRecord[]>;
     touchSessionSync(sessionId: number, at: string): Promise<void>;
+    hasMessageClientMutationSince(
+        userId: number,
+        contextId: string,
+        sinceSequence: number,
+        clientNodeIds: string[],
+    ): Promise<boolean>;
 }
 
 export type SyncStorageTransactionContext = {
@@ -46,6 +52,12 @@ export type SyncStorageTransactionContext = {
         leftPayload: Record<string, unknown>;
         rightPayload: Record<string, unknown>;
     }): Promise<SyncConflictRecord>;
+    hasMessageClientMutationSince(
+        userId: number,
+        contextId: string,
+        sinceSequence: number,
+        clientNodeIds: string[],
+    ): Promise<boolean>;
 };
 
 export interface TransactionalSyncRepository extends SyncRepository {

@@ -7,7 +7,8 @@ import { prunePlaintextVersionHeads } from '../ops/prune-plaintext-versions';
 import { updateMessages } from '../ops/update-messages';
 import { updateContextMetadataLww } from '../ops/update-context-metadata';
 import type { StorageAdapter } from '../storage';
-import { clientNodeIdFromMetadata } from '../message-target';
+import { loadOrderedContextMessages, resolveSelectorsToClientNodeIds } from '../message-sync-targets';
+import { hasMessageClientMutationSince as repoHasMessageClientMutationSince } from './delete-stale';
 import { generateSyncConflictPublicId } from './public-ids';
 import type { SyncRepository, TransactionalSyncRepository } from './repository';
 import {
@@ -222,7 +223,8 @@ export class SyncService {
         failed?: SyncPushFailure;
     }> {
         const applyResult = await this.applyMutationWithRetry(this.storage, ctx, parsed, {
-            listChanges: (since, limit) => this.syncRepo.listChanges(ctx.userId, since, limit),
+            hasMessageClientMutationSince: (contextId, sinceSequence, clientNodeIds) =>
+                repoHasMessageClientMutationSince(this.syncRepo, ctx.userId, contextId, sinceSequence, clientNodeIds),
         });
         return this.finalizePushOutcome(ctx, parsed, applyResult, async (input) => this.syncRepo.appendChange(input), async (input) =>
             this.syncRepo.insertConflict(input),
@@ -243,7 +245,13 @@ export class SyncService {
                 return await txRepo.runStorageTransaction(async (txCtx) => {
                     const applyResult = await this.applyMutationWithRetry(txCtx.storage, ctx, parsed, {
                         inTransaction: true,
-                        listChanges: (since, limit) => txCtx.listChanges(ctx.userId, since, limit),
+                        hasMessageClientMutationSince: (contextId, sinceSequence, clientNodeIds) =>
+                            txCtx.hasMessageClientMutationSince(
+                                ctx.userId,
+                                contextId,
+                                sinceSequence,
+                                clientNodeIds,
+                            ),
                     });
                     if (applyResult.kind === 'retryable') {
                         throw new SyncTransientError();
@@ -410,7 +418,11 @@ export class SyncService {
         mutation: SyncMutation,
         options?: {
             inTransaction?: boolean;
-            listChanges?: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>;
+            hasMessageClientMutationSince?: (
+                contextId: string,
+                sinceSequence: number,
+                clientNodeIds: string[],
+            ) => Promise<boolean>;
         },
     ): Promise<ApplyResult> {
         if (mutation.op !== 'message_append') {
@@ -435,7 +447,11 @@ export class SyncService {
         ctx: SyncApplyContext,
         mutation: SyncMutation,
         options?: {
-            listChanges?: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>;
+            hasMessageClientMutationSince?: (
+                contextId: string,
+                sinceSequence: number,
+                clientNodeIds: string[],
+            ) => Promise<boolean>;
         },
     ): Promise<ApplyResult> {
         if (mutation.op === 'context_create' || mutation.op === 'context_fork') {
@@ -539,7 +555,6 @@ export class SyncService {
         if (mutation.op === 'message_update') {
             const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload);
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_update');
-            const affectedClientIds = this.extractIcnSelectorsFromUpdatePayload(mutation.payload);
             return {
                 kind: 'ok',
                 contextId,
@@ -547,7 +562,7 @@ export class SyncService {
                     context_id: contextId,
                     version: result.data.version,
                     data: result.data.data,
-                    affected_client_ids: affectedClientIds,
+                    affected_client_ids: result.data.affected_client_ids,
                 },
             };
         }
@@ -556,9 +571,6 @@ export class SyncService {
             const deleteParams = mutation.payload as { ids?: unknown; base_sequence?: number };
             const rawIds = deleteParams.ids;
             const idList = Array.isArray(rawIds) ? rawIds : rawIds === undefined ? [] : [rawIds];
-            const targetClientIds = idList
-                .filter((id): id is string => typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id))
-                .map(String);
             const baseSeq = mutation.base_sequence ?? deleteParams.base_sequence;
             if (typeof baseSeq !== 'number' || !Number.isFinite(baseSeq)) {
                 return {
@@ -568,11 +580,35 @@ export class SyncService {
                     contextId,
                 };
             }
-            const listChanges =
-                options?.listChanges ??
-                ((since, limit) => this.syncRepo.listChanges(ctx.userId, since, limit));
-            const stale = await this.assertDeleteNotStale(contextId, baseSeq, targetClientIds, listChanges);
-            if (stale) return stale;
+            const ordered = await loadOrderedContextMessages(storage, ctx.projectId, contextId);
+            if (!ordered.ok) return this.mapApplyError(ordered.code, ordered.message, contextId, 'message_delete');
+            const resolvedTargets = resolveSelectorsToClientNodeIds(
+                ordered.data,
+                idList as Array<string | number>,
+            );
+            if (!resolvedTargets.ok) {
+                return {
+                    kind: 'failed',
+                    code: resolvedTargets.code,
+                    message: resolvedTargets.message,
+                    contextId,
+                };
+            }
+            const targetClientIds = resolvedTargets.data;
+            const checkStale =
+                options?.hasMessageClientMutationSince ??
+                ((cid, since, ids) =>
+                    repoHasMessageClientMutationSince(this.syncRepo, ctx.userId, cid, since, ids));
+            const staleHit = await checkStale(contextId, baseSeq, targetClientIds);
+            if (staleHit) {
+                return {
+                    kind: 'conflict',
+                    contextId,
+                    conflictKind: 'delete_stale_base',
+                    leftPayload: { base_sequence: baseSeq, server_sequence: baseSeq, op: 'message_delete' },
+                    rightPayload: { delete_targets: targetClientIds },
+                };
+            }
             const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any);
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_delete');
             return {
@@ -607,80 +643,6 @@ export class SyncService {
         }
 
         throw new SyncValidationError('Unsupported sync op');
-    }
-
-    private extractIcnSelectorsFromUpdatePayload(payload: unknown): string[] {
-        const body = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
-        const rows = Array.isArray(body.updates)
-            ? body.updates
-            : Array.isArray(body.data)
-              ? body.data
-              : [];
-        const ids: string[] = [];
-        for (const row of rows) {
-            if (!row || typeof row !== 'object') continue;
-            const id = (row as { id?: unknown }).id;
-            if (typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id)) ids.push(id);
-        }
-        return ids;
-    }
-
-    private extractAffectedClientIdsFromChangePayload(payload: Record<string, unknown>): string[] {
-        const ids: string[] = [];
-        for (const key of ['deleted_client_ids', 'affected_client_ids'] as const) {
-            const list = payload[key];
-            if (!Array.isArray(list)) continue;
-            for (const id of list) {
-                if (typeof id === 'string' && SYNC_CLIENT_ID_PATTERN.test(id)) ids.push(id);
-            }
-        }
-        return ids;
-    }
-
-    private async listChangesAfterSequence(
-        listChanges: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>,
-        baseSequence: number,
-    ): Promise<import('./types').SyncChangeRecord[]> {
-        const all: import('./types').SyncChangeRecord[] = [];
-        let since = baseSequence;
-        const pageSize = 500;
-        while (true) {
-            const page = await listChanges(since, pageSize);
-            if (page.length === 0) break;
-            all.push(...page);
-            since = page[page.length - 1]!.sequence;
-            if (page.length < pageSize) break;
-        }
-        return all;
-    }
-
-    private async assertDeleteNotStale(
-        contextId: string,
-        baseSequence: number,
-        targetClientIds: string[],
-        listChanges: (since: number, limit: number) => Promise<import('./types').SyncChangeRecord[]>,
-    ): Promise<ApplyResult | null> {
-        const targets = new Set(targetClientIds);
-        if (targets.size === 0) return null;
-        const changes = await this.listChangesAfterSequence(listChanges, baseSequence);
-        for (const change of changes) {
-            if (change.context_id !== contextId) continue;
-            if (change.sequence <= baseSequence) continue;
-            if (change.op !== 'message_update' && change.op !== 'message_delete') {
-                continue;
-            }
-            const touched = this.extractAffectedClientIdsFromChangePayload(change.payload);
-            if (touched.some((id) => targets.has(id))) {
-                return {
-                    kind: 'conflict',
-                    contextId,
-                    conflictKind: 'delete_stale_base',
-                    leftPayload: { base_sequence: baseSequence, server_sequence: change.sequence, op: change.op },
-                    rightPayload: { delete_targets: [...targets] },
-                };
-            }
-        }
-        return null;
     }
 
     private mapApplyError(

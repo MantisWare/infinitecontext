@@ -150,6 +150,32 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     }
   }
 
+  function readJsonState(filePath) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  function migrateDaemonPullCursor() {
+    const current = stmt.getOffset.get("sync:pull_cursor");
+    const cursor = current ? parseNumber(current.offset_value, 0) : 0;
+    if (cursor > 0) return;
+    const icDir = path.dirname(resolvedPath);
+    const legacy = readJsonState(path.join(icDir, "sync-state.json"));
+    const legacyCursor = legacy && typeof legacy === "object" ? parseNumber(legacy.cursor, 0) : 0;
+    if (legacyCursor > 0) {
+      stmt.setOffset.run("sync:pull_cursor", legacyCursor);
+      return;
+    }
+    const cli = readJsonState(path.join(icDir, "sync-cli-state.json"));
+    const cliCursor = cli && typeof cli === "object" ? parseNumber(cli.cursor, 0) : 0;
+    if (cliCursor > 0) stmt.setOffset.run("sync:pull_cursor", cliCursor);
+  }
+
+  migrateDaemonPullCursor();
+
   return {
     dbPath: resolvedPath,
     markEventSeen(eventHash, ttlSeconds) {

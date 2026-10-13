@@ -81,7 +81,7 @@ infinitecontext sync devices revoke <session-public-id>
 
 **Cursors:** the daemon keeps its pull cursor in `daemon.db` (`sync:pull_cursor`). The CLI keeps a separate cursor in `sync-cli-state.json`. Shared outbox + parked failures live in `sync-state.json`.
 
-**Deletes:** clients must send `base_sequence` on every `message_delete` mutation (use `mutationForMessageDelete()` in the SDK, or `GET /sync/status` → `head_sequence`).
+**Deletes:** clients must send `base_sequence` on every `message_delete` mutation — the **last-seen** sync sequence from a prior `sync pull` / CLI cursor or `sync_base_sequence` on `GET /contexts/:id`. Do **not** use `/sync/status` `head_sequence` as the delete base (that is the server tip, not what the client has applied). Use `mutationForMessageDelete()` in the SDK or pass `base_sequence` on REST `DELETE /contexts/:id` (body or `X-IC-Base-Sequence` / `If-Match`).
 
 Device list/revoke uses `/auth/devices` (revoking invalidates refresh tokens for that session).
 

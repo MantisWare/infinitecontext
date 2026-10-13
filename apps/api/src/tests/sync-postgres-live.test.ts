@@ -279,6 +279,69 @@ describe('sync-postgres-live', () => {
         assert.equal(refresh.res.status, 401);
     });
 
+    it('REST PATCH by index logs affected_client_ids; REST DELETE by index rejects stale base', async () => {
+        if (!postgresReady) return;
+        const fx = await setupApp();
+        const create = await fx.json(
+            'POST',
+            '/sync/push',
+            {
+                mutations: [
+                    {
+                        client_id: generateClientNodeId(),
+                        op: 'context_create',
+                        payload: { metadata: { source: 'rest-index', session_id: 'ri1' } },
+                    },
+                ],
+            },
+            fx.accessA,
+        );
+        const contextId = String((create.body.effects as any[])?.[0]?.context_id ?? '');
+        const m1 = generateClientNodeId();
+        await fx.json(
+            'POST',
+            `/contexts/${contextId}`,
+            { id: m1, role: 'user', content: { message: 'hello' }, metadata: { ic_client_node_id: m1 } },
+            fx.accessA,
+        );
+
+        const read0 = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const baseSeq = Number(read0.body.sync_base_sequence ?? 0);
+        assert.ok(baseSeq > 0);
+
+        const patch = await fx.json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 0, role: 'user', content: { message: 'patched' } }] },
+            fx.accessA,
+        );
+        assert.equal(patch.res.status, 200);
+
+        const pullAfterPatch = await fx.json('GET', `/sync/changes?since=${baseSeq}&limit=20`, undefined, fx.accessA);
+        const updateChange = (pullAfterPatch.body.changes as any[])?.find((c) => c.op === 'message_update');
+        assert.ok(updateChange, 'expected message_update change');
+        assert.deepEqual(updateChange.payload.affected_client_ids, [m1]);
+
+        const read1 = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const baseAfterPatch = Number(read1.body.sync_base_sequence ?? 0);
+
+        await fx.json(
+            'PATCH',
+            `/contexts/${contextId}`,
+            { updates: [{ index: 0, role: 'user', content: { message: 'patched again' } }] },
+            fx.accessA,
+        );
+
+        const delStale = await fx.json(
+            'DELETE',
+            `/contexts/${contextId}`,
+            { ids: [0], base_sequence: baseAfterPatch },
+            fx.accessA,
+        );
+        assert.equal(delStale.res.status, 409);
+        assert.equal((delStale.body as any).conflict, 'delete_stale_base');
+    });
+
     it('message_delete with stale base_sequence records conflict instead of deleting', async () => {
         if (!postgresReady) return;
         const fx = await setupApp();
@@ -717,7 +780,14 @@ describe('sync-postgres-live', () => {
             },
             fx.accessA,
         );
-        const del = await fx.json('DELETE', `/contexts/${contextId}`, { ids: [m1] }, fx.accessA);
+        const readBeforeDel = await fx.json('GET', `/contexts/${contextId}`, undefined, fx.accessA);
+        const delBase = Number(readBeforeDel.body.sync_base_sequence ?? 0);
+        const del = await fx.json(
+            'DELETE',
+            `/contexts/${contextId}`,
+            { ids: [m1], base_sequence: delBase },
+            fx.accessA,
+        );
         assert.equal(del.res.status, 200);
         const pull = await fx.json('GET', '/sync/changes?since=0&limit=200', undefined, fx.accessA);
         const delChange = (pull.body.changes as any[])?.find((c) => c.op === 'message_delete' && c.context_id === contextId);

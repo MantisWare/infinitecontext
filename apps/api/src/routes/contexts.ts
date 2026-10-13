@@ -34,6 +34,8 @@ import {
     recordMessageAppendChanges,
     syncSessionMeta,
 } from '../sync/context-sync-hooks';
+import { parseBaseSequence } from '../sync/parse-base-sequence';
+import { assertRestMessageDeleteNotStale, resolveDeleteTargetClientIds } from '../sync/rest-message-delete';
 import type { HttpApp } from '../types/http';
 import { generateClientNodeId } from '@infinitecontext/crypto';
 
@@ -209,7 +211,12 @@ export function registerContextRoutes(
             if (denied) return denied;
         }
 
-        return c.json(result.data);
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        const responseBody =
+            syncMeta && syncRepo
+                ? { ...result.data, sync_base_sequence: await syncRepo.getHeadSequence(syncMeta.userId) }
+                : result.data;
+        return c.json(responseBody);
     });
 
     // update messages — parse JSON body (null on bad JSON -> 400), call core
@@ -226,6 +233,7 @@ export function registerContextRoutes(
             if (denied) return denied;
         }
 
+        const baseSequence = parseBaseSequence(c, body);
         const result = await updateMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
@@ -234,10 +242,24 @@ export function registerContextRoutes(
                 op: 'message_update',
                 contextId: contextPublicId,
                 clientId: generateClientNodeId(),
-                payload: { context_id: contextPublicId, version: result.data.version, body, data: result.data.data },
+                payload: {
+                    context_id: contextPublicId,
+                    version: result.data.version,
+                    data: result.data.data,
+                    affected_client_ids: result.data.affected_client_ids,
+                },
             });
         }
-        return c.json(result.data);
+        const responseBody = {
+            ...result.data,
+            ...(syncMeta && syncRepo
+                ? {
+                      sync_base_sequence:
+                          baseSequence ?? (await syncRepo.getHeadSequence(syncMeta.userId)),
+                  }
+                : {}),
+        };
+        return c.json(responseBody);
     });
 
     // -- delete context or messages -----------------------------------------------
@@ -305,13 +327,49 @@ export function registerContextRoutes(
         }
 
         // message delete — pass ids + optional metadata to core (core validates shapes)
-        const { ids, metadata: userMetadata } = body;
+        const { ids, metadata: userMetadata, base_sequence: bodyBase } = body;
+        const baseSequence = parseBaseSequence(c, body);
+        const idList = ids as (string | number)[];
+
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        if (syncMeta && syncRepo) {
+            if (baseSequence === null && bodyBase === undefined) {
+                return c.json(
+                    {
+                        error:
+                            'base_sequence is required for message delete (use sync_base_sequence from GET /contexts/:id or your pull cursor)',
+                    },
+                    400,
+                );
+            }
+            if (baseSequence !== null) {
+                const targets = await resolveDeleteTargetClientIds(storage, projectId, contextPublicId, idList);
+                if (!targets.ok) return c.json({ error: targets.message }, status(targets.code));
+                const stale = await assertRestMessageDeleteNotStale(
+                    syncRepo,
+                    syncMeta.userId,
+                    contextPublicId,
+                    baseSequence,
+                    targets.data,
+                );
+                if (stale) {
+                    return c.json(
+                        {
+                            error: 'Delete rejected: target message changed since base_sequence',
+                            conflict: 'delete_stale_base',
+                            base_sequence: baseSequence,
+                        },
+                        409,
+                    );
+                }
+            }
+        }
+
         const result = await deleteMessages(storage, projectId, contextPublicId, {
-            ids: ids as (string | number)[],
+            ids: idList,
             userMetadata: userMetadata as Record<string, unknown> | undefined,
         });
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
-        const syncMeta = await syncSessionMeta(c, options?.authRepo);
         if (syncMeta) {
             await recordGenericSyncChange(syncRepo, syncMeta, {
                 op: 'message_delete',
@@ -324,6 +382,12 @@ export function registerContextRoutes(
                 },
             });
         }
-        return c.json(result.data);
+        const responseBody = {
+            ...result.data,
+            ...(syncMeta && syncRepo
+                ? { sync_base_sequence: await syncRepo.getHeadSequence(syncMeta.userId) }
+                : {}),
+        };
+        return c.json(responseBody);
     });
 }

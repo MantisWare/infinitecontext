@@ -276,7 +276,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange) {
         if (replica) {
-          applySyncChangeToReplica(replica, change, persistReplica);
+          applySyncChangeToReplica(replica, change, () => {});
         } else {
           store.applySyncChange(change);
         }
@@ -285,11 +285,10 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
       total += 1;
     }
     if (replica) persistReplica();
+    writeCursor(since);
     hasMore = Boolean(lastPage.has_more);
     if ((lastPage.changes ?? []).length === 0) break;
   }
-
-  writeCursor(since);
   if (log && total > 0) log("info", "Applied sync pull", { changes: total, cursor: since });
   const conflictCount = pageConflicts(lastPage);
   if (log && conflictCount > 0) {
@@ -302,14 +301,13 @@ function pageConflicts(page) {
   return Array.isArray(page?.conflicts) ? page.conflicts.length : 0;
 }
 
-export async function resolveDeleteBaseSequence({ baseUrl, explicitBaseSequence } = {}) {
+export function resolveDeleteBaseSequence({ explicitBaseSequence } = {}) {
   if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
     return explicitBaseSequence;
   }
   const local = getSyncCursor();
   if (local > 0) return local;
-  const remote = await fetchSyncStatus({ baseUrl });
-  return Number(remote.head_sequence ?? 0);
+  return null;
 }
 
 export function mutationForContextCreate(metadata) {
@@ -329,9 +327,14 @@ export function mutationForMessageAppend(contextId, messages) {
   };
 }
 
-export async function mutationForMessageDelete(contextId, ids, { baseUrl, base_sequence: baseSequence } = {}) {
+export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence } = {}) {
   const idList = Array.isArray(ids) ? ids : [ids];
-  const base_sequence = await resolveDeleteBaseSequence({ baseUrl, explicitBaseSequence: baseSequence });
+  const base_sequence = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence });
+  if (base_sequence === null || !Number.isFinite(base_sequence)) {
+    throw new Error(
+      "base_sequence is required for message_delete — run sync pull or pass base_sequence from the last GET /contexts read",
+    );
+  }
   return {
     client_id: generateClientNodeId(),
     op: "message_delete",

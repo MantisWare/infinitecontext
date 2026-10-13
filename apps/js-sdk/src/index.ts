@@ -54,6 +54,8 @@ export type GetContextResponse<T = unknown> = {
     version: number;
     metadata?: Record<string, unknown>;
     versions?: Version[];
+    /** Sync log sequence at read time; pass as base_sequence on PATCH/DELETE when session sync is enabled. */
+    sync_base_sequence?: number;
 };
 
 export type ListContextsInput = {
@@ -77,6 +79,8 @@ export type ListContextsResponse = {
 
 export type MutationOptions = {
     metadata?: Record<string, unknown>;
+    /** Last-seen sync sequence (from GET context or pull cursor). Required for session-sync message delete. */
+    base_sequence?: number;
 };
 
 export type UpdateMessageInput =
@@ -87,6 +91,7 @@ export type UpdateInput = UpdateMessageInput | UpdateMessageInput[];
 export type UpdateResponse<T = unknown> = {
     data: Array<{ id: string; index: number; metadata: Record<string, unknown> } & T>;
     version: number;
+    sync_base_sequence?: number;
 };
 
 export type DeleteInput = (string | number) | (string | number)[];
@@ -97,6 +102,7 @@ export type DeletePermanentInput = { permanent: true; metadata?: Record<string, 
 export type DeleteResponse<T = unknown> = {
     data: Array<{ id: string; index: number; metadata: Record<string, unknown> } & T>;
     version: number;
+    sync_base_sequence?: number;
 };
 
 export type PermanentDeleteResponse = {
@@ -123,6 +129,11 @@ export {
     MissingClientConfigError,
     resolveBaseUrlFromConfig,
 } from './base-url';
+
+function mutationBaseHeaders(options?: MutationOptions): Record<string, string> | undefined {
+    if (options?.base_sequence === undefined) return undefined;
+    return { 'X-IC-Base-Sequence': String(options.base_sequence) };
+}
 
 export class InfiniteContextHttpError extends Error {
     readonly status: number;
@@ -209,13 +220,18 @@ export class InfiniteContext {
     }
 
     async update<T = unknown>(contextId: string, input: UpdateInput, options?: MutationOptions): Promise<UpdateResponse<T>> {
-        const body = options?.metadata
-            ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
-            : input;
+        let body: Record<string, unknown> =
+            options?.metadata !== undefined
+                ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
+                : (input as Record<string, unknown>);
+        if (options?.base_sequence !== undefined) {
+            body = { ...body, base_sequence: options.base_sequence };
+        }
 
         return this.request<UpdateResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'PATCH',
             body,
+            headers: mutationBaseHeaders(options),
         });
     }
 
@@ -240,9 +256,16 @@ export class InfiniteContext {
             });
         }
 
+        const body: Record<string, unknown> = {
+            ids: input as DeleteInput,
+            metadata: options?.metadata,
+        };
+        if (options?.base_sequence !== undefined) body.base_sequence = options.base_sequence;
+
         return this.request<DeleteResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'DELETE',
-            body: { ids: input as DeleteInput, metadata: options?.metadata },
+            body,
+            headers: mutationBaseHeaders(options),
         });
     }
 

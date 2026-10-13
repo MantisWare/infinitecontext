@@ -362,7 +362,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           metadata,
         };
       });
-      const body =
+      let body =
         input?.updates || (options?.metadata ?? input?.metadata)
           ? {
               updates: encrypted,
@@ -380,7 +380,10 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           : encrypted.length === 1
             ? encrypted[0]
             : encrypted;
-      const res = await client.update(contextId, body, options?.metadata ? undefined : options);
+      if (options?.base_sequence !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
+        body = { ...body, base_sequence: options.base_sequence };
+      }
+      const res = await client.update(contextId, body, options);
       return mapGetResponse(res, contextId);
     },
 

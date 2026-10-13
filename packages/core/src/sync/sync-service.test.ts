@@ -79,6 +79,30 @@ class MemorySyncRepository implements SyncRepository {
     }
 
     async touchSessionSync() {}
+
+    async hasMessageClientMutationSince(
+        _userId: number,
+        contextId: string,
+        sinceSequence: number,
+        clientNodeIds: string[],
+    ) {
+        const targets = new Set(clientNodeIds);
+        if (targets.size === 0) return false;
+        for (const change of this.changes) {
+            if (change.context_id !== contextId) continue;
+            if (change.sequence <= sinceSequence) continue;
+            if (change.op !== 'message_update' && change.op !== 'message_delete') continue;
+            const payload = change.payload ?? {};
+            for (const key of ['affected_client_ids', 'deleted_client_ids'] as const) {
+                const list = payload[key];
+                if (!Array.isArray(list)) continue;
+                for (const id of list) {
+                    if (typeof id === 'string' && targets.has(id)) return true;
+                }
+            }
+        }
+        return false;
+    }
 }
 
 describe('SyncService', () => {

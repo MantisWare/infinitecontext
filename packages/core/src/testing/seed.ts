@@ -55,11 +55,25 @@ export async function seedContext(
     const messageIds: string[] = [];
     const messages = opts.messages ?? [];
     if (messages.length > 0) {
-        const nodeInputs = messages.map((m) => ({
-            type: 'message',
-            content: m as Record<string, unknown>,
-            metadata: {},
-        }));
+        let seedSeq = 0;
+        const nodeInputs = messages.map((m) => {
+            seedSeq += 1;
+            const content = m as Record<string, unknown>;
+            const existingMeta =
+                content.metadata && typeof content.metadata === 'object' && !Array.isArray(content.metadata)
+                    ? (content.metadata as Record<string, unknown>)
+                    : {};
+            const icClient =
+                typeof existingMeta.ic_client_node_id === 'string'
+                    ? existingMeta.ic_client_node_id
+                    : `icn_${seedSeq.toString(16).padStart(24, '0').slice(-24)}`;
+            const { metadata: _drop, ...contentOnly } = content;
+            return {
+                type: 'message',
+                content: contentOnly,
+                metadata: { ...existingMeta, ic_client_node_id: icClient },
+            };
+        });
         const insertRecords = buildNodeInsertRecords(nodeInputs, projectId, headId, null);
         await storage.insertNodes(insertRecords);
         messageIds.push(...insertRecords.map((r) => r.public_id));
