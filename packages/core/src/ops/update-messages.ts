@@ -1,6 +1,7 @@
 // =============================================================================
 // UPDATE MESSAGES — patch messages in a context, creating a new version head
 // Ported from PATCH /contexts/:id in apps/api routes. Copy-on-write semantics.
+// Concurrency: READ COMMITTED transaction + FOR UPDATE on the root context row (not SSI).
 // =============================================================================
 
 import type { StorageAdapter } from '../storage';
@@ -39,7 +40,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 type UpdateSuccess = { data: MessageView[]; version: number; affected_client_ids: string[] };
 type UpdateOutcome =
     | UpdateSuccess
-    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict'; message: string };
+    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict' | 'unavailable'; message: string };
 
 async function updateMessagesOnce(
     storage: StorageAdapter,
@@ -197,10 +198,7 @@ export async function updateMessages(
 
     for (let attempt = 0; attempt < UPDATE_RETRY_ATTEMPTS; attempt += 1) {
         try {
-            const outcome = await storage.transaction<UpdateOutcome>(
-                async (tx) => runInTx(tx),
-                { isolationLevel: 'serializable' },
-            );
+            const outcome = await storage.transaction<UpdateOutcome>(async (tx) => runInTx(tx));
             if ('code' in outcome) return err(outcome.code, outcome.message);
             return ok(outcome);
         } catch (error) {
@@ -212,5 +210,5 @@ export async function updateMessages(
         }
     }
 
-    return err('conflict', 'Concurrent update retries exhausted; retry the request');
+    return err('conflict', 'concurrent_update_exhausted');
 }

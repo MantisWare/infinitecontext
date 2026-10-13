@@ -26,7 +26,7 @@ import {
     validateVaultPrunePlaintextVersions,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
-import { generateSyncConflictPublicId, type SyncRepository } from '@infinitecontext/core/sync';
+import { generateSyncConflictPublicId, SyncChangeLogClientIdConflict, type SyncRepository } from '@infinitecontext/core/sync';
 
 import {
     recordContextCreateChange,
@@ -37,13 +37,32 @@ import {
 import { parseBaseSequence } from '../sync/parse-base-sequence';
 import { assertRestMessageDeleteNotStale, resolveDeleteTargetClientIds } from '../sync/rest-message-delete';
 import { asTransactionalSyncRepository } from '../sync/transactional-sync';
-import { runStorageTransactionWithRetry } from '../sync/retry-storage-transaction';
+import { jsonError, RETRY_AFTER_CONFLICT, RETRY_AFTER_UNAVAILABLE } from '../sync/http-errors';
+import {
+    ConcurrentStorageTransactionExhausted,
+    runStorageTransactionWithRetry,
+} from '../sync/retry-storage-transaction';
 import type { HttpApp } from '../types/http';
 import { generateClientNodeId } from '@infinitecontext/crypto';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
 
 const status = (code: ErrorCode) => resultStatus(code) as ContentfulStatusCode;
+
+function mapCoreError(c: Parameters<typeof jsonError>[0], result: { code: ErrorCode; message: string }) {
+    if (result.message === 'concurrent_update_exhausted' || result.message === 'concurrent_delete_exhausted') {
+        return jsonError(
+            c,
+            409,
+            {
+                error: 'Concurrent write retries exhausted',
+                code: result.message,
+            },
+            { 'Retry-After': RETRY_AFTER_CONFLICT },
+        );
+    }
+    return c.json({ error: result.message, code: result.code }, status(result.code));
+}
 
 // -- routes -------------------------------------------------------------------
 
@@ -266,56 +285,79 @@ export function registerContextRoutes(
         const patchClientId = generateClientNodeId();
 
         if (syncMeta && txSyncRepo) {
-            const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
-                if (parsedBase.status === 'ok') {
-                    const head = await txCtx.getHeadSequence(syncMeta.userId);
-                    if (parsedBase.value > head) {
-                        return { kind: 'invalid_base' as const };
+            try {
+                const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
+                    if (parsedBase.status === 'ok') {
+                        const head = await txCtx.getHeadSequence(syncMeta.userId);
+                        if (parsedBase.value > head) {
+                            return { kind: 'invalid_base' as const };
+                        }
+                    }
+                    const updateResult = await updateMessages(txCtx.storage, projectId, contextPublicId, body, {
+                        inTransaction: true,
+                    });
+                    if (!updateResult.ok) {
+                        return { kind: 'update_error' as const, updateResult };
+                    }
+                    await txCtx.appendChange({
+                        userId: syncMeta.userId,
+                        op: 'message_update',
+                        contextId: contextPublicId,
+                        clientId: patchClientId,
+                        payload: {
+                            context_id: contextPublicId,
+                            version: updateResult.data.version,
+                            data: updateResult.data.data,
+                            affected_client_ids: updateResult.data.affected_client_ids,
+                        },
+                        deviceId: syncMeta.deviceId ?? null,
+                    });
+                    const syncHead = await txCtx.getHeadSequence(syncMeta.userId);
+                    return { kind: 'ok' as const, updateResult, syncHead };
+                });
+                if (atomic.kind === 'invalid_base') {
+                    return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
+                }
+                if (atomic.kind === 'update_error') {
+                    return mapCoreError(c, atomic.updateResult);
+                }
+                return c.json({
+                    ...atomic.updateResult.data,
+                    sync_base_sequence: atomic.syncHead,
+                });
+            } catch (error) {
+                if (error instanceof SyncChangeLogClientIdConflict && syncRepo) {
+                    const existing = await syncRepo.findChangeByClientId(syncMeta.userId, patchClientId);
+                    if (existing) {
+                        const payload = existing.payload as Record<string, unknown>;
+                        return c.json({
+                            data: payload.data,
+                            version: payload.version,
+                            affected_client_ids: payload.affected_client_ids,
+                            sync_base_sequence: existing.sequence,
+                        });
                     }
                 }
-                const updateResult = await updateMessages(txCtx.storage, projectId, contextPublicId, body, {
-                    inTransaction: true,
-                });
-                if (!updateResult.ok) {
-                    return { kind: 'update_error' as const, updateResult };
+                if (error instanceof ConcurrentStorageTransactionExhausted) {
+                    return jsonError(
+                        c,
+                        503,
+                        { error: error.message, code: 'concurrent_storage_exhausted' },
+                        { 'Retry-After': RETRY_AFTER_UNAVAILABLE },
+                    );
                 }
-                await txCtx.appendChange({
-                    userId: syncMeta.userId,
-                    op: 'message_update',
-                    contextId: contextPublicId,
-                    clientId: patchClientId,
-                    payload: {
-                        context_id: contextPublicId,
-                        version: updateResult.data.version,
-                        data: updateResult.data.data,
-                        affected_client_ids: updateResult.data.affected_client_ids,
-                    },
-                    deviceId: syncMeta.deviceId ?? null,
-                });
-                const syncHead = await txCtx.getHeadSequence(syncMeta.userId);
-                return { kind: 'ok' as const, updateResult, syncHead };
-            });
-            if (atomic.kind === 'invalid_base') {
-                return c.json({ error: 'Invalid base_sequence' }, 400);
+                throw error;
             }
-            if (atomic.kind === 'update_error') {
-                const updateResult = atomic.updateResult;
-                return c.json({ error: updateResult.message }, status(updateResult.code));
-            }
-            return c.json({
-                ...atomic.updateResult.data,
-                sync_base_sequence: atomic.syncHead,
-            });
         }
 
         if (syncMeta && syncRepo && parsedBase.status === 'ok') {
             const head = await syncRepo.getHeadSequence(syncMeta.userId);
             if (parsedBase.value > head) {
-                return c.json({ error: 'Invalid base_sequence' }, 400);
+                return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
             }
         }
         const result = await updateMessages(storage, projectId, contextPublicId, body);
-        if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        if (!result.ok) return mapCoreError(c, result);
         if (syncMeta) {
             await recordGenericSyncChange(syncRepo, syncMeta, {
                 op: 'message_update',
@@ -428,7 +470,8 @@ export function registerContextRoutes(
 
         if (syncMeta && txSyncRepo && parsedBase.status === 'ok') {
             const baseSequence = parsedBase.value;
-            const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
+            try {
+                const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
                 const headBeforeStale = await txCtx.getHeadSequence(syncMeta.userId);
                 if (baseSequence > headBeforeStale) {
                     return { kind: 'invalid_base' as const };
@@ -489,32 +532,47 @@ export function registerContextRoutes(
                 });
                 const syncHead = await txCtx.getHeadSequence(syncMeta.userId);
                 return { kind: 'ok' as const, deleteResult, syncHead };
-            });
-
-            if (atomic.kind === 'invalid_base') {
-                return c.json({ error: 'Invalid base_sequence' }, 400);
+                });
+                if (atomic.kind === 'invalid_base') {
+                    return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
+                }
+                if (atomic.kind === 'target_error') {
+                    return c.json(
+                        { error: atomic.targets.message, code: atomic.targets.code },
+                        status(atomic.targets.code),
+                    );
+                }
+                if (atomic.kind === 'stale') {
+                    return jsonError(
+                        c,
+                        409,
+                        {
+                            error: 'Delete rejected: target message changed since base_sequence',
+                            code: 'delete_stale_base',
+                            conflict: 'delete_stale_base',
+                            base_sequence: atomic.baseSequence,
+                        },
+                        { 'Retry-After': RETRY_AFTER_CONFLICT },
+                    );
+                }
+                if (atomic.kind === 'delete_error') {
+                    return mapCoreError(c, atomic.deleteResult);
+                }
+                return c.json({
+                    ...atomic.deleteResult.data,
+                    sync_base_sequence: atomic.syncHead,
+                });
+            } catch (error) {
+                if (error instanceof ConcurrentStorageTransactionExhausted) {
+                    return jsonError(
+                        c,
+                        503,
+                        { error: error.message, code: 'concurrent_storage_exhausted' },
+                        { 'Retry-After': RETRY_AFTER_UNAVAILABLE },
+                    );
+                }
+                throw error;
             }
-            if (atomic.kind === 'target_error') {
-                return c.json({ error: atomic.targets.message }, status(atomic.targets.code));
-            }
-            if (atomic.kind === 'stale') {
-                return c.json(
-                    {
-                        error: 'Delete rejected: target message changed since base_sequence',
-                        conflict: 'delete_stale_base',
-                        base_sequence: atomic.baseSequence,
-                    },
-                    409,
-                );
-            }
-            if (atomic.kind === 'delete_error') {
-                const deleteResult = atomic.deleteResult;
-                return c.json({ error: deleteResult.message }, status(deleteResult.code));
-            }
-            return c.json({
-                ...atomic.deleteResult.data,
-                sync_base_sequence: atomic.syncHead,
-            });
         }
 
         if (syncMeta && syncRepo && parsedBase.status === 'ok') {
@@ -544,13 +602,16 @@ export function registerContextRoutes(
                     leftPayload: { base_sequence: baseSequence, server_sequence: head, op: 'message_delete' },
                     rightPayload: { delete_targets: targets.data },
                 });
-                return c.json(
+                return jsonError(
+                    c,
+                    409,
                     {
                         error: 'Delete rejected: target message changed since base_sequence',
+                        code: 'delete_stale_base',
                         conflict: 'delete_stale_base',
                         base_sequence: baseSequence,
                     },
-                    409,
+                    { 'Retry-After': RETRY_AFTER_CONFLICT },
                 );
             }
         }
@@ -559,7 +620,7 @@ export function registerContextRoutes(
             ids: idList,
             userMetadata: userMetadata as Record<string, unknown> | undefined,
         });
-        if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        if (!result.ok) return mapCoreError(c, result);
         if (syncMeta) {
             await recordGenericSyncChange(syncRepo, syncMeta, {
                 op: 'message_delete',

@@ -15,6 +15,7 @@ export type {
     SyncStorageTransactionContext,
     TransactionalSyncRepository,
 } from './repository';
+export { SyncChangeLogClientIdConflict } from './change-log-conflict';
 export { SyncService, SyncValidationError, SyncApplyError } from './sync-service';
 export type { SyncApplyContext } from './sync-service';
 export { generateSyncConflictPublicId } from './public-ids';

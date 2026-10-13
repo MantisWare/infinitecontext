@@ -47,7 +47,7 @@ async function rollbackHead(storage: StorageAdapter, projectId: number, headId: 
 type DeleteSuccess = { data: MessageView[]; version: number; deleted_client_ids: string[] };
 type DeleteOutcome =
     | DeleteSuccess
-    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict'; message: string };
+    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict' | 'unavailable'; message: string };
 
 async function deleteMessagesOnce(
     storage: StorageAdapter,
@@ -171,9 +171,7 @@ export async function deleteMessages(
 
     for (let attempt = 0; attempt < UPDATE_RETRY_ATTEMPTS; attempt += 1) {
         try {
-            const outcome = await storage.transaction<DeleteOutcome>(async (tx) => runInTx(tx), {
-                isolationLevel: 'serializable',
-            });
+            const outcome = await storage.transaction<DeleteOutcome>(async (tx) => runInTx(tx));
             if ('code' in outcome) return err(outcome.code, outcome.message);
             return ok(outcome);
         } catch (error) {
@@ -185,5 +183,5 @@ export async function deleteMessages(
         }
     }
 
-    return err('conflict', 'Concurrent delete retries exhausted; retry the request');
+    return err('conflict', 'concurrent_delete_exhausted');
 }

@@ -3,7 +3,11 @@ import type { SyncStorageTransactionContext, TransactionalSyncRepository } from 
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Bounded retries for Postgres serialization failures; each attempt is one rolled-back or committed tx. */
+export class ConcurrentStorageTransactionExhausted extends Error {
+    override name = 'ConcurrentStorageTransactionExhausted';
+}
+
+/** Bounded retries for storage transaction conflicts; each attempt is one rolled-back or committed tx. */
 export async function runStorageTransactionWithRetry<T>(
     txRepo: TransactionalSyncRepository,
     fn: (ctx: SyncStorageTransactionContext) => Promise<T>,
@@ -20,5 +24,7 @@ export async function runStorageTransactionWithRetry<T>(
             await sleep(5 * (attempt + 1));
         }
     }
-    throw lastError instanceof Error ? lastError : new Error('Concurrent storage transaction retries exhausted');
+    throw new ConcurrentStorageTransactionExhausted(
+        lastError instanceof Error ? lastError.message : 'Concurrent storage transaction retries exhausted',
+    );
 }

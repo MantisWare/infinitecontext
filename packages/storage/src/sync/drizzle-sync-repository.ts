@@ -1,5 +1,6 @@
 import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm';
 
+import { SyncChangeLogClientIdConflict } from '@infinitecontext/core/sync';
 import type {
     SyncRepository,
     SyncAppendChangeInput,
@@ -77,14 +78,8 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
     }
 
     private async appendChangeOnDb(txDb: ApiDb, input: SyncAppendChangeInput): Promise<number> {
-        const existing = await txDb
-            .select({ sequence: sync_change_log.sequence })
-            .from(sync_change_log)
-            .where(and(eq(sync_change_log.user_id, input.userId), eq(sync_change_log.client_id, input.clientId)))
-            .limit(1);
-        if (existing[0]) {
-            return Number(existing[0].sequence);
-        }
+        const clientId = input.clientId?.trim() ?? '';
+        const hasIdempotencyKey = clientId.length > 0;
 
         await txDb
             .insert(sync_user_state)
@@ -102,12 +97,33 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
             throw new Error('Failed to allocate sync sequence');
         }
 
+        if (hasIdempotencyKey) {
+            const inserted = await txDb
+                .insert(sync_change_log)
+                .values({
+                    user_id: input.userId,
+                    sequence,
+                    op: input.op,
+                    context_id: input.contextId,
+                    client_id: clientId,
+                    payload: input.payload,
+                    device_id: input.deviceId ?? null,
+                })
+                .onConflictDoNothing({ target: [sync_change_log.user_id, sync_change_log.client_id] })
+                .returning({ sequence: sync_change_log.sequence });
+
+            if (inserted.length === 0) {
+                throw new SyncChangeLogClientIdConflict(input.userId, clientId);
+            }
+            return Number(inserted[0]!.sequence);
+        }
+
         await txDb.insert(sync_change_log).values({
             user_id: input.userId,
             sequence,
             op: input.op,
             context_id: input.contextId,
-            client_id: input.clientId,
+            client_id: clientId,
             payload: input.payload,
             device_id: input.deviceId ?? null,
         });

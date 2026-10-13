@@ -4,7 +4,7 @@
 
 // -- error codes (mapped to HTTP status by callers) ---------------------------
 
-export type ErrorCode = 'not_found' | 'invalid_input' | 'internal' | 'conflict';
+export type ErrorCode = 'not_found' | 'invalid_input' | 'internal' | 'conflict' | 'unavailable';
 
 // -- result union -------------------------------------------------------------
 
@@ -28,5 +28,7 @@ export function resultStatus(code: ErrorCode): number {
             return 500;
         case 'conflict':
             return 409;
+        case 'unavailable':
+            return 503;
     }
 }

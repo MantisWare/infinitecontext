@@ -10,6 +10,7 @@ import type { StorageAdapter } from '../storage';
 import { loadOrderedContextMessages, resolveSelectorsToClientNodeIds } from '../message-sync-targets';
 import { hasMessageClientMutationSince as repoHasMessageClientMutationSince } from './delete-stale';
 import { isBaseSequenceAboveHead, parseStrictBaseSequence } from './base-sequence';
+import { SyncChangeLogClientIdConflict } from './change-log-conflict';
 import { generateSyncConflictPublicId } from './public-ids';
 import type { SyncRepository, TransactionalSyncRepository } from './repository';
 import {
@@ -269,6 +270,17 @@ export class SyncService {
                 });
             } catch (error) {
                 if (error instanceof SyncTransientError) {
+                    await sleep(5 * (attempt + 1));
+                    continue;
+                }
+                if (error instanceof SyncChangeLogClientIdConflict) {
+                    const existing = await this.syncRepo.findChangeByClientId(ctx.userId, parsed.client_id);
+                    if (existing) {
+                        return {
+                            head: existing.sequence,
+                            duplicate: true,
+                        };
+                    }
                     await sleep(5 * (attempt + 1));
                     continue;
                 }

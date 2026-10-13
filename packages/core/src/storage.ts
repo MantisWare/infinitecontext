@@ -92,7 +92,6 @@ export interface StorageAdapter {
 }
 
 export type TransactionOptions = {
-    // 'serializable' turns on Postgres SSI — concurrent conflicting txs get
-    // a 40001 error, letting client retry. Required for append-vs-permanent-delete safety.
-    isolationLevel?: 'serializable';
+    /** Optional Postgres isolation override (default: READ COMMITTED). Copy-on-write ops rely on FOR UPDATE root locks. */
+    isolationLevel?: 'read committed' | 'serializable';
 };
