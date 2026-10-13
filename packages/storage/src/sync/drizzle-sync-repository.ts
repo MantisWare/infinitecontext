@@ -77,6 +77,15 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
     }
 
     private async appendChangeOnDb(txDb: ApiDb, input: SyncAppendChangeInput): Promise<number> {
+        const existing = await txDb
+            .select({ sequence: sync_change_log.sequence })
+            .from(sync_change_log)
+            .where(and(eq(sync_change_log.user_id, input.userId), eq(sync_change_log.client_id, input.clientId)))
+            .limit(1);
+        if (existing[0]) {
+            return Number(existing[0].sequence);
+        }
+
         await txDb
             .insert(sync_user_state)
             .values({ user_id: input.userId, head_sequence: 0 })

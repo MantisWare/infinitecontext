@@ -37,6 +37,7 @@ import {
 import { parseBaseSequence } from '../sync/parse-base-sequence';
 import { assertRestMessageDeleteNotStale, resolveDeleteTargetClientIds } from '../sync/rest-message-delete';
 import { asTransactionalSyncRepository } from '../sync/transactional-sync';
+import { runStorageTransactionWithRetry } from '../sync/retry-storage-transaction';
 import type { HttpApp } from '../types/http';
 import { generateClientNodeId } from '@infinitecontext/crypto';
 
@@ -265,7 +266,7 @@ export function registerContextRoutes(
         const patchClientId = generateClientNodeId();
 
         if (syncMeta && txSyncRepo) {
-            const atomic = await txSyncRepo.runStorageTransaction(async (txCtx) => {
+            const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
                 if (parsedBase.status === 'ok') {
                     const head = await txCtx.getHeadSequence(syncMeta.userId);
                     if (parsedBase.value > head) {
@@ -427,7 +428,7 @@ export function registerContextRoutes(
 
         if (syncMeta && txSyncRepo && parsedBase.status === 'ok') {
             const baseSequence = parsedBase.value;
-            const atomic = await txSyncRepo.runStorageTransaction(async (txCtx) => {
+            const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
                 const headBeforeStale = await txCtx.getHeadSequence(syncMeta.userId);
                 if (baseSequence > headBeforeStale) {
                     return { kind: 'invalid_base' as const };

@@ -1,4 +1,4 @@
-import { describe, it, before } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -25,23 +25,12 @@ function dropFreshDatabase(dbName: string) {
     );
 }
 
-let postgresReady = false;
-
-before(() => {
-    postgresReady = Boolean(process.env.POSTGRES_PASSWORD);
-    if (!postgresReady) {
-        console.warn(
-            'migration-fresh skipped: set POSTGRES_PASSWORD (database owner) to run init+migration chain tests.',
-        );
-    }
-});
-
 describe('postgres migration chain (fresh DB)', () => {
-    it('applies init + all migrations including 008 backfill (up/down/up)', (t) => {
-        if (!postgresReady) {
-            t.skip('POSTGRES_PASSWORD is required — run migrations as the database owner (pgcrypto CREATE)');
-            return;
-        }
+    it('applies init + all migrations including 008 backfill (up/down/up)', () => {
+        assert.ok(
+            process.env.POSTGRES_PASSWORD,
+            'POSTGRES_PASSWORD is required — run migrations as the database owner (pgcrypto CREATE)',
+        );
 
         const dbName = `ic_migrate_fresh_${Date.now()}`;
         try {
