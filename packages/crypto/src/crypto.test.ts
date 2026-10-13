@@ -75,7 +75,8 @@ describe('recovery key codec', () => {
         const raw = randomBytes(32);
         const display = encodeRecoveryKey(raw);
         const chars = display.replace(/-/g, '').split('');
-        chars[chars.length - 1] = chars[chars.length - 1] === '0' ? '1' : '0';
+        const i = 10;
+        chars[i] = chars[i] === 'A' ? 'B' : 'A';
         const tampered = chars.join('');
         assert.throws(() => decodeRecoveryKey(tampered));
     });
