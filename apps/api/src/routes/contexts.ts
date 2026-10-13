@@ -26,7 +26,7 @@ import {
     validateVaultPrunePlaintextVersions,
     type VaultEncryptionDeps,
 } from '../middleware/vault-encryption';
-import { generateSyncConflictPublicId, type SyncRepository } from '@infinitecontext/core/sync';
+import { generateSyncConflictPublicId, SyncChangeLogClientIdConflict, type SyncRepository } from '@infinitecontext/core/sync';
 
 import {
     recordContextCreateChange,
@@ -36,12 +36,33 @@ import {
 } from '../sync/context-sync-hooks';
 import { parseBaseSequence } from '../sync/parse-base-sequence';
 import { assertRestMessageDeleteNotStale, resolveDeleteTargetClientIds } from '../sync/rest-message-delete';
+import { asTransactionalSyncRepository } from '../sync/transactional-sync';
+import { jsonError, RETRY_AFTER_CONFLICT, RETRY_AFTER_UNAVAILABLE } from '../sync/http-errors';
+import {
+    ConcurrentStorageTransactionExhausted,
+    runStorageTransactionWithRetry,
+} from '../sync/retry-storage-transaction';
 import type { HttpApp } from '../types/http';
 import { generateClientNodeId } from '@infinitecontext/crypto';
 
 // -- error status (core code -> Hono-typed HTTP status) -----------------------
 
 const status = (code: ErrorCode) => resultStatus(code) as ContentfulStatusCode;
+
+function mapCoreError(c: Parameters<typeof jsonError>[0], result: { code: ErrorCode; message: string }) {
+    if (result.message === 'concurrent_update_exhausted' || result.message === 'concurrent_delete_exhausted') {
+        return jsonError(
+            c,
+            409,
+            {
+                error: 'Concurrent write retries exhausted',
+                code: result.message,
+            },
+            { 'Retry-After': RETRY_AFTER_CONFLICT },
+        );
+    }
+    return c.json({ error: result.message, code: result.code }, status(result.code));
+}
 
 // -- routes -------------------------------------------------------------------
 
@@ -203,7 +224,24 @@ export function registerContextRoutes(
             history: c.req.query('history') === 'true',
         };
 
-        const result = await getContext(storage, projectId, contextPublicId, opts);
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        const txSyncRepo = asTransactionalSyncRepository(syncRepo);
+        let result: Awaited<ReturnType<typeof getContext>>;
+        let syncHead: number | undefined;
+        if (syncMeta && txSyncRepo) {
+            const snapshot = await txSyncRepo.runStorageTransaction(async (txCtx) => {
+                const ctxResult = await getContext(txCtx.storage, projectId, contextPublicId, opts);
+                const head = await txCtx.getHeadSequence(syncMeta.userId);
+                return { ctxResult, head };
+            });
+            result = snapshot.ctxResult;
+            syncHead = snapshot.head;
+        } else {
+            result = await getContext(storage, projectId, contextPublicId, opts);
+            if (syncMeta && syncRepo) {
+                syncHead = await syncRepo.getHeadSequence(syncMeta.userId);
+            }
+        }
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
 
         if (vaultDeps) {
@@ -217,10 +255,9 @@ export function registerContextRoutes(
             if (denied) return denied;
         }
 
-        const syncMeta = await syncSessionMeta(c, options?.authRepo);
         const responseBody =
-            syncMeta && syncRepo
-                ? { ...result.data, sync_base_sequence: await syncRepo.getHeadSequence(syncMeta.userId) }
+            syncMeta && syncRepo && syncHead !== undefined
+                ? { ...result.data, sync_base_sequence: syncHead }
                 : result.data;
         return c.json(responseBody);
     });
@@ -243,21 +280,89 @@ export function registerContextRoutes(
         if (parsedBase.status === 'invalid') {
             return c.json({ error: 'Invalid base_sequence' }, 400);
         }
-        const syncMetaPatch = await syncSessionMeta(c, options?.authRepo);
-        if (syncMetaPatch && syncRepo && parsedBase.status === 'ok') {
-            const head = await syncRepo.getHeadSequence(syncMetaPatch.userId);
+        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        const txSyncRepo = asTransactionalSyncRepository(syncRepo);
+        const patchClientId = generateClientNodeId();
+
+        if (syncMeta && txSyncRepo) {
+            try {
+                const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
+                    if (parsedBase.status === 'ok') {
+                        const head = await txCtx.getHeadSequence(syncMeta.userId);
+                        if (parsedBase.value > head) {
+                            return { kind: 'invalid_base' as const };
+                        }
+                    }
+                    const updateResult = await updateMessages(txCtx.storage, projectId, contextPublicId, body, {
+                        inTransaction: true,
+                    });
+                    if (!updateResult.ok) {
+                        return { kind: 'update_error' as const, updateResult };
+                    }
+                    await txCtx.appendChange({
+                        userId: syncMeta.userId,
+                        op: 'message_update',
+                        contextId: contextPublicId,
+                        clientId: patchClientId,
+                        payload: {
+                            context_id: contextPublicId,
+                            version: updateResult.data.version,
+                            data: updateResult.data.data,
+                            affected_client_ids: updateResult.data.affected_client_ids,
+                        },
+                        deviceId: syncMeta.deviceId ?? null,
+                    });
+                    const syncHead = await txCtx.getHeadSequence(syncMeta.userId);
+                    return { kind: 'ok' as const, updateResult, syncHead };
+                });
+                if (atomic.kind === 'invalid_base') {
+                    return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
+                }
+                if (atomic.kind === 'update_error') {
+                    return mapCoreError(c, atomic.updateResult);
+                }
+                return c.json({
+                    ...atomic.updateResult.data,
+                    sync_base_sequence: atomic.syncHead,
+                });
+            } catch (error) {
+                if (error instanceof SyncChangeLogClientIdConflict && syncRepo) {
+                    const existing = await syncRepo.findChangeByClientId(syncMeta.userId, patchClientId);
+                    if (existing) {
+                        const payload = existing.payload as Record<string, unknown>;
+                        return c.json({
+                            data: payload.data,
+                            version: payload.version,
+                            affected_client_ids: payload.affected_client_ids,
+                            sync_base_sequence: existing.sequence,
+                        });
+                    }
+                }
+                if (error instanceof ConcurrentStorageTransactionExhausted) {
+                    return jsonError(
+                        c,
+                        503,
+                        { error: error.message, code: 'concurrent_storage_exhausted' },
+                        { 'Retry-After': RETRY_AFTER_UNAVAILABLE },
+                    );
+                }
+                throw error;
+            }
+        }
+
+        if (syncMeta && syncRepo && parsedBase.status === 'ok') {
+            const head = await syncRepo.getHeadSequence(syncMeta.userId);
             if (parsedBase.value > head) {
-                return c.json({ error: 'Invalid base_sequence' }, 400);
+                return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
             }
         }
         const result = await updateMessages(storage, projectId, contextPublicId, body);
-        if (!result.ok) return c.json({ error: result.message }, status(result.code));
-        const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        if (!result.ok) return mapCoreError(c, result);
         if (syncMeta) {
             await recordGenericSyncChange(syncRepo, syncMeta, {
                 op: 'message_update',
                 contextId: contextPublicId,
-                clientId: generateClientNodeId(),
+                clientId: patchClientId,
                 payload: {
                     context_id: contextPublicId,
                     version: result.data.version,
@@ -345,6 +450,9 @@ export function registerContextRoutes(
         const idList: (string | number)[] = Array.isArray(ids) ? ids : [ids as string | number];
 
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
+        const txSyncRepo = asTransactionalSyncRepository(syncRepo);
+        const deleteClientId = generateClientNodeId();
+
         if (syncMeta && syncRepo) {
             if (parsedBase.status === 'invalid') {
                 return c.json({ error: 'Invalid base_sequence' }, 400);
@@ -358,6 +466,116 @@ export function registerContextRoutes(
                     400,
                 );
             }
+        }
+
+        if (syncMeta && txSyncRepo && parsedBase.status === 'ok') {
+            const baseSequence = parsedBase.value;
+            try {
+                const atomic = await runStorageTransactionWithRetry(txSyncRepo, async (txCtx) => {
+                const headBeforeStale = await txCtx.getHeadSequence(syncMeta.userId);
+                if (baseSequence > headBeforeStale) {
+                    return { kind: 'invalid_base' as const };
+                }
+                const targets = await resolveDeleteTargetClientIds(
+                    txCtx.storage,
+                    projectId,
+                    contextPublicId,
+                    idList,
+                );
+                if (!targets.ok) {
+                    return { kind: 'target_error' as const, targets };
+                }
+                const stale = await txCtx.hasMessageClientMutationSince(
+                    syncMeta.userId,
+                    contextPublicId,
+                    baseSequence,
+                    targets.data,
+                );
+                if (stale) {
+                    const head = await txCtx.getHeadSequence(syncMeta.userId);
+                    await txCtx.insertConflict({
+                        userId: syncMeta.userId,
+                        contextId: contextPublicId,
+                        kind: 'delete_stale_base',
+                        clientId: null,
+                        sequence: head,
+                        publicId: generateSyncConflictPublicId(),
+                        leftPayload: { base_sequence: baseSequence, server_sequence: head, op: 'message_delete' },
+                        rightPayload: { delete_targets: targets.data },
+                    });
+                    return { kind: 'stale' as const, baseSequence };
+                }
+                const deleteResult = await deleteMessages(
+                    txCtx.storage,
+                    projectId,
+                    contextPublicId,
+                    {
+                        ids: idList,
+                        userMetadata: userMetadata as Record<string, unknown> | undefined,
+                    },
+                    { inTransaction: true },
+                );
+                if (!deleteResult.ok) {
+                    return { kind: 'delete_error' as const, deleteResult };
+                }
+                await txCtx.appendChange({
+                    userId: syncMeta.userId,
+                    op: 'message_delete',
+                    contextId: contextPublicId,
+                    clientId: deleteClientId,
+                    payload: {
+                        context_id: contextPublicId,
+                        version: deleteResult.data.version,
+                        deleted_client_ids: deleteResult.data.deleted_client_ids,
+                    },
+                    deviceId: syncMeta.deviceId ?? null,
+                });
+                const syncHead = await txCtx.getHeadSequence(syncMeta.userId);
+                return { kind: 'ok' as const, deleteResult, syncHead };
+                });
+                if (atomic.kind === 'invalid_base') {
+                    return c.json({ error: 'Invalid base_sequence', code: 'invalid_base_sequence' }, 400);
+                }
+                if (atomic.kind === 'target_error') {
+                    return c.json(
+                        { error: atomic.targets.message, code: atomic.targets.code },
+                        status(atomic.targets.code),
+                    );
+                }
+                if (atomic.kind === 'stale') {
+                    return jsonError(
+                        c,
+                        409,
+                        {
+                            error: 'Delete rejected: target message changed since base_sequence',
+                            code: 'delete_stale_base',
+                            conflict: 'delete_stale_base',
+                            base_sequence: atomic.baseSequence,
+                        },
+                        { 'Retry-After': RETRY_AFTER_CONFLICT },
+                    );
+                }
+                if (atomic.kind === 'delete_error') {
+                    return mapCoreError(c, atomic.deleteResult);
+                }
+                return c.json({
+                    ...atomic.deleteResult.data,
+                    sync_base_sequence: atomic.syncHead,
+                });
+            } catch (error) {
+                if (error instanceof ConcurrentStorageTransactionExhausted) {
+                    return jsonError(
+                        c,
+                        503,
+                        { error: error.message, code: 'concurrent_storage_exhausted' },
+                        { 'Retry-After': RETRY_AFTER_UNAVAILABLE },
+                    );
+                }
+                throw error;
+            }
+        }
+
+        if (syncMeta && syncRepo && parsedBase.status === 'ok') {
             const baseSequence = parsedBase.value;
             const headBeforeStale = await syncRepo.getHeadSequence(syncMeta.userId);
             if (baseSequence > headBeforeStale) {
@@ -384,13 +602,16 @@ export function registerContextRoutes(
                     leftPayload: { base_sequence: baseSequence, server_sequence: head, op: 'message_delete' },
                     rightPayload: { delete_targets: targets.data },
                 });
-                return c.json(
+                return jsonError(
+                    c,
+                    409,
                     {
                         error: 'Delete rejected: target message changed since base_sequence',
+                        code: 'delete_stale_base',
                         conflict: 'delete_stale_base',
                         base_sequence: baseSequence,
                     },
-                    409,
+                    { 'Retry-After': RETRY_AFTER_CONFLICT },
                 );
             }
         }
@@ -399,12 +620,12 @@ export function registerContextRoutes(
             ids: idList,
             userMetadata: userMetadata as Record<string, unknown> | undefined,
         });
-        if (!result.ok) return c.json({ error: result.message }, status(result.code));
+        if (!result.ok) return mapCoreError(c, result);
         if (syncMeta) {
             await recordGenericSyncChange(syncRepo, syncMeta, {
                 op: 'message_delete',
                 contextId: contextPublicId,
-                clientId: generateClientNodeId(),
+                clientId: deleteClientId,
                 payload: {
                     context_id: contextPublicId,
                     version: result.data.version,

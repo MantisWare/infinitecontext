@@ -134,6 +134,18 @@ export class DrizzleAdapter implements StorageAdapter {
             .where(and(eq(nodes.project_id, projectId), inArray(nodes.parent_id, parentIds)));
     }
 
+    async lockRootContextForUpdate(projectId: number, rootPublicId: string): Promise<void> {
+        await this.db.execute(sql`
+            SELECT 1
+            FROM ${nodes}
+            WHERE ${nodes.project_id} = ${projectId}
+              AND ${nodes.public_id} = ${rootPublicId}
+              AND ${nodes.type} = 'context'
+              AND ${nodes.context_id} IS NULL
+            FOR UPDATE
+        `);
+    }
+
     async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
         await this.db
             .update(nodes)

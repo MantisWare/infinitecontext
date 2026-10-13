@@ -1,4 +1,5 @@
 import type { StorageAdapter, NodeRow, NodeInsertRow, ApiKeyRow, ProjectRow, ContextFilters } from '../storage';
+import { acquireRootContextLock } from '../root-context-lock';
 
 // -- In-memory storage adapter ------------------------------------------------
 
@@ -9,6 +10,7 @@ export class MemoryStorage implements StorageAdapter {
     private keys: Array<{ id: number; project_id: number; key_prefix: string; key_hash: string }> = [];
     private projectSeq = 0;
     private nodeSeq = 0;
+    private rootLockRelease: (() => void) | null = null;
 
     async findNodesByContextId(contextId: string): Promise<Partial<NodeRow>[]> {
         return this.nodes
@@ -116,6 +118,12 @@ export class MemoryStorage implements StorageAdapter {
         }
     }
 
+    async lockRootContextForUpdate(projectId: number, rootPublicId: string): Promise<void> {
+        const root = await this.findRootContext(projectId, rootPublicId);
+        if (!root) return;
+        this.rootLockRelease = await acquireRootContextLock(projectId, rootPublicId);
+    }
+
     async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
         const node = this.nodes.find(
             (n) => n.project_id === projectId && n.public_id === publicId && n.type === 'context' && n.context_id === null,
@@ -141,7 +149,12 @@ export class MemoryStorage implements StorageAdapter {
     async deleteProject(_id: number) {}
 
     async transaction<T>(fn: (tx: StorageAdapter) => Promise<T>, _options?: unknown): Promise<T> {
-        return fn(this);
+        try {
+            return await fn(this);
+        } finally {
+            this.rootLockRelease?.();
+            this.rootLockRelease = null;
+        }
     }
 
     // test helpers

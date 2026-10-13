@@ -75,6 +75,8 @@ export interface StorageAdapter {
     // batch-clear parent_id for all nodes whose parent_id is any of parentIds (single query)
     clearParentReferencesBulk(projectId: number, parentIds: string[]): Promise<void>;
     updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>): Promise<void>;
+    /** Serialize copy-on-write updates/deletes for one root context (Postgres: FOR UPDATE). */
+    lockRootContextForUpdate(projectId: number, rootPublicId: string): Promise<void>;
 
     // api keys
     findApiKeyByPrefix(prefix: string): Promise<ApiKeyRow | null>;
@@ -90,7 +92,6 @@ export interface StorageAdapter {
 }
 
 export type TransactionOptions = {
-    // 'serializable' turns on Postgres SSI — concurrent conflicting txs get
-    // a 40001 error, letting client retry. Required for append-vs-permanent-delete safety.
-    isolationLevel?: 'serializable';
+    /** Optional Postgres isolation override (default: READ COMMITTED). Copy-on-write ops rely on FOR UPDATE root locks. */
+    isolationLevel?: 'read committed' | 'serializable';
 };

@@ -27,6 +27,7 @@ No single repo-wide formatter config is checked in, so match the local style of 
 - Keep naming consistent with surrounding code: API modules are mostly kebab-case (for example `context-chain.ts`), while TUI React components use PascalCase (for example `DaemonTui.mjs`).
 
 ## Testing Guidelines
+- `pnpm -r test` runs workspace tests serially when you pass `--workspace-concurrency=1`. Several API live suites (`migration-fresh.test.ts`, `sync-postgres-live.test.ts`, `vault-postgres-live.test.ts`) require a reachable Postgres instance and `POSTGRES_PASSWORD` (plus `SYNC_E2E_DATABASE_URL` or `VAULT_E2E_DATABASE_URL` for live REST tests).
 - API tests use Node’s built-in runner: `pnpm --filter infinitecontext-api run test` (or `test:watch`).
 - Python SDK dev tooling is defined in `apps/python-sdk/pyproject.toml` (`pytest`, `pytest-asyncio`, `mypy`).
 - Add tests with `*.test.*` or `*.spec.*` naming near changed code or in a `tests/` folder.

@@ -51,6 +51,7 @@ export { getContextEncryptionState } from './ops/context-encryption-state';
 export type { ContextEncryptionState } from './ops/context-encryption-state';
 
 export { updateMessages } from './ops/update-messages';
+export { UPDATE_RETRY_ATTEMPTS, updateErrorCode } from './ops/update-errors';
 
 export { deleteContextPermanent } from './ops/delete-context';
 export type { DeleteContextParams } from './ops/delete-context';

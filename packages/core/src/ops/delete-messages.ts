@@ -12,6 +12,9 @@ import { isPlainObject } from '../request-parsing';
 import type { MessageView } from '../message-view';
 import type { StorageAdapter } from '../storage';
 import { ok, err, type Result } from '../result';
+import { UPDATE_RETRY_ATTEMPTS, updateErrorCode } from './update-errors';
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // -- params -------------------------------------------------------------------
 
@@ -41,53 +44,54 @@ async function rollbackHead(storage: StorageAdapter, projectId: number, headId: 
 
 // -- op -----------------------------------------------------------------------
 
-export async function deleteMessages(
+type DeleteSuccess = { data: MessageView[]; version: number; deleted_client_ids: string[] };
+type DeleteOutcome =
+    | DeleteSuccess
+    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict' | 'unavailable'; message: string };
+
+async function deleteMessagesOnce(
     storage: StorageAdapter,
     projectId: number,
     contextId: string,
-    params: DeleteMessagesParams
-): Promise<Result<{ data: MessageView[]; version: number; deleted_client_ids: string[] }>> {
+    params: DeleteMessagesParams,
+): Promise<DeleteOutcome> {
     const { ids, userMetadata } = params;
 
-    // userMetadata, when present, must be a plain object
     if (userMetadata !== undefined && !isPlainObject(userMetadata)) {
-        return err('invalid_input', 'metadata must be an object');
+        return { code: 'invalid_input', message: 'metadata must be an object' };
     }
 
-    // ids must be supplied
-    if (ids === undefined || ids === null) return err('invalid_input', 'ids is required');
+    if (ids === undefined || ids === null) return { code: 'invalid_input', message: 'ids is required' };
 
-    // normalize to an array and reject empty input
     const rawIds: Array<string | number> = Array.isArray(ids) ? ids : [ids];
-    if (rawIds.length === 0) return err('invalid_input', 'ids must be a non-empty array');
+    if (rawIds.length === 0) return { code: 'invalid_input', message: 'ids must be a non-empty array' };
 
-    // each element must be a string id or an integer index
     for (const input of rawIds) {
         if (typeof input === 'string') continue;
         if (typeof input !== 'number' || !Number.isInteger(input)) {
-            return err('invalid_input', 'Each id must be a string or integer index');
+            return { code: 'invalid_input', message: 'Each id must be a string or integer index' };
         }
     }
 
-    // resolve the root context, scoped to the project
     const root = await storage.findRootContext(projectId, contextId);
-    if (!root) return err('not_found', 'Context not found');
+    if (!root) return { code: 'not_found', message: 'Context not found' };
 
-    // resolve the current head of the version chain
+    await storage.lockRootContextForUpdate(projectId, root.public_id);
+
     const currentHead = await findHead(storage, root.public_id);
-    if (!currentHead) return err('internal', 'HEAD not found');
+    if (!currentHead) return { code: 'internal', message: 'HEAD not found' };
 
     // load the ordered messages under the current head
     const orderedNodes = await getOrderedNodes(storage, currentHead.public_id);
 
     const deletedResolved = resolveSelectorsToClientNodeIds(orderedNodes, rawIds);
-    if (!deletedResolved.ok) return deletedResolved;
+    if (!deletedResolved.ok) return { code: deletedResolved.code, message: deletedResolved.message };
     const deletedClientIds = deletedResolved.data;
 
     const idsToDelete: string[] = [];
     for (const input of rawIds) {
         const resolved = resolveMessagePublicId(orderedNodes, input);
-        if ('code' in resolved) return err(resolved.code, resolved.message);
+        if ('code' in resolved) return { code: resolved.code, message: resolved.message };
         idsToDelete.push(resolved.publicId);
     }
     const deleteSet = new Set(idsToDelete);
@@ -106,7 +110,7 @@ export async function deleteMessages(
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to create version head';
-        return err('internal', message);
+        return { code: 'internal', message };
     }
 
     // build filtered node copies (copy-on-write of the survivors)
@@ -133,7 +137,7 @@ export async function deleteMessages(
             await storage.insertNodes(newNodes);
         } catch {
             await rollbackHead(storage, projectId, newHeadId);
-            return err('internal', 'Failed to delete messages');
+            return { code: 'internal', message: 'Failed to delete messages' };
         }
     }
 
@@ -147,5 +151,37 @@ export async function deleteMessages(
         metadata: n.metadata,
     }));
 
-    return ok({ data: result, version: currentVersion, deleted_client_ids: deletedClientIds });
+    return { data: result, version: currentVersion, deleted_client_ids: deletedClientIds };
+}
+
+export async function deleteMessages(
+    storage: StorageAdapter,
+    projectId: number,
+    contextId: string,
+    params: DeleteMessagesParams,
+    options?: { inTransaction?: boolean },
+): Promise<Result<DeleteSuccess>> {
+    const runInTx = async (tx: StorageAdapter) => deleteMessagesOnce(tx, projectId, contextId, params);
+
+    if (options?.inTransaction) {
+        const outcome = await runInTx(storage);
+        if ('code' in outcome) return err(outcome.code, outcome.message);
+        return ok(outcome);
+    }
+
+    for (let attempt = 0; attempt < UPDATE_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+            const outcome = await storage.transaction<DeleteOutcome>(async (tx) => runInTx(tx));
+            if ('code' in outcome) return err(outcome.code, outcome.message);
+            return ok(outcome);
+        } catch (error) {
+            if (updateErrorCode(error) === 'conflict') {
+                await sleep(5 * (attempt + 1));
+                continue;
+            }
+            return err('internal', 'Failed to delete messages');
+        }
+    }
+
+    return err('conflict', 'concurrent_delete_exhausted');
 }
