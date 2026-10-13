@@ -29,6 +29,10 @@ jobs:
           node --check apps/js-sdk/lib/storage/contract-suite.mjs
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-keyring.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-file.mjs
+          node --check apps/js-sdk/lib/storage/secret-store.mjs
           node --check apps/js-sdk/lib/storage/index.mjs
 
       - name: Storage adapter contract tests

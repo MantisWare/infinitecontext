@@ -13,6 +13,8 @@ export {
   XC20P_POLY1305_TAG_BYTES,
 } from "./ciphertext.mjs";
 export { encryptVaultPlaintextForStoragePut } from "./encrypt-storage-object.mjs";
+export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
+export { SecretStore, resolveSecretStoreBackend } from "./secret-store.mjs";
 export { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 export {
   AuthExpiredError,
