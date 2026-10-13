@@ -44,5 +44,15 @@ describe('parseBaseSequence', () => {
         assert.deepEqual(parseBaseSequence(mockContext({}) as any, { base_sequence: -1 }), {
             status: 'invalid',
         });
+        assert.deepEqual(parseBaseSequence(mockContext({ 'X-IC-Base-Sequence': '1e30' }) as any, {}), {
+            status: 'invalid',
+        });
+        assert.deepEqual(
+            parseBaseSequence(mockContext({}) as any, { base_sequence: '99999999999999999999' }),
+            { status: 'invalid' },
+        );
+        assert.deepEqual(parseBaseSequence(mockContext({}) as any, { base_sequence: 1e30 }), {
+            status: 'invalid',
+        });
     });
 });

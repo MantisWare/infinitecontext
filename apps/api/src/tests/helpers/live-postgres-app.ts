@@ -9,7 +9,7 @@ export const TEST_AUTH_CONFIG = {
     jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes-long',
     jwtIssuer: 'http://127.0.0.1:8787',
     jwtAudience: 'infinitecontext-api',
-    accessTokenTtlSec: 900,
+    accessTokenTtlSec: 86_400,
     refreshTokenTtlSec: 60 * 60 * 24 * 7,
     publicBaseUrl: 'http://127.0.0.1:8787',
 };

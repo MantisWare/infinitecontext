@@ -9,6 +9,7 @@ import { updateContextMetadataLww } from '../ops/update-context-metadata';
 import type { StorageAdapter } from '../storage';
 import { loadOrderedContextMessages, resolveSelectorsToClientNodeIds } from '../message-sync-targets';
 import { hasMessageClientMutationSince as repoHasMessageClientMutationSince } from './delete-stale';
+import { isBaseSequenceAboveHead, parseStrictBaseSequence } from './base-sequence';
 import { generateSyncConflictPublicId } from './public-ids';
 import type { SyncRepository, TransactionalSyncRepository } from './repository';
 import {
@@ -65,18 +66,20 @@ function validateMutation(raw: unknown): SyncMutation | { error: string } {
     if (!isPlainObject(payload)) return { error: 'payload must be an object' };
     const contextId = raw.context_id === undefined ? undefined : String(raw.context_id);
     const updatedAt = raw.updated_at === undefined ? undefined : String(raw.updated_at);
-    const baseSequence =
+    const baseRaw =
         raw.base_sequence === undefined
-            ? payload.base_sequence !== undefined
-                ? Number(payload.base_sequence)
-                : undefined
-            : Number(raw.base_sequence);
+            ? payload.base_sequence
+            : raw.base_sequence;
+    const parsedBase = baseRaw === undefined ? undefined : parseStrictBaseSequence(baseRaw);
+    if (baseRaw !== undefined && parsedBase === null) {
+        return { error: 'Invalid base_sequence' };
+    }
     return {
         client_id: clientId,
         op,
         context_id: contextId,
         updated_at: updatedAt,
-        base_sequence: Number.isFinite(baseSequence) ? baseSequence : undefined,
+        base_sequence: parsedBase ?? undefined,
         payload,
     };
 }
@@ -571,12 +574,25 @@ export class SyncService {
             const deleteParams = mutation.payload as { ids?: unknown; base_sequence?: number };
             const rawIds = deleteParams.ids;
             const idList = Array.isArray(rawIds) ? rawIds : rawIds === undefined ? [] : [rawIds];
-            const baseSeq = mutation.base_sequence ?? deleteParams.base_sequence;
-            if (typeof baseSeq !== 'number' || !Number.isFinite(baseSeq)) {
+            const baseSeqRaw = mutation.base_sequence ?? deleteParams.base_sequence;
+            const baseSeq = parseStrictBaseSequence(baseSeqRaw);
+            if (baseSeq === null) {
                 return {
                     kind: 'failed',
                     code: 'invalid_input',
-                    message: 'base_sequence is required for message_delete',
+                    message:
+                        baseSeqRaw === undefined
+                            ? 'base_sequence is required for message_delete'
+                            : 'Invalid base_sequence',
+                    contextId,
+                };
+            }
+            const headSeq = await this.syncRepo.getHeadSequence(ctx.userId);
+            if (isBaseSequenceAboveHead(baseSeq, headSeq)) {
+                return {
+                    kind: 'failed',
+                    code: 'invalid_input',
+                    message: 'Invalid base_sequence',
                     contextId,
                 };
             }

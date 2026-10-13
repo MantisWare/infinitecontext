@@ -1,4 +1,5 @@
 -- Backfill stable ic_client_node_id on plaintext message nodes (matches core deterministicClientNodeIdFromPublicId)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 UPDATE nodes
 SET metadata = jsonb_set(
     COALESCE(metadata, '{}'::jsonb),

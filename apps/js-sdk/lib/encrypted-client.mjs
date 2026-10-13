@@ -226,18 +226,22 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     dekVersion: vaultCtx.dekVersion ?? 1,
     userPublicId: vaultCtx.userPublicId,
     contextId: null,
-    lastSyncBaseSequence: null,
+    contextSyncBaseSequence: new Map(),
   };
   const allowPlaintext = migrationMode;
 
-  function captureSyncBaseFromRead(res) {
-    if (typeof res?.sync_base_sequence === "number" && Number.isFinite(res.sync_base_sequence)) {
-      ctx.lastSyncBaseSequence = res.sync_base_sequence;
+  function captureSyncBaseFromContextRead(contextId, res) {
+    if (
+      contextId &&
+      typeof res?.sync_base_sequence === "number" &&
+      Number.isFinite(res.sync_base_sequence)
+    ) {
+      ctx.contextSyncBaseSequence.set(contextId, res.sync_base_sequence);
     }
   }
 
   function mapGetResponse(res, contextId) {
-    captureSyncBaseFromRead(res);
+    captureSyncBaseFromContextRead(contextId, res);
     res.data = (res.data ?? []).map((row) => decryptMessageRow(row, ctx, contextId, { allowPlaintext }));
     return res;
   }
@@ -247,11 +251,11 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
     return res;
   }
 
-  function withLastSeenBase(options) {
+  function withLastSeenBase(contextId, options) {
     const base =
       options?.base_sequence !== undefined && options?.base_sequence !== null
         ? options.base_sequence
-        : ctx.lastSyncBaseSequence;
+        : ctx.contextSyncBaseSequence.get(contextId);
     if (base === undefined || base === null) return options;
     return { ...(options ?? {}), base_sequence: base };
   }
@@ -288,7 +292,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
           try {
             encrypted = await encryptAppendBatch(client, contextId, batchInput, ctx);
             const res = await client.append(contextId, encrypted.length === 1 ? encrypted[0] : encrypted);
-            return mapGetResponse(res, contextId);
+            return mapMutationResponse(res, contextId);
           } catch (error) {
             const status = error?.status;
             const code = parseHttpErrorCode(error);
@@ -405,13 +409,13 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       if (options?.base_sequence !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
         body = { ...body, base_sequence: options.base_sequence };
       }
-      const res = await client.update(contextId, body, withLastSeenBase(options));
+      const res = await client.update(contextId, body, withLastSeenBase(contextId, options));
       return mapMutationResponse(res, contextId);
     },
 
     async delete(contextId, input, options) {
       ctx.contextId = contextId;
-      let nextOptions = withLastSeenBase(options);
+      let nextOptions = withLastSeenBase(contextId, options);
       if (nextOptions?.metadata) {
         nextOptions = {
           ...nextOptions,
@@ -435,9 +439,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
       const beforeHead = await withRateLimitRetry(() =>
         client.get(contextId, { history: true, vaultMigrateRead: true }),
       );
-      if (typeof beforeHead?.sync_base_sequence === "number" && Number.isFinite(beforeHead.sync_base_sequence)) {
-        ctx.lastSyncBaseSequence = beforeHead.sync_base_sequence;
-      }
+      captureSyncBaseFromContextRead(contextId, beforeHead);
       const rows = beforeHead?.data ?? [];
       const plaintextRows = rows.filter((row) => !isEncryptedContent(row));
       if (plaintextRows.length === 0) {
@@ -460,7 +462,7 @@ export function wrapInfiniteContextWithVault(client, vaultCtx, { migrationMode =
         );
         return { index: row.index, ...content, metadata };
       });
-      await client.update(contextId, { updates: batchUpdates }, withLastSeenBase({}));
+      await client.update(contextId, { updates: batchUpdates }, withLastSeenBase(contextId, {}));
       if (typeof client.prunePlaintextVersions === "function") {
         await withRateLimitRetry(() => client.prunePlaintextVersions(contextId));
       }

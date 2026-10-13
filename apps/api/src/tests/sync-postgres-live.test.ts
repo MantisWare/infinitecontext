@@ -353,6 +353,14 @@ describe('sync-postgres-live', () => {
             fx.accessA,
         );
         assert.equal(badBase.res.status, 400);
+
+        const aboveHead = await fx.json(
+            'DELETE',
+            `/contexts/${contextId}`,
+            { ids: [0], base_sequence: 9_007_199_254_740_991 },
+            fx.accessA,
+        );
+        assert.equal(aboveHead.res.status, 400);
     });
 
     it('message_delete with stale base_sequence records conflict instead of deleting', async () => {

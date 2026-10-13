@@ -129,4 +129,14 @@ apply_up
 assert_user_crypto_schema
 assert_sync_schema
 
-echo "Migration chain init -> 006 verified (up, down, up) with schema assertions."
+echo "Asserting migration 008 icn backfill (pgcrypto)..."
+"${PSQL[@]}" <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
+    RAISE EXCEPTION 'pgcrypto extension missing after 008';
+  END IF;
+END $$;
+SQL
+
+echo "Migration chain init -> latest verified (up, down, up) with schema assertions."

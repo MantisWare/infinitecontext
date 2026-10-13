@@ -157,8 +157,8 @@ export class InfiniteContext {
     private readonly fetchFn: typeof fetch;
     private readonly headers?: Record<string, string>;
     private readonly timeoutMs?: number;
-    /** Last sync_base_sequence from GET /contexts/:id or append — not updated by PATCH. */
-    private lastSyncBaseSequence: number | null = null;
+    /** Per-context sync base from GET /contexts/:id or noteSyncBaseFromPull — never from append/PATCH/DELETE. */
+    private contextSyncBaseSequence = new Map<string, number>();
 
     constructor(cfg: InfiniteContextConfig) {
         this.baseUrl = resolveBaseUrlFromConfig(cfg);
@@ -181,12 +181,10 @@ export class InfiniteContext {
     }
 
     async append<T = unknown>(contextId: string, input: AppendInput): Promise<AppendResponse<T>> {
-        const res = await this.request<AppendResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
+        return this.request<AppendResponse<T>>(`/contexts/${encodeURIComponent(contextId)}`, {
             method: 'POST',
             body: input,
         });
-        this.captureSyncBaseFromRead(res);
-        return res;
     }
 
     async get(options?: ListContextsInput): Promise<ListContextsResponse>;
@@ -224,8 +222,15 @@ export class InfiniteContext {
                 headers: options?.vaultMigrateRead ? { 'X-IC-Vault-Migrate-Read': '1' } : undefined,
             },
         );
-        this.captureSyncBaseFromRead(res);
+        this.captureSyncBaseFromContextRead(idOrOptions, res);
         return res;
+    }
+
+    /** After applying pull changes for a context, record the head sequence used for stale delete checks. */
+    noteSyncBaseFromPull(contextId: string, sequence: number): void {
+        if (typeof sequence === 'number' && Number.isFinite(sequence) && sequence >= 0 && Number.isSafeInteger(sequence)) {
+            this.contextSyncBaseSequence.set(contextId, sequence);
+        }
     }
 
     async update<T = unknown>(contextId: string, input: UpdateInput, options?: MutationOptions): Promise<UpdateResponse<T>> {
@@ -233,7 +238,7 @@ export class InfiniteContext {
             options?.metadata !== undefined
                 ? { updates: Array.isArray(input) ? input : [input], metadata: options.metadata }
                 : (input as Record<string, unknown>);
-        const baseSequence = options?.base_sequence ?? this.lastSyncBaseSequence ?? undefined;
+        const baseSequence = options?.base_sequence ?? this.contextSyncBaseSequence.get(contextId) ?? undefined;
         if (baseSequence !== undefined) {
             body = { ...body, base_sequence: baseSequence };
         }
@@ -266,7 +271,7 @@ export class InfiniteContext {
             });
         }
 
-        const baseSequence = options?.base_sequence ?? this.lastSyncBaseSequence ?? undefined;
+        const baseSequence = options?.base_sequence ?? this.contextSyncBaseSequence.get(contextId) ?? undefined;
         if (this.usesSessionSync() && baseSequence === undefined) {
             throw new Error(
                 'base_sequence is required for message delete — run sync pull or GET /contexts/:id first, or pass options.base_sequence',
@@ -306,9 +311,9 @@ export class InfiniteContext {
         return Boolean(this.accessToken || this.getAccessTokenFn);
     }
 
-    private captureSyncBaseFromRead(res: { sync_base_sequence?: number }) {
+    private captureSyncBaseFromContextRead(contextId: string, res: { sync_base_sequence?: number }) {
         if (typeof res?.sync_base_sequence === 'number' && Number.isFinite(res.sync_base_sequence)) {
-            this.lastSyncBaseSequence = res.sync_base_sequence;
+            this.contextSyncBaseSequence.set(contextId, res.sync_base_sequence);
         }
     }
 

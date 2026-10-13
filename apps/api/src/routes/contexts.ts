@@ -243,6 +243,13 @@ export function registerContextRoutes(
         if (parsedBase.status === 'invalid') {
             return c.json({ error: 'Invalid base_sequence' }, 400);
         }
+        const syncMetaPatch = await syncSessionMeta(c, options?.authRepo);
+        if (syncMetaPatch && syncRepo && parsedBase.status === 'ok') {
+            const head = await syncRepo.getHeadSequence(syncMetaPatch.userId);
+            if (parsedBase.value > head) {
+                return c.json({ error: 'Invalid base_sequence' }, 400);
+            }
+        }
         const result = await updateMessages(storage, projectId, contextPublicId, body);
         if (!result.ok) return c.json({ error: result.message }, status(result.code));
         const syncMeta = await syncSessionMeta(c, options?.authRepo);
@@ -352,6 +359,10 @@ export function registerContextRoutes(
                 );
             }
             const baseSequence = parsedBase.value;
+            const headBeforeStale = await syncRepo.getHeadSequence(syncMeta.userId);
+            if (baseSequence > headBeforeStale) {
+                return c.json({ error: 'Invalid base_sequence' }, 400);
+            }
             const targets = await resolveDeleteTargetClientIds(storage, projectId, contextPublicId, idList);
             if (!targets.ok) return c.json({ error: targets.message }, status(targets.code));
             const stale = await assertRestMessageDeleteNotStale(

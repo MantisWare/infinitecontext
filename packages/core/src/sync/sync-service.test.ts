@@ -180,4 +180,49 @@ describe('SyncService', () => {
         assert.ok(result.failed?.some((f) => f.code === 'invalid_input' && f.client_id === delClient));
         assert.equal(result.applied.includes(delClient), false);
     });
+
+    it('returns invalid_input when message_delete base_sequence exceeds head', async () => {
+        const storage = new MemoryStorage();
+        const project = await storage.insertProject('p');
+        const syncRepo = new MemorySyncRepository();
+        const service = new SyncService(storage, syncRepo);
+        const ctx = { userId: 1, projectId: project!.id };
+
+        const createId = testClientId();
+        const created = await service.pushMutations(ctx, [
+            {
+                client_id: createId,
+                op: 'context_create',
+                payload: { metadata: { source: 'test' } },
+            },
+        ]);
+        const contextId = String(created.effects[0]?.context_id ?? '');
+        const m1 = testClientId();
+        await service.pushMutations(ctx, [
+            {
+                client_id: m1,
+                op: 'message_append',
+                context_id: contextId,
+                payload: {
+                    messages: [{ id: m1, role: 'user', content: { message: 'hi' }, metadata: { ic_client_node_id: m1 } }],
+                },
+            },
+        ]);
+        const head = await syncRepo.getHeadSequence(1);
+        const delClient = testClientId();
+        const result = await service.pushMutations(ctx, [
+            {
+                client_id: delClient,
+                op: 'message_delete',
+                context_id: contextId,
+                base_sequence: head + 10_000,
+                payload: { ids: [m1] },
+            },
+        ]);
+        assert.ok(
+            result.failed?.some(
+                (f) => f.code === 'invalid_input' && f.message === 'Invalid base_sequence' && f.client_id === delClient,
+            ),
+        );
+    });
 });

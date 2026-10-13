@@ -19,3 +19,4 @@ export { SyncService, SyncValidationError, SyncApplyError } from './sync-service
 export type { SyncApplyContext } from './sync-service';
 export { generateSyncConflictPublicId } from './public-ids';
 export { hasMessageClientMutationSince } from './delete-stale';
+export { parseStrictBaseSequence, isBaseSequenceAboveHead } from './base-sequence';
