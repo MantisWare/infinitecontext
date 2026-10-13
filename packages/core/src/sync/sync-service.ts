@@ -450,6 +450,7 @@ export class SyncService {
         ctx: SyncApplyContext,
         mutation: SyncMutation,
         options?: {
+            inTransaction?: boolean;
             hasMessageClientMutationSince?: (
                 contextId: string,
                 sinceSequence: number,
@@ -556,7 +557,9 @@ export class SyncService {
         }
 
         if (mutation.op === 'message_update') {
-            const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload);
+            const result = await updateMessages(storage, ctx.projectId, contextId, mutation.payload, {
+                inTransaction: options?.inTransaction,
+            });
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_update');
             return {
                 kind: 'ok',
@@ -625,7 +628,9 @@ export class SyncService {
                     rightPayload: { delete_targets: targetClientIds },
                 };
             }
-            const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any);
+            const result = await deleteMessages(storage, ctx.projectId, contextId, mutation.payload as any, {
+                inTransaction: options?.inTransaction,
+            });
             if (!result.ok) return this.mapApplyError(result.code, result.message, contextId, 'message_delete');
             return {
                 kind: 'ok',

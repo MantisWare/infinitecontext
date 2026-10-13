@@ -41,7 +41,11 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
     constructor(private db: ApiDb) {}
 
     async getHeadSequence(userId: number): Promise<number> {
-        const rows = await this.db
+        return this.getHeadSequenceOnDb(this.db, userId);
+    }
+
+    private async getHeadSequenceOnDb(db: ApiDb, userId: number): Promise<number> {
+        const rows = await db
             .select({ head: sync_user_state.head_sequence })
             .from(sync_user_state)
             .where(eq(sync_user_state.user_id, userId))
@@ -107,6 +111,7 @@ export class DrizzleSyncRepository implements SyncRepository, TransactionalSyncR
             const txDb = tx as ApiDb;
             const ctx: SyncStorageTransactionContext = {
                 storage: new DrizzleAdapter(txDb),
+                getHeadSequence: (userId) => this.getHeadSequenceOnDb(txDb, userId),
                 listChanges: (userId, since, limit) => this.listChangesOnDb(txDb, userId, since, limit),
                 appendChange: (input) => this.appendChangeOnDb(txDb, input),
                 insertConflict: (input) => this.insertConflictOnDb(txDb, input),

@@ -150,6 +150,10 @@ export class SqliteAdapter implements StorageAdapter {
             .where(and(eq(nodes.project_id, projectId), inArray(nodes.parent_id, parentIds)));
     }
 
+    async lockRootContextForUpdate(_projectId: number, _rootPublicId: string): Promise<void> {
+        // SQLite serializes writers; explicit row locks are unnecessary for local-first use.
+    }
+
     async updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>) {
         await this.db
             .update(nodes)

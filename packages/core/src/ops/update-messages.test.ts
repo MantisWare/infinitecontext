@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { MemoryStorage } from '../testing/memory-adapter';
 import { seedContext } from '../testing/seed';
+import { getContext } from './get-context';
 import { updateMessages } from './update-messages';
 
 // -- shared fixture — fresh project + seeded context with N messages ----------
@@ -427,5 +428,29 @@ describe('updateMessages — rollback on insert failure (internal)', () => {
             .getAllNodes()
             .find((n) => n.type === 'context' && n.context_id === seed.rootId && (n.metadata as any).operation === 'update');
         assert.equal(updateHead, undefined);
+    });
+});
+
+describe('updateMessages — concurrent writers', () => {
+    it('retains every concurrent patch on distinct messages (same context)', async () => {
+        const messages = Array.from({ length: 12 }, (_, i) => ({ role: 'user', text: `m${i}` }));
+        const { storage, projectId, seed } = await setup(messages);
+
+        const results = await Promise.all(
+            messages.map((_, i) =>
+                updateMessages(storage, projectId, seed.rootId, {
+                    updates: [{ index: i, text: `patch-${i}` }],
+                }),
+            ),
+        );
+
+        assert.ok(results.every((r) => r.ok), results.filter((r) => !r.ok).map((r) => (r.ok ? '' : r.message)).join('; '));
+        const read = await getContext(storage, projectId, seed.rootId, {});
+        assert.equal(read.ok, true);
+        if (!read.ok) return;
+        const texts = new Set(read.data.data.map((m) => String((m as { text?: string }).text ?? '')));
+        for (let i = 0; i < messages.length; i += 1) {
+            assert.ok(texts.has(`patch-${i}`), `missing patch-${i}`);
+        }
     });
 });

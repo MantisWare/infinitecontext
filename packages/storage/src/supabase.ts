@@ -235,6 +235,8 @@ export class SupabaseAdapter implements StorageAdapter {
         if (error) throw error;
     }
 
+    async lockRootContextForUpdate(_projectId: number, _rootPublicId: string): Promise<void> {}
+
     // -- transactions ---------------------------------------------------------
 
     // Supabase REST lacks multi-statement tx + isolation levels. Runs inline;

@@ -12,6 +12,7 @@ import { generatePublicId } from '../public-ids';
 import { isPlainObject, parseUpdateRequestBody } from '../request-parsing';
 import type { MessageView } from '../message-view';
 import { ok, err, type Result } from '../result';
+import { UPDATE_RETRY_ATTEMPTS, updateErrorCode } from './update-errors';
 
 // -- rollback helper ----------------------------------------------------------
 // Best-effort cleanup of an orphaned version head and its children, swallowing
@@ -33,63 +34,62 @@ async function rollbackHead(storage: StorageAdapter, projectId: number, headId: 
     }
 }
 
-// -- op -----------------------------------------------------------------------
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export async function updateMessages(
+type UpdateSuccess = { data: MessageView[]; version: number; affected_client_ids: string[] };
+type UpdateOutcome =
+    | UpdateSuccess
+    | { code: 'not_found' | 'internal' | 'invalid_input' | 'conflict'; message: string };
+
+async function updateMessagesOnce(
     storage: StorageAdapter,
     projectId: number,
     contextId: string,
     body: object,
-): Promise<Result<{ data: MessageView[]; version: number; affected_client_ids: string[] }>> {
-    // body-shape validation — parse into { updates, userMetadata } or fail 400
+): Promise<UpdateOutcome> {
     const parsed = parseUpdateRequestBody(body);
-    if ('error' in parsed) return err('invalid_input', parsed.error);
+    if ('error' in parsed) return { code: 'invalid_input', message: parsed.error };
 
     const { userMetadata, updates } = parsed;
 
-    // per-update validation — selector presence, mutual exclusion, and types
     for (const u of updates) {
-        if (!isPlainObject(u)) return err('invalid_input', 'Each update must be an object');
+        if (!isPlainObject(u)) return { code: 'invalid_input', message: 'Each update must be an object' };
         const hasId = u.id !== undefined;
         const hasIndex = u.index !== undefined;
-        if (hasId && hasIndex) return err('invalid_input', 'Cannot specify both id and index');
-        if (!hasId && !hasIndex) return err('invalid_input', 'Either id or index required');
-        if (hasId && typeof u.id !== 'string') return err('invalid_input', 'id must be a string');
+        if (hasId && hasIndex) return { code: 'invalid_input', message: 'Cannot specify both id and index' };
+        if (!hasId && !hasIndex) return { code: 'invalid_input', message: 'Either id or index required' };
+        if (hasId && typeof u.id !== 'string') return { code: 'invalid_input', message: 'id must be a string' };
         if (hasIndex && (typeof u.index !== 'number' || !Number.isInteger(u.index))) {
-            return err('invalid_input', 'index must be an integer');
+            return { code: 'invalid_input', message: 'index must be an integer' };
         }
     }
 
-    // resolve the root context scoped to the project — missing -> not_found
     const root = await storage.findRootContext(projectId, contextId);
-    if (!root) return err('not_found', 'Context not found');
+    if (!root) return { code: 'not_found', message: 'Context not found' };
 
-    // locate the current head — missing -> internal
+    await storage.lockRootContextForUpdate(projectId, root.public_id);
+
     const currentHead = await findHead(storage, root.public_id);
-    if (!currentHead) return err('internal', 'HEAD not found');
+    if (!currentHead) return { code: 'internal', message: 'HEAD not found' };
 
-    // load current messages, indexed by public id for lookup
     const orderedNodes = await getOrderedNodes(storage, currentHead.public_id);
 
     const affectedResolved = resolveUpdateSelectorsToClientNodeIds(orderedNodes, updates);
-    if (!affectedResolved.ok) return affectedResolved;
+    if (!affectedResolved.ok) return { code: affectedResolved.code, message: affectedResolved.message };
     const affectedClientIds = affectedResolved.data;
 
-    // resolve each update's selector (id, icn_* client id, or index) to a concrete target id
     const resolvedUpdates: Array<{ id: string; [key: string]: unknown }> = [];
     for (const u of updates) {
         const selector = u.id !== undefined ? u.id : u.index!;
         const resolved = resolveMessagePublicId(orderedNodes, selector as string | number);
-        if ('code' in resolved) return err(resolved.code, resolved.message);
+        if ('code' in resolved) return { code: resolved.code, message: resolved.message };
         const { index: _idx, id: _id, ...rest } = u;
         resolvedUpdates.push({ ...rest, id: resolved.publicId });
     }
 
-    // index resolved updates by target id; collect affected ids for the head
     const updateMap = new Map(resolvedUpdates.map((u) => [u.id, u]));
     const affectedIds = resolvedUpdates.map((u) => u.id);
 
-    // create new version head — failure -> internal, preserving thrown message
     const newHeadId = generatePublicId('context');
     try {
         await storage.insertNodes({
@@ -103,7 +103,7 @@ export async function updateMessages(
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to create version head';
-        return err('internal', message);
+        return { code: 'internal', message };
     }
 
     const isEncryptedEnvelope = (value: Record<string, unknown>) =>
@@ -117,7 +117,6 @@ export async function updateMessages(
         return out;
     };
 
-    // build updated node copies — copy-on-write; encrypted vault payloads replace content/metadata outright
     const newNodes = orderedNodes.map((n) => {
         const update = updateMap.get(n.public_id);
         const {
@@ -155,24 +154,20 @@ export async function updateMessages(
         };
     });
 
-    // link the copies into a chain via prev_id
     for (let i = 1; i < newNodes.length; i++) {
         newNodes[i].prev_id = newNodes[i - 1].public_id;
     }
 
-    // persist the copies — failure -> roll back the orphaned head -> internal
     try {
         await storage.insertNodes(newNodes);
     } catch {
         await rollbackHead(storage, projectId, newHeadId);
-        return err('internal', 'Failed to update messages');
+        return { code: 'internal', message: 'Failed to update messages' };
     }
 
-    // current version index is the count of heads minus one
     const versions = await getVersions(storage, root.public_id);
     const currentVersion = versions.length - 1;
 
-    // project the copied nodes into the response shape
     const result: MessageView[] = newNodes.map((n, index: number) => ({
         ...n.content,
         id: n.public_id,
@@ -180,5 +175,42 @@ export async function updateMessages(
         metadata: n.metadata,
     }));
 
-    return ok({ data: result, version: currentVersion, affected_client_ids: affectedClientIds });
+    return { data: result, version: currentVersion, affected_client_ids: affectedClientIds };
+}
+
+// -- op -----------------------------------------------------------------------
+
+export async function updateMessages(
+    storage: StorageAdapter,
+    projectId: number,
+    contextId: string,
+    body: object,
+    options?: { inTransaction?: boolean },
+): Promise<Result<UpdateSuccess>> {
+    const runInTx = async (tx: StorageAdapter) => updateMessagesOnce(tx, projectId, contextId, body);
+
+    if (options?.inTransaction) {
+        const outcome = await runInTx(storage);
+        if ('code' in outcome) return err(outcome.code, outcome.message);
+        return ok(outcome);
+    }
+
+    for (let attempt = 0; attempt < UPDATE_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+            const outcome = await storage.transaction<UpdateOutcome>(
+                async (tx) => runInTx(tx),
+                { isolationLevel: 'serializable' },
+            );
+            if ('code' in outcome) return err(outcome.code, outcome.message);
+            return ok(outcome);
+        } catch (error) {
+            if (updateErrorCode(error) === 'conflict') {
+                await sleep(5 * (attempt + 1));
+                continue;
+            }
+            return err('internal', 'Failed to update messages');
+        }
+    }
+
+    return err('conflict', 'Concurrent update retries exhausted; retry the request');
 }

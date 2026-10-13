@@ -75,6 +75,8 @@ export interface StorageAdapter {
     // batch-clear parent_id for all nodes whose parent_id is any of parentIds (single query)
     clearParentReferencesBulk(projectId: number, parentIds: string[]): Promise<void>;
     updateRootContextMetadata(projectId: number, publicId: string, metadata: Record<string, unknown>): Promise<void>;
+    /** Serialize copy-on-write updates/deletes for one root context (Postgres: FOR UPDATE). */
+    lockRootContextForUpdate(projectId: number, rootPublicId: string): Promise<void>;
 
     // api keys
     findApiKeyByPrefix(prefix: string): Promise<ApiKeyRow | null>;
