@@ -125,45 +125,109 @@ function tryRecoverStaleLock(lockPath) {
     }
     return false;
   }
+  if (!shouldStealLockContent(raw, lockPath)) {
+    return false;
+  }
+  return stealLockFileAtomically(lockPath, raw);
+}
+
+/**
+ * @param {string} raw
+ * @param {string} lockPath
+ * @returns {boolean}
+ */
+function shouldStealLockContent(raw, lockPath) {
   let meta;
   try {
     meta = JSON.parse(raw.trim());
   } catch {
-    return tryRemoveLockIfStaleByMissingMeta(lockPath);
+    return isLockFileStaleByMtime(lockPath);
   }
   if (!meta || typeof meta !== "object") {
-    return tryRemoveLockIfStaleByMissingMeta(lockPath);
+    return isLockFileStaleByMtime(lockPath);
   }
-  const acquiredAt = Number(meta.acquiredAt);
   const pid = Number(meta.pid);
   const hostname = typeof meta.hostname === "string" ? meta.hostname : "";
-  const ageMs = Number.isFinite(acquiredAt) ? Date.now() - acquiredAt : STALE_LOCK_MAX_AGE_MS + 1;
-  if (ageMs > STALE_LOCK_MAX_AGE_MS) {
-    return tryUnlinkLock(lockPath);
-  }
-  if (hostname && hostname !== os.hostname()) {
+  const acquiredAt = Number(meta.acquiredAt);
+  const onLocalHost = !hostname || hostname === os.hostname();
+
+  if (onLocalHost && Number.isFinite(pid) && pid > 0 && isProcessAlive(pid)) {
     return false;
   }
+  if (onLocalHost && Number.isFinite(pid) && pid > 0 && !isProcessAlive(pid)) {
+    return true;
+  }
+  if (!onLocalHost) {
+    const ageMs = Number.isFinite(acquiredAt) ? Date.now() - acquiredAt : STALE_LOCK_MAX_AGE_MS + 1;
+    return ageMs > STALE_LOCK_MAX_AGE_MS;
+  }
   if (!Number.isFinite(pid) || pid <= 0) {
-    return tryUnlinkLock(lockPath);
+    return true;
   }
-  if (!isProcessAlive(pid)) {
-    return tryUnlinkLock(lockPath);
-  }
-  return false;
+  return isLockFileStaleByMtime(lockPath);
 }
 
 /** @param {string} lockPath */
-function tryRemoveLockIfStaleByMissingMeta(lockPath) {
+function isLockFileStaleByMtime(lockPath) {
   try {
     const st = fs.statSync(lockPath);
-    if (Date.now() - st.mtimeMs > STALE_LOCK_MAX_AGE_MS) {
-      return tryUnlinkLock(lockPath);
+    return Date.now() - st.mtimeMs > STALE_LOCK_MAX_AGE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} lockPath
+ * @param {string} expectedRaw
+ * @returns {boolean}
+ */
+function stealLockFileAtomically(lockPath, expectedRaw) {
+  const quarantinePath = `${lockPath}.quarantine.${process.pid}.${Date.now()}`;
+  try {
+    fs.renameSync(lockPath, quarantinePath);
+  } catch {
+    return false;
+  }
+  try {
+    const quarantinedRaw = fs.readFileSync(quarantinePath, "utf8");
+    if (quarantinedRaw !== expectedRaw) {
+      restoreLockFromQuarantine(quarantinePath, lockPath);
+      return false;
+    }
+    if (!shouldStealLockContent(quarantinedRaw, quarantinePath)) {
+      restoreLockFromQuarantine(quarantinePath, lockPath);
+      return false;
+    }
+    fs.unlinkSync(quarantinePath);
+    return true;
+  } catch {
+    try {
+      fs.unlinkSync(quarantinePath);
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+}
+
+/**
+ * @param {string} quarantinePath
+ * @param {string} lockPath
+ */
+function restoreLockFromQuarantine(quarantinePath, lockPath) {
+  try {
+    if (!fs.existsSync(lockPath)) {
+      fs.renameSync(quarantinePath, lockPath);
     }
   } catch {
     // ignore
   }
-  return false;
+}
+
+/** @param {string} lockPath @returns {boolean} */
+export function tryRecoverStaleLockForTests(lockPath) {
+  return tryRecoverStaleLock(lockPath);
 }
 
 /** @param {number} pid */
@@ -176,16 +240,6 @@ function isProcessAlive(pid) {
       return false;
     }
     return true;
-  }
-}
-
-/** @param {string} lockPath */
-function tryUnlinkLock(lockPath) {
-  try {
-    fs.unlinkSync(lockPath);
-    return true;
-  } catch {
-    return false;
   }
 }
 

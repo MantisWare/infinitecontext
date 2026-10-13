@@ -2,12 +2,14 @@ import { infinitecontextHome } from "../client-config.mjs";
 import { StorageError } from "./errors.mjs";
 import { createEncryptedFileSecretBackend, fileBackendHasPersistedStore } from "./secret-store-file.mjs";
 import {
-  assertKeyringSecretServiceReady,
+  assertKeyringBackendReady,
   createKeyringSecretBackend,
   isKeyringUsableForAuto,
 } from "./secret-store-keyring.mjs";
 import {
+  assertMarkedBackendAvailableOnPlatform,
   assertMarkerMatchesRequestedMode,
+  platformKeychainMarkerId,
   readBackendMarker,
   writeBackendMarker,
 } from "./secret-store-marker.mjs";
@@ -18,7 +20,7 @@ export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 
 /**
  * @typedef {Object} SecretStoreBackend
- * @property {'keyring' | 'file'} kind
+ * @property {import('./secret-store-marker.mjs').SecretStoreBackendMarker} kind
  * @property {(name: string, secret: Uint8Array) => Promise<void>} setSecret
  * @property {(name: string) => Promise<Uint8Array | null>} getSecret
  * @property {(name: string) => Promise<boolean>} deleteSecret
@@ -45,10 +47,14 @@ export async function resolveSecretStoreBackend(options = {}) {
   const marked = readBackendMarker(rootDir);
   if (marked) {
     assertMarkerMatchesRequestedMode(marked, mode);
+    assertMarkedBackendAvailableOnPlatform(marked);
     if (marked === "file") {
       return createEncryptedFileSecretBackend({ rootDir });
     }
-    await assertKeyringSecretServiceReady({ forExplicitKeyringMode: mode === "keyring" });
+    await assertKeyringBackendReady({
+      forExplicitKeyringMode: mode === "keyring",
+      markedBackend: marked,
+    });
     return createKeyringSecretBackend();
   }
 
@@ -58,9 +64,9 @@ export async function resolveSecretStoreBackend(options = {}) {
     return backend;
   }
   if (mode === "keyring") {
-    await assertKeyringSecretServiceReady({ forExplicitKeyringMode: true });
+    await assertKeyringBackendReady({ forExplicitKeyringMode: true });
     const backend = await createKeyringSecretBackend();
-    writeBackendMarker(rootDir, "keyring");
+    writeBackendMarker(rootDir, backend.kind);
     return backend;
   }
 
@@ -116,7 +122,7 @@ export class SecretStore {
     return this.#backend;
   }
 
-  /** @returns {Promise<'keyring' | 'file'>} */
+  /** @returns {Promise<import('./secret-store-marker.mjs').SecretStoreBackendMarker>} */
   async backendKind() {
     return (await this.#ensureBackend()).kind;
   }
@@ -158,3 +164,5 @@ function assertSecretBytes(secret) {
     throw new StorageError("Secret must be a non-empty Uint8Array", "invalid_argument");
   }
 }
+
+export { platformKeychainMarkerId };

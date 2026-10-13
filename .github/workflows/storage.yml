@@ -30,6 +30,7 @@ jobs:
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-linux-dbus.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe-child.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe.mjs
           node --check apps/js-sdk/lib/storage/secret-store-marker.mjs

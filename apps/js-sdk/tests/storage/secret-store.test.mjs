@@ -5,15 +5,20 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  platformKeychainMarkerId,
   readSecretStoreModeFromEnv,
   resolveSecretStoreBackend,
   SecretStore,
 } from "../../lib/storage/secret-store.mjs";
+import { keyringBackendAvailable } from "../../lib/storage/secret-store-keyring.mjs";
 import {
-  isKeyringUsableForAuto,
-  keyringBackendAvailable,
-} from "../../lib/storage/secret-store-keyring.mjs";
-import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
+  probeKeyringSecretService,
+  resetKeyringProbeCacheForTests,
+} from "../../lib/storage/secret-store-keyring-probe.mjs";
+import {
+  storageSecretFilePaths,
+  tryRecoverStaleLockForTests,
+} from "../../lib/storage/secret-store-file.mjs";
 import {
   backendMarkerPath,
   readBackendMarker,
@@ -104,6 +109,21 @@ describe("SecretStore encrypted file backend", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it("does not steal a lock held by a live pid on this host", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-live-lock-"));
+    const { lockPath } = storageSecretFilePaths(rootDir);
+    fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+    const payload = `${JSON.stringify({
+      pid: process.pid,
+      hostname: os.hostname(),
+      acquiredAt: 1,
+    })}\n`;
+    fs.writeFileSync(lockPath, payload, { mode: 0o600 });
+    assert.equal(tryRecoverStaleLockForTests(lockPath), false);
+    assert.ok(fs.existsSync(lockPath));
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
   it("recovers from a stale lock left by a dead process", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-stale-lock-"));
     const { lockPath } = storageSecretFilePaths(rootDir);
@@ -147,14 +167,19 @@ describe("SecretStore keyring backend", () => {
   it("round-trips secrets via OS keychain when available", async (t) => {
     if (!(await keyringBackendAvailable())) {
       t.skip("OS keychain module unavailable");
+      return;
     }
-    if (!(await isKeyringUsableForAuto()) && process.env.INFINITECONTEXT_SECRET_STORE !== "keyring") {
-      t.skip("Secret Service probe failed — use INFINITECONTEXT_SECRET_STORE=keyring to test explicitly");
+    resetKeyringProbeCacheForTests();
+    if (!(await probeKeyringSecretService())) {
+      t.skip("Secret Service / keychain probe failed in this environment");
+      return;
     }
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-keyring-"));
     const name = `test/secret/${Date.now()}`;
+    const expectedKind = platformKeychainMarkerId();
+    assert.ok(expectedKind);
     const store = new SecretStore({ mode: "keyring", rootDir });
-    assert.equal(await store.backendKind(), "keyring");
+    assert.equal(await store.backendKind(), expectedKind);
     await store.set(name, SAMPLE_SECRET);
     assert.deepEqual(await store.get(name), SAMPLE_SECRET);
     assert.equal(await store.delete(name), true);
@@ -196,6 +221,7 @@ describe("resolveSecretStoreBackend auto", () => {
     const prev = process.env.INFINITECONTEXT_KEYRING_DURABLE;
     try {
       process.env.INFINITECONTEXT_KEYRING_DURABLE = "0";
+      resetKeyringProbeCacheForTests();
       const backend = await resolveSecretStoreBackend({ mode: "auto", rootDir });
       assert.equal(backend.kind, "file");
       assert.equal(readBackendMarker(rootDir), "file");
@@ -209,19 +235,23 @@ describe("resolveSecretStoreBackend auto", () => {
     }
   });
 
-  it("fails when marker is keyring but Secret Service is unavailable", async () => {
+  it("fails when marker is secret-service but Secret Service is unavailable", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-keyring-"));
-    writeBackendMarker(rootDir, "keyring");
+    writeBackendMarker(rootDir, "secret-service");
     const prevForce = process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE;
     try {
       process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE = "fail";
+      resetKeyringProbeCacheForTests();
       await assert.rejects(
         () => resolveSecretStoreBackend({ mode: "auto", rootDir }),
         (error) =>
           error instanceof Error &&
           "code" in error &&
           error.code === "migration_required" &&
-          /storage-secrets\.backend is set to keyring/.test(error.message),
+          /storage-secrets\.backend is "secret-service"/.test(error.message),
       );
     } finally {
       if (prevForce === undefined) {
@@ -255,6 +285,74 @@ describe("resolveSecretStoreBackend auto", () => {
     await resolveSecretStoreBackend({ mode: "file", rootDir });
     const mode = fs.statSync(backendMarkerPath(rootDir)).mode & 0o777;
     assert.equal(mode, 0o600);
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("on Linux auto uses file when session D-Bus is missing", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-no-dbus-"));
+    const prevDbus = process.env.DBUS_SESSION_BUS_ADDRESS;
+    try {
+      delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      resetKeyringProbeCacheForTests();
+      const backend = await resolveSecretStoreBackend({ mode: "auto", rootDir });
+      assert.equal(backend.kind, "file");
+      assert.equal(readBackendMarker(rootDir), "file");
+    } finally {
+      if (prevDbus === undefined) {
+        delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      } else {
+        process.env.DBUS_SESSION_BUS_ADDRESS = prevDbus;
+      }
+      resetKeyringProbeCacheForTests();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("on Linux keyring mode fails fast when session D-Bus is missing", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-no-dbus-keyring-"));
+    const prevDbus = process.env.DBUS_SESSION_BUS_ADDRESS;
+    try {
+      delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      resetKeyringProbeCacheForTests();
+      await assert.rejects(
+        () => resolveSecretStoreBackend({ mode: "keyring", rootDir }),
+        (error) =>
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "not_supported" &&
+          /DBUS_SESSION_BUS_ADDRESS|kernel keyring|Secret Service/i.test(error.message),
+      );
+    } finally {
+      if (prevDbus === undefined) {
+        delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      } else {
+        process.env.DBUS_SESSION_BUS_ADDRESS = prevDbus;
+      }
+      resetKeyringProbeCacheForTests();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cross-platform marker mismatch", async () => {
+    if (process.platform === "linux") {
+      return;
+    }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-cross-"));
+    writeBackendMarker(rootDir, "secret-service");
+    await assert.rejects(
+      () => resolveSecretStoreBackend({ mode: "auto", rootDir }),
+      (error) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "migration_required" &&
+        /storage-secrets\.backend is "secret-service"/.test(error.message),
+    );
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
