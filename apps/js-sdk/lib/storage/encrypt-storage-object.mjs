@@ -1,39 +1,37 @@
+import { sha256 } from "@noble/hashes/sha256";
+import { timingSafeEqual } from "node:crypto";
+
 import { encryptAead } from "../ic-crypto.mjs";
 import { buildStorageAadForKey, buildStorageObjectBytes, normalizeStorageObjectKey } from "./ciphertext.mjs";
 
-/** @type {WeakSet<Uint8Array>} */
-const sealedPutBodies = new WeakSet();
+/** @type {WeakMap<Uint8Array, Uint8Array>} Digest captured when body leaves encryptVaultPlaintextForStoragePut */
+const sealedPutBodyDigests = new WeakMap();
 
 /**
- * Mark bytes as produced by the vault/storage encrypt path (ObjectStoreSyncTransport contract).
  * @param {Uint8Array} body
  */
-export function markStoragePutBodySealed(body) {
+function sealVaultEncryptPutBody(body) {
   if (!(body instanceof Uint8Array)) {
     throw new TypeError("sealed storage body must be Uint8Array");
   }
-  sealedPutBodies.add(body);
+  sealedPutBodyDigests.set(body, sha256(body));
 }
 
 /**
  * @param {Uint8Array} body
  */
 export function assertStoragePutBodySealed(body) {
-  if (!(body instanceof Uint8Array) || !sealedPutBodies.has(body)) {
-    throw new Error("Storage put body must be produced by encryptStorageObjectForPut");
+  if (!(body instanceof Uint8Array)) {
+    throw new Error("Storage put body must be produced by encryptVaultPlaintextForStoragePut");
   }
-}
-
-/**
- * Build a storage object from an already-encrypted envelope (tests / callers with vault crypto).
- * @param {string} objectKey
- * @param {Record<string, unknown>} envelope
- * @param {{ seq?: number }} [options]
- */
-export function encryptStorageObjectForPut(objectKey, envelope, options = {}) {
-  const body = buildStorageObjectBytes(objectKey, envelope, options);
-  markStoragePutBodySealed(body);
-  return body;
+  const expected = sealedPutBodyDigests.get(body);
+  if (!expected) {
+    throw new Error("Storage put body must be produced by encryptVaultPlaintextForStoragePut");
+  }
+  const actual = sha256(body);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    throw new Error("Storage put body was modified after encryption");
+  }
 }
 
 /**
@@ -60,6 +58,6 @@ export function encryptVaultPlaintextForStoragePut(dek, objectKey, plaintext, op
     },
     { seq: options.seq ?? 0 },
   );
-  markStoragePutBodySealed(body);
+  sealVaultEncryptPutBody(body);
   return body;
 }

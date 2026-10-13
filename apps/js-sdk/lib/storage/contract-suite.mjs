@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 
-import { assertStorageCiphertext, scanStorageObjectForLeaks } from "./ciphertext.mjs";
-import { encryptStorageObjectForPut } from "./encrypt-storage-object.mjs";
+import { assertStorageCiphertext, buildStorageObjectBytes, scanStorageObjectForLeaks } from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 
@@ -12,7 +11,7 @@ const VALID_CT_B64 = Buffer.alloc(16, 0).toString("base64");
 
 /** @param {string} objectKey */
 export function sampleEncryptedObjectBytesForKey(objectKey) {
-  return encryptStorageObjectForPut(objectKey, {
+  return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
     kid: "dek_v1",
     v: 1,
@@ -25,7 +24,7 @@ export function sampleEncryptedObjectBytesForKey(objectKey) {
 /** @param {string} objectKey @param {number} tagByte */
 function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
   const ct = Buffer.alloc(16, tagByte).toString("base64");
-  return encryptStorageObjectForPut(objectKey, {
+  return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
     kid: "dek_v1",
     v: 1,

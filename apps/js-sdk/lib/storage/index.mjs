@@ -12,12 +12,7 @@ export {
   STORAGE_OBJECT_VERSION,
   XC20P_POLY1305_TAG_BYTES,
 } from "./ciphertext.mjs";
-export {
-  assertStoragePutBodySealed,
-  encryptStorageObjectForPut,
-  encryptVaultPlaintextForStoragePut,
-  markStoragePutBodySealed,
-} from "./encrypt-storage-object.mjs";
+export { encryptVaultPlaintextForStoragePut } from "./encrypt-storage-object.mjs";
 export { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 export {
   AuthExpiredError,
