@@ -2,10 +2,15 @@ import { infinitecontextHome } from "../client-config.mjs";
 import { StorageError } from "./errors.mjs";
 import { createEncryptedFileSecretBackend, fileBackendHasPersistedStore } from "./secret-store-file.mjs";
 import {
+  assertKeyringSecretServiceReady,
   createKeyringSecretBackend,
-  isKeyringDurableForAuto,
-  keyringBackendAvailable,
+  isKeyringUsableForAuto,
 } from "./secret-store-keyring.mjs";
+import {
+  assertMarkerMatchesRequestedMode,
+  readBackendMarker,
+  writeBackendMarker,
+} from "./secret-store-marker.mjs";
 
 export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 
@@ -37,17 +42,31 @@ export async function resolveSecretStoreBackend(options = {}) {
   const mode = options.mode ?? readSecretStoreModeFromEnv();
   const rootDir = options.rootDir ?? infinitecontextHome();
 
-  if (mode === "file") {
-    return createEncryptedFileSecretBackend({ rootDir });
-  }
-  if (mode === "keyring") {
-    if (!(await keyringBackendAvailable())) {
-      throw new StorageError("OS keychain is unavailable (INFINITECONTEXT_SECRET_STORE=keyring)", "not_supported");
+  const marked = readBackendMarker(rootDir);
+  if (marked) {
+    assertMarkerMatchesRequestedMode(marked, mode);
+    if (marked === "file") {
+      return createEncryptedFileSecretBackend({ rootDir });
     }
+    await assertKeyringSecretServiceReady({ forExplicitKeyringMode: mode === "keyring" });
     return createKeyringSecretBackend();
   }
 
-  return resolveAutoSecretStoreBackend(rootDir);
+  if (mode === "file") {
+    const backend = createEncryptedFileSecretBackend({ rootDir });
+    writeBackendMarker(rootDir, "file");
+    return backend;
+  }
+  if (mode === "keyring") {
+    await assertKeyringSecretServiceReady({ forExplicitKeyringMode: true });
+    const backend = await createKeyringSecretBackend();
+    writeBackendMarker(rootDir, "keyring");
+    return backend;
+  }
+
+  const backend = await resolveAutoSecretStoreBackend(rootDir);
+  writeBackendMarker(rootDir, backend.kind);
+  return backend;
 }
 
 /**
@@ -59,7 +78,7 @@ async function resolveAutoSecretStoreBackend(rootDir) {
     return createEncryptedFileSecretBackend({ rootDir });
   }
 
-  if ((await keyringBackendAvailable()) && isKeyringDurableForAuto()) {
+  if (await isKeyringUsableForAuto()) {
     return createKeyringSecretBackend();
   }
 

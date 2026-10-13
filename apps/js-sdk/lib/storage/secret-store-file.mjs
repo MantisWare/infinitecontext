@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { DecryptionFailedError, decryptAead, encryptAead, randomBytes } from "../ic-crypto.mjs";
@@ -10,6 +11,8 @@ const KEK_FILENAME = "storage-secrets.kek";
 const LOCK_FILENAME = "storage-secrets.lock";
 const FILE_AAD = new TextEncoder().encode("infinitecontext/storage-secret-store/v1");
 const LOCK_TIMEOUT_MS = 30_000;
+/** @type {number} Locks older than this are treated as stale (e.g. kill -9 while holding). */
+const STALE_LOCK_MAX_AGE_MS = 30 * 60 * 1000;
 
 /**
  * @param {{ rootDir: string }} options
@@ -80,16 +83,110 @@ async function acquireLockFile(lockPath) {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
-      return fs.openSync(lockPath, "wx", 0o600);
+      const fd = fs.openSync(lockPath, "wx", 0o600);
+      writeLockMetadata(fd);
+      return fd;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+        tryRecoverStaleLock(lockPath);
         await new Promise((resolve) => setTimeout(resolve, 15));
         continue;
       }
       throw error;
     }
   }
-  throw new StorageError("Timed out waiting for storage secret store lock", "lock_timeout");
+  throw new StorageError(
+    `Timed out waiting for storage secret store lock at ${lockPath}`,
+    "lock_timeout",
+  );
+}
+
+/** @param {number} fd */
+function writeLockMetadata(fd) {
+  const payload = `${JSON.stringify({
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt: Date.now(),
+  })}\n`;
+  fs.writeSync(fd, payload, 0, Buffer.byteLength(payload));
+}
+
+/**
+ * @param {string} lockPath
+ * @returns {boolean} true if a stale lock was removed
+ */
+function tryRecoverStaleLock(lockPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(lockPath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    return false;
+  }
+  let meta;
+  try {
+    meta = JSON.parse(raw.trim());
+  } catch {
+    return tryRemoveLockIfStaleByMissingMeta(lockPath);
+  }
+  if (!meta || typeof meta !== "object") {
+    return tryRemoveLockIfStaleByMissingMeta(lockPath);
+  }
+  const acquiredAt = Number(meta.acquiredAt);
+  const pid = Number(meta.pid);
+  const hostname = typeof meta.hostname === "string" ? meta.hostname : "";
+  const ageMs = Number.isFinite(acquiredAt) ? Date.now() - acquiredAt : STALE_LOCK_MAX_AGE_MS + 1;
+  if (ageMs > STALE_LOCK_MAX_AGE_MS) {
+    return tryUnlinkLock(lockPath);
+  }
+  if (hostname && hostname !== os.hostname()) {
+    return false;
+  }
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return tryUnlinkLock(lockPath);
+  }
+  if (!isProcessAlive(pid)) {
+    return tryUnlinkLock(lockPath);
+  }
+  return false;
+}
+
+/** @param {string} lockPath */
+function tryRemoveLockIfStaleByMissingMeta(lockPath) {
+  try {
+    const st = fs.statSync(lockPath);
+    if (Date.now() - st.mtimeMs > STALE_LOCK_MAX_AGE_MS) {
+      return tryUnlinkLock(lockPath);
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+/** @param {number} pid */
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
+/** @param {string} lockPath */
+function tryUnlinkLock(lockPath) {
+  try {
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -213,7 +310,8 @@ function rejectSymlinkPath(targetPath) {
  * @param {string} fileName
  * @param {string | Buffer} contents
  */
-function writePrivateFileAtomic(dir, fileName, contents) {
+export function writePrivateFileAtomic(dir, fileName, contents) {
+  ensurePrivateDir(dir);
   const finalPath = path.join(dir, fileName);
   rejectSymlinkPath(finalPath);
   const tmpPath = path.join(dir, `.${fileName}.tmp.${process.pid}.${Date.now()}`);
@@ -229,13 +327,31 @@ function writePrivateFileAtomic(dir, fileName, contents) {
     throw error;
   }
   try {
-    fs.writeSync(fd, buf, 0, buf.length);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+    try {
+      fs.writeSync(fd, buf, 0, buf.length);
+      fs.fsyncSync(fd);
+    } catch (error) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // ignore
+      }
+      throw error;
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, finalPath);
+    fsyncDirectory(dir);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tmpPath)) {
+        fs.unlinkSync(tmpPath);
+      }
+    } catch {
+      // ignore
+    }
+    throw error;
   }
-  fs.renameSync(tmpPath, finalPath);
-  fsyncDirectory(dir);
 }
 
 /** @param {string} dir */

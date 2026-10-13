@@ -30,6 +30,9 @@ jobs:
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-keyring-probe-child.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-keyring-probe.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-marker.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring.mjs
           node --check apps/js-sdk/lib/storage/secret-store-file.mjs
           node --check apps/js-sdk/lib/storage/secret-store.mjs
@@ -37,3 +40,13 @@ jobs:
 
       - name: Storage adapter contract tests
         run: node --test --test-concurrency=1 apps/js-sdk/tests/storage/*.test.mjs
+
+      - name: Secret store keyring (Secret Service via dbus-run-session)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dbus-x11 gnome-keyring
+          dbus-run-session -- bash -ec '
+            eval "$(echo -n "" | gnome-keyring-daemon --unlock --components=secrets 2>/dev/null || true)"
+            export INFINITECONTEXT_SECRET_STORE=keyring
+            node --test --test-concurrency=1 apps/js-sdk/tests/storage/secret-store-keyring-ci.test.mjs
+          '

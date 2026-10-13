@@ -10,10 +10,15 @@ import {
   SecretStore,
 } from "../../lib/storage/secret-store.mjs";
 import {
-  isKeyringDurableForAuto,
+  isKeyringUsableForAuto,
   keyringBackendAvailable,
 } from "../../lib/storage/secret-store-keyring.mjs";
 import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
+import {
+  backendMarkerPath,
+  readBackendMarker,
+  writeBackendMarker,
+} from "../../lib/storage/secret-store-marker.mjs";
 
 const SAMPLE_SECRET = new TextEncoder().encode("s3-secret-access-key-not-plain-on-disk");
 
@@ -99,6 +104,26 @@ describe("SecretStore encrypted file backend", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it("recovers from a stale lock left by a dead process", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-stale-lock-"));
+    const { lockPath } = storageSecretFilePaths(rootDir);
+    fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        pid: 9_999_999,
+        hostname: os.hostname(),
+        acquiredAt: Date.now(),
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const store = new SecretStore({ mode: "file", rootDir });
+    await store.set("after-stale-lock", new Uint8Array([7, 7]));
+    assert.deepEqual(await store.get("after-stale-lock"), new Uint8Array([7, 7]));
+    assert.equal(fs.existsSync(lockPath), false);
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
   it("errors when .enc exists but KEK is missing", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-missing-kek-"));
     const store = new SecretStore({ mode: "file", rootDir });
@@ -123,16 +148,18 @@ describe("SecretStore keyring backend", () => {
     if (!(await keyringBackendAvailable())) {
       t.skip("OS keychain module unavailable");
     }
-    if (!isKeyringDurableForAuto() && process.env.INFINITECONTEXT_SECRET_STORE !== "keyring") {
-      t.skip("non-durable Linux kernel keyring — use INFINITECONTEXT_SECRET_STORE=keyring to test explicitly");
+    if (!(await isKeyringUsableForAuto()) && process.env.INFINITECONTEXT_SECRET_STORE !== "keyring") {
+      t.skip("Secret Service probe failed — use INFINITECONTEXT_SECRET_STORE=keyring to test explicitly");
     }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-keyring-"));
     const name = `test/secret/${Date.now()}`;
-    const store = new SecretStore({ mode: "keyring" });
+    const store = new SecretStore({ mode: "keyring", rootDir });
     assert.equal(await store.backendKind(), "keyring");
     await store.set(name, SAMPLE_SECRET);
     assert.deepEqual(await store.get(name), SAMPLE_SECRET);
     assert.equal(await store.delete(name), true);
     assert.equal(await store.get(name), null);
+    fs.rmSync(rootDir, { recursive: true, force: true });
   });
 });
 
@@ -151,6 +178,83 @@ describe("resolveSecretStoreBackend auto", () => {
     const auto = new SecretStore({ mode: "auto", rootDir });
     assert.equal(await auto.backendKind(), "file");
     assert.deepEqual(await auto.get("persisted"), new Uint8Array([4, 5, 6]));
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("persists backend marker and honors it on later resolve", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-"));
+    const first = new SecretStore({ mode: "file", rootDir });
+    await first.set("m", new Uint8Array([1]));
+    assert.equal(readBackendMarker(rootDir), "file");
+    const second = await resolveSecretStoreBackend({ mode: "auto", rootDir });
+    assert.equal(second.kind, "file");
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("auto selects file and writes marker when Secret Service probe fails", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-auto-probe-"));
+    const prev = process.env.INFINITECONTEXT_KEYRING_DURABLE;
+    try {
+      process.env.INFINITECONTEXT_KEYRING_DURABLE = "0";
+      const backend = await resolveSecretStoreBackend({ mode: "auto", rootDir });
+      assert.equal(backend.kind, "file");
+      assert.equal(readBackendMarker(rootDir), "file");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.INFINITECONTEXT_KEYRING_DURABLE;
+      } else {
+        process.env.INFINITECONTEXT_KEYRING_DURABLE = prev;
+      }
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when marker is keyring but Secret Service is unavailable", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-keyring-"));
+    writeBackendMarker(rootDir, "keyring");
+    const prevForce = process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE;
+    try {
+      process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE = "fail";
+      await assert.rejects(
+        () => resolveSecretStoreBackend({ mode: "auto", rootDir }),
+        (error) =>
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "migration_required" &&
+          /storage-secrets\.backend is set to keyring/.test(error.message),
+      );
+    } finally {
+      if (prevForce === undefined) {
+        delete process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE;
+      } else {
+        process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE = prevForce;
+      }
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects mode/keyring mismatch with persisted marker", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-mismatch-"));
+    writeBackendMarker(rootDir, "file");
+    await assert.rejects(
+      () => resolveSecretStoreBackend({ mode: "keyring", rootDir }),
+      (error) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "migration_required" &&
+        /storage-secrets\.backend is set to "file"/.test(error.message),
+    );
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("writes backend marker with mode 0600 when supported", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-mode-"));
+    await resolveSecretStoreBackend({ mode: "file", rootDir });
+    const mode = fs.statSync(backendMarkerPath(rootDir)).mode & 0o777;
+    assert.equal(mode, 0o600);
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
