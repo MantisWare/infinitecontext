@@ -811,23 +811,58 @@ describe('sync-postgres-live', () => {
 
     it('EXPLAIN stale EXISTS references GIN indexes on affected/deleted ids', async () => {
         if (!postgresReady || !DB_URL) return;
+        await setupApp();
         const icn = generateClientNodeId();
+        const psqlEnv = { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD };
+        const userIdRaw = spawnSync('psql', [DB_URL, '-t', '-A', '-c', 'SELECT id FROM users ORDER BY id DESC LIMIT 1'], {
+            encoding: 'utf8',
+            env: psqlEnv,
+        });
+        assert.equal(userIdRaw.status, 0, userIdRaw.stderr || userIdRaw.stdout);
+        const userId = Number(String(userIdRaw.stdout ?? '').trim());
+        assert.ok(Number.isFinite(userId) && userId > 0);
+
+        const contextId = `ctx_gin_explain_${Date.now()}`;
+        const seqBaseRaw = spawnSync(
+            'psql',
+            [DB_URL, '-t', '-A', '-c', `SELECT COALESCE(MAX(sequence), 0) + 1 FROM sync_change_log WHERE user_id = ${userId}`],
+            { encoding: 'utf8', env: psqlEnv },
+        );
+        assert.equal(seqBaseRaw.status, 0, seqBaseRaw.stderr || seqBaseRaw.stdout);
+        const seqBase = Number(String(seqBaseRaw.stdout ?? '').trim());
+        const icnJson = JSON.stringify([icn]);
+        const seedSql = `
+INSERT INTO sync_change_log (user_id, sequence, op, context_id, client_id, payload)
+SELECT ${userId}, ${seqBase} + s, 'message_update', '${contextId}', 'gin_seed_${Date.now()}_' || s,
+  jsonb_build_object('affected_client_ids', jsonb_build_array('icn_seed_' || s::text))
+FROM generate_series(1, 400) s;
+INSERT INTO sync_change_log (user_id, sequence, op, context_id, client_id, payload)
+VALUES (${userId}, ${seqBase + 401}, 'message_update', '${contextId}', 'gin_target_${Date.now()}',
+  jsonb_build_object('affected_client_ids', jsonb_build_array('${icn}')));
+ANALYZE sync_change_log;`;
+        const seed = spawnSync('psql', [DB_URL, '-v', 'ON_ERROR_STOP=1', '-c', seedSql], { encoding: 'utf8', env: psqlEnv });
+        assert.equal(seed.status, 0, seed.stderr || seed.stdout);
+
         const explainSql = `
+BEGIN;
+SET LOCAL enable_seqscan = off;
 EXPLAIN (FORMAT TEXT)
 SELECT EXISTS (
   SELECT 1 FROM sync_change_log
-  WHERE user_id = 1 AND context_id = 'ctx_explain' AND sequence > 0
+  WHERE user_id = ${userId} AND context_id = '${contextId}' AND sequence > ${seqBase - 1}
     AND op IN ('message_update', 'message_delete')
     AND (
-      COALESCE(payload->'affected_client_ids', '[]'::jsonb) @> '${JSON.stringify([icn])}'::jsonb
-      OR COALESCE(payload->'deleted_client_ids', '[]'::jsonb) @> '${JSON.stringify([icn])}'::jsonb
+      COALESCE(payload->'affected_client_ids', '[]'::jsonb) @> '${icnJson}'::jsonb
+      OR COALESCE(payload->'deleted_client_ids', '[]'::jsonb) @> '${icnJson}'::jsonb
     )
-);`;
+);
+ROLLBACK;`;
         const out = spawnSync('psql', [DB_URL, '-v', 'ON_ERROR_STOP=1', '-c', explainSql], {
             encoding: 'utf8',
-            env: { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD },
+            env: psqlEnv,
         });
         assert.equal(out.status, 0, out.stderr || out.stdout);
+        assert.match(out.stdout ?? '', /@>/);
         assert.match(out.stdout ?? '', /idx_sync_change_log_(affected|deleted)_client_ids|Bitmap Index Scan/i);
     });
 });
