@@ -16,6 +16,12 @@ export { encryptVaultPlaintextForStoragePut } from "./encrypt-storage-object.mjs
 export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 export { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 export {
+  LOCAL_OBJECT_STORE_BACKEND_ID,
+  createLocalObjectStore,
+  defaultLocalObjectStoreRootDir,
+  resolveLocalObjectStoreRootDir,
+} from "./local-object-store.mjs";
+export {
   decryptVaultStorageObjectPlaintext,
   moveStorageObjectWithDek,
 } from "./storage-object-move.mjs";

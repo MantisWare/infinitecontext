@@ -100,11 +100,17 @@ export async function moveStorageObjectWithDek(adapter, dek, fromKey, toKey, opt
     if (error instanceof PreconditionFailedError) {
       const destHead = await adapter.head(toKey);
       const destinationEtag = destPut.etag ?? destHead?.etag;
+      const sourceStillLive = await adapter.head(fromKey);
+      /** @type {'rewritten' | 'deleted'} */
+      const sourceOutcome = sourceStillLive ? "rewritten" : "deleted";
       const partial = new StorageError(
-        "Storage object moved to destination but source delete precondition failed",
+        sourceOutcome === "deleted"
+          ? "Storage object copied to destination but source was deleted before cleanup"
+          : "Storage object copied to destination but source was rewritten before cleanup",
         "partial_move",
       );
       partial.destinationEtag = destinationEtag;
+      partial.sourceOutcome = sourceOutcome;
       throw partial;
     }
     throw error;
