@@ -73,11 +73,11 @@ describe("storage layout naming + paths", () => {
     assert.equal(manifestEncRelativePath(TEST_PREFIX), `${root}/manifest.json.enc`);
     assert.equal(
       deviceEncRelativePath(TEST_PREFIX, VECTOR_DEVH),
-      `${root}/devices/${VECTOR_DEVH}.json.enc`,
+      `${root}/devices/${VECTOR_DEVH.toLowerCase()}.json.enc`,
     );
     assert.equal(
       logSegmentRelativePath(TEST_PREFIX, VECTOR_DEVH, 3),
-      `${root}/log/${VECTOR_DEVH}/000000000003.enc`,
+      `${root}/log/${VECTOR_DEVH.toLowerCase()}/000000000003.enc`,
     );
     assert.equal(snapEncRelativePath(TEST_PREFIX, 42), `${root}/snap/00000042.enc`);
     assert.equal(lockRelativePath(TEST_PREFIX, "manifest"), `${root}/lock/manifest.lock`);

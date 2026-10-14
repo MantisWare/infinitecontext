@@ -16,7 +16,9 @@ import { deriveDevH } from "./layout.mjs";
  * @property {Uint8Array} [dek] vault DEK for layout log segments (required for sync methods)
  * @property {string} [deviceUuid] canonical device UUID (required for sync methods)
  * @property {string} [layoutPrefix] object layout prefix (default `accounts/local`)
+ * @property {{ load: () => import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState, save: (s: import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState) => void }} localState
  * @property {() => void | Promise<void>} [testHookAfterSegmentWrite] test-only crash hook
+ * @property {boolean} [testHookSkipLocalSaveAfterSegmentWrite] simulate crash before local commit
  */
 
 /**
@@ -37,8 +39,8 @@ export class ObjectStoreSyncTransport {
 
   /** @returns {import("../object-store-sync.mjs").objectStorePushSyncMutations extends (ctx: infer C, ...args: never) => unknown ? C : never} */
   #syncContext() {
-    if (!this.#sync?.dek || !this.#sync.deviceUuid) {
-      throw new Error("ObjectStoreSyncTransport sync requires dek and deviceUuid");
+    if (!this.#sync?.dek || !this.#sync.deviceUuid || !this.#sync.localState) {
+      throw new Error("ObjectStoreSyncTransport sync requires dek, deviceUuid, and localState");
     }
     const selfDevH = deriveDevH(this.#sync.dek, this.#sync.deviceUuid);
     return {
@@ -47,7 +49,9 @@ export class ObjectStoreSyncTransport {
       layoutPrefix: this.#sync.layoutPrefix ?? "accounts/local",
       selfDevH,
       deviceUuid: this.#sync.deviceUuid,
+      localState: this.#sync.localState,
       testHookAfterSegmentWrite: this.#sync.testHookAfterSegmentWrite,
+      testHookSkipLocalSaveAfterSegmentWrite: this.#sync.testHookSkipLocalSaveAfterSegmentWrite,
     };
   }
 

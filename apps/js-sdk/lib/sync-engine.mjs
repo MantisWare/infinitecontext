@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
-import { normalizeVectorSyncCursor } from "./sync-cursor.mjs";
+import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
 
@@ -332,6 +332,10 @@ export function resolveDeleteBaseSequence({ explicitBaseSequence } = {}) {
   }
   const local = getSyncCursor();
   if (typeof local === "number" && local > 0) return local;
+  if (local && typeof local === "object" && local.kind === "vector") {
+    const sum = vectorCursorHeadSum(local);
+    return sum > 0 ? sum : null;
+  }
   return null;
 }
 

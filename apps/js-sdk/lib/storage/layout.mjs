@@ -28,6 +28,7 @@ export const MAX_SEGMENT_BUCKETS = 64;
 
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const DEVH_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const KDF_MAX_COST_PRODUCT = 196_608;
 const DEVICE_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PREV_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
@@ -101,11 +102,21 @@ export function normalizeDeviceUuid(deviceUuid) {
  * @param {string} devH
  */
 export function assertDevH(devH) {
-  const value = String(devH ?? "");
+  const value = String(devH ?? "").toUpperCase();
   if (!DEVH_PATTERN.test(value)) {
     throw new Error("devH must be 26-character Crockford base32");
   }
   return value;
+}
+
+/** Canonical uppercase devH for crypto/AAD. */
+export function canonicalDevH(devH) {
+  return assertDevH(devH);
+}
+
+/** Lowercase devH for object store keys (filesystem-safe). */
+export function devHForObjectKey(devH) {
+  return canonicalDevH(devH).toLowerCase();
 }
 
 /**
@@ -138,17 +149,17 @@ export function manifestEncRelativePath(prefix) {
 
 /** @param {string} prefix @param {string} devH */
 export function deviceEncRelativePath(prefix, devH) {
-  assertDevH(devH);
-  return `${layoutRootPath(prefix)}/devices/${devH}.json.enc`;
+  const keyDevH = devHForObjectKey(devH);
+  return `${layoutRootPath(prefix)}/devices/${keyDevH}.json.enc`;
 }
 
 /** @param {string} prefix @param {string} devH @param {number} seq */
 export function logSegmentRelativePath(prefix, devH, seq) {
-  assertDevH(devH);
+  const keyDevH = devHForObjectKey(devH);
   if (!Number.isSafeInteger(seq) || seq < 0) {
     throw new Error("Log segment seq must be a non-negative safe integer");
   }
-  return `${layoutRootPath(prefix)}/log/${devH}/${String(seq).padStart(12, "0")}.enc`;
+  return `${layoutRootPath(prefix)}/log/${keyDevH}/${String(seq).padStart(12, "0")}.enc`;
 }
 
 /** @param {string} prefix @param {number} epoch */
@@ -360,12 +371,12 @@ export function layoutSegmentEnvelopeDigest(envelope) {
  * @param {LayoutLogSegmentRecord} record
  */
 export function encryptLogSegment(dek, devH, record) {
-  assertDevH(devH);
+  const canonical = canonicalDevH(devH);
   if (record.seq !== 0 && !record.prev_digest) {
     throw new Error("Non-genesis log segments require prev_digest");
   }
   assertPrevDigestForSeq(record.seq, record.prev_digest);
-  const aad = buildLayoutLogSegmentAad(devH, record.seq);
+  const aad = buildLayoutLogSegmentAad(canonical, record.seq);
   const padded = padSegmentPlaintext(serializeLogSegmentRecord(record));
   return encryptAead(dek, padded, aad);
 }
@@ -377,11 +388,11 @@ export function encryptLogSegment(dek, devH, record) {
  * @param {AeadEnvelope} envelope
  */
 export function decryptLogSegment(dek, devH, seq, envelope) {
-  assertDevH(devH);
+  const canonical = canonicalDevH(devH);
   if (!Number.isSafeInteger(seq) || seq < 0) {
     throw new LayoutIntegrityError("Path seq must be a non-negative safe integer");
   }
-  const aad = buildLayoutLogSegmentAad(devH, seq);
+  const aad = buildLayoutLogSegmentAad(canonical, seq);
   const padded = decryptAead(dek, envelope, aad);
   if (padded.length === 0 || padded.length % SEGMENT_BUCKET_BYTES !== 0) {
     throw new LayoutPaddingError("Decrypted segment has invalid padded length");
@@ -392,7 +403,7 @@ export function decryptLogSegment(dek, devH, seq, envelope) {
       `Segment seq mismatch (path ${seq}, payload ${record.seq})`,
     );
   }
-  if (deriveDevH(dek, record.dev) !== devH) {
+  if (deriveDevH(dek, record.dev) !== canonical) {
     throw new LayoutIntegrityError("Segment devH does not match device UUID in record");
   }
   return record;
@@ -482,6 +493,10 @@ export function parseStrictVaultKdfParams(kdf) {
   }
   if (hashLength !== VAULT_KDF_PARAMS.hashLength) {
     throw new Error("vault.json kdf hashLength must be 32");
+  }
+  const product = memorySizeKiB * iterations;
+  if (!Number.isSafeInteger(product) || product > KDF_MAX_COST_PRODUCT) {
+    throw new Error("vault.json kdf memorySizeKiB × iterations exceeds allowed cost cap");
   }
   return {
     algorithm: "argon2id",

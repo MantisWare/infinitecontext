@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const syncRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const parsersSrc = path.resolve(syncRoot, "../../packages/parsers/src");
+const syncCursorSrc = path.resolve(syncRoot, "../../packages/sync-cursor/src");
 
 /** @param {string} stagingRoot */
 export function prepareSyncPublishTree(stagingRoot) {
@@ -23,13 +24,25 @@ export function prepareSyncPublishTree(stagingRoot) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(parsersSrc, dest, { recursive: true });
 
+  const cursorDest = path.join(stagingRoot, "src", "sync-cursor-bundle");
+  fs.rmSync(cursorDest, { recursive: true, force: true });
+  fs.cpSync(syncCursorSrc, cursorDest, { recursive: true });
+  fs.writeFileSync(
+    path.join(stagingRoot, "src", "sync-cursor-shim.mjs"),
+    'export * from "./sync-cursor-bundle/index.mjs";\n',
+  );
+
   const pkg = JSON.parse(fs.readFileSync(path.join(syncRoot, "package.json"), "utf8"));
   pkg.imports = {
     "#parsers": "./src/parsers-bundle/index.mjs",
     "#parsers/utils": "./src/parsers-bundle/utils.mjs",
+    "#sync-cursor": "./src/sync-cursor-bundle/index.mjs",
   };
   if (pkg.dependencies?.["@infinitecontext/parsers"]) {
     delete pkg.dependencies["@infinitecontext/parsers"];
+  }
+  if (pkg.dependencies?.["@infinitecontext/sync-cursor"]) {
+    delete pkg.dependencies["@infinitecontext/sync-cursor"];
   }
   if (pkg.scripts) {
     delete pkg.scripts.prepack;

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { generateClientNodeId } from "../lib/ic-crypto.mjs";
 import { mutationForMessageDelete, resolveDeleteBaseSequence } from "../lib/sync-engine.mjs";
 import { normalizeVectorSyncCursor } from "../lib/sync-cursor.mjs";
+import { createInMemoryObjectStoreLocalState } from "../lib/object-store-local-sync-state.mjs";
 import { createMemoryStorageAdapter } from "../lib/storage/memory-adapter.mjs";
 import { ObjectStoreSyncTransport } from "../lib/storage/object-store-sync-transport.mjs";
 
@@ -34,6 +35,7 @@ describe("message_delete base_sequence", () => {
       dek,
       deviceUuid: "44444444-4444-4444-8444-444444444444",
       layoutPrefix: "accounts/delete-base",
+      localState: createInMemoryObjectStoreLocalState(),
     });
     const createId = generateClientNodeId();
     const contextId = "ctx_delete_base";
@@ -52,7 +54,7 @@ describe("message_delete base_sequence", () => {
         op: "message_append",
         context_id: contextId,
         payload: {
-          messages: [{ id: msgId, role: "user", content: { message: "hi" }, metadata: { ic_client_node_id: msgId } }],
+          messages: [{ id: msgId, role: "user", content: { body: "hi" }, metadata: { ic_client_node_id: msgId } }],
         },
       },
     ]);
@@ -78,11 +80,13 @@ describe("message_delete base_sequence", () => {
       dek,
       deviceUuid: deviceA,
       layoutPrefix: "accounts/stale-base",
+      localState: createInMemoryObjectStoreLocalState(),
     });
     const transportB = new ObjectStoreSyncTransport(adapter, {
       dek,
       deviceUuid: deviceB,
       layoutPrefix: "accounts/stale-base",
+      localState: createInMemoryObjectStoreLocalState(),
     });
     const createId = generateClientNodeId();
     const contextId = "ctx_stale_base";
@@ -94,7 +98,9 @@ describe("message_delete base_sequence", () => {
         payload: { metadata: { source: "test" }, context_id: contextId },
       },
     ]);
-    await transportB.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    let cursorB = normalizeVectorSyncCursor(0);
+    const pullCreate = await transportB.pullSyncChanges({ since: cursorB, limit: 50 });
+    cursorB = pullCreate.next_since;
     const m1 = generateClientNodeId();
     await transportA.pushSyncMutations([
       {
@@ -102,13 +108,14 @@ describe("message_delete base_sequence", () => {
         op: "message_append",
         context_id: contextId,
         payload: {
-          messages: [{ id: m1, role: "user", content: { message: "one" }, metadata: { ic_client_node_id: m1 } }],
+          messages: [{ id: m1, role: "user", content: { body: "one" }, metadata: { ic_client_node_id: m1 } }],
         },
       },
     ]);
-    await transportB.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
-    const status = await transportA.fetchSyncStatus();
-    const baseSeq = Number(status.head_sequence);
+    const pullAppend = await transportB.pullSyncChanges({ since: cursorB, limit: 50 });
+    cursorB = pullAppend.next_since;
+    const statusBeforeUpdate = await transportB.fetchSyncStatus();
+    const baseSeq = Number(statusBeforeUpdate.head_sequence);
     const m2 = generateClientNodeId();
     await transportA.pushSyncMutations([
       {
@@ -116,10 +123,12 @@ describe("message_delete base_sequence", () => {
         op: "message_update",
         context_id: contextId,
         payload: {
-          messages: [{ id: m1, role: "user", content: { message: "changed" }, metadata: { ic_client_node_id: m1 } }],
+          messages: [{ id: m1, role: "user", content: { body: "changed" }, metadata: { ic_client_node_id: m1 } }],
         },
       },
     ]);
+    const pullUpdate = await transportB.pullSyncChanges({ since: cursorB, limit: 50 });
+    cursorB = pullUpdate.next_since;
     const delClient = generateClientNodeId();
     const stale = await transportB.pushSyncMutations([
       {

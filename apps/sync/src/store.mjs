@@ -6,7 +6,7 @@ import {
   normalizeVectorSyncCursor,
   parseStoredSyncCursor,
   serializeVectorSyncCursor,
-} from "../../js-sdk/lib/sync-cursor.mjs";
+} from "#sync-cursor";
 
 import { expandHome } from "./utils.mjs";
 
@@ -184,13 +184,6 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       stmt.setOffset.run("sync:pull_cursor", String(legacyCursor));
       return;
     }
-    const cli = readJsonState(path.join(icDir, "sync-cli-state.json"));
-    if (cli && typeof cli === "object" && cli.cursor && typeof cli.cursor === "object") {
-      stmt.setOffset.run("sync:pull_cursor", serializeVectorSyncCursor(normalizeVectorSyncCursor(cli.cursor)));
-      return;
-    }
-    const cliCursor = cli && typeof cli === "object" ? parseNumber(cli.cursor, 0) : 0;
-    if (cliCursor > 0) stmt.setOffset.run("sync:pull_cursor", String(cliCursor));
   }
 
   migrateDaemonPullCursor();
@@ -215,14 +208,12 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     },
     getSyncPullCursor() {
       const row = stmt.getOffset.get("sync:pull_cursor");
-      if (!row) return normalizeVectorSyncCursor(0);
+      if (!row) return 0;
       const text = String(row.offset_value ?? "");
       if (text.trim().startsWith("{")) {
         return parseStoredSyncCursor(text);
       }
-      const numeric = parseNumber(text, 0);
-      if (numeric > 0) return numeric;
-      return normalizeVectorSyncCursor(0);
+      return parseNumber(text, 0);
     },
     setSyncPullCursor(value) {
       if (value && typeof value === "object" && value.kind === "vector") {
