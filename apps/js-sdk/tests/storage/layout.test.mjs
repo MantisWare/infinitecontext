@@ -11,6 +11,7 @@ import {
   randomBytes,
   unwrapDek,
 } from "../../lib/ic-crypto.mjs";
+import { encryptLogSegmentWithFixedNonceForTests } from "../helpers/layout-test-crypto.mjs";
 import {
   IC_LAYOUT_LOG_AAD_VERSION,
   LayoutIntegrityError,
@@ -23,7 +24,6 @@ import {
   deviceEncRelativePath,
   decryptLogSegment,
   encryptLogSegment,
-  encryptLogSegmentWithFixedNonceForTests,
   encodeCrockfordBase32,
   parseStrictWrappedDekBytes,
   layoutRootPath,
@@ -175,7 +175,7 @@ describe("storage layout log segments", () => {
               envelope: encryptLogSegment(TEST_DEK, devH, {
                 dev: TEST_DEVICE,
                 seq: 1,
-                prev_digest: "deadbeef",
+                prev_digest: "a".repeat(64),
                 created_at: "2026-10-14T12:00:01.000Z",
                 mutations: [],
               }),
@@ -265,7 +265,7 @@ describe("vault.json codec", () => {
         decodeVaultJson(
           json.replace('"memorySizeKiB":65536', '"memorySizeKiB":1024'),
         ),
-      /memorySizeKiB below minimum/,
+      /memorySizeKiB out of allowed range/,
     );
     assert.throws(
       () => decodeVaultJson('{"ic_vault_v":1,"kdf_salt_b64":"x","kdf":{},"wrapped_dek_b64":"x","extra":1}'),

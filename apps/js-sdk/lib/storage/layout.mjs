@@ -1,4 +1,3 @@
-import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { hkdf } from "@noble/hashes/hkdf";
 import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha256";
@@ -12,8 +11,10 @@ import {
   bytesToBase64,
   decryptAead,
   encryptAead,
+  deriveVaultKekWithParams,
   parseWrappedDekRecord,
   serializeKdfParams,
+  unwrapDek,
   wrapDek,
 } from "../ic-crypto.mjs";
 
@@ -28,7 +29,11 @@ export const MAX_SEGMENT_BUCKETS = 64;
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const DEVH_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const DEVICE_UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PREV_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+const ENVELOPE_FIELD_NAMES = new Set(["v", "alg", "nonce", "ct"]);
+const KDF_MAX_MEMORY_KIB = 524_288;
+const KDF_MAX_ITERATIONS = 100;
 
 const VAULT_KDF_FIELD_NAMES = new Set([
   "algorithm",
@@ -255,8 +260,29 @@ export function unpadSegmentPlaintext(paddedPlaintext) {
   if (declaredLen > paddedPlaintext.length - 4) {
     throw new LayoutPaddingError("Segment length prefix exceeds bucket capacity");
   }
+  for (let i = 4 + declaredLen; i < paddedPlaintext.length; i += 1) {
+    if (paddedPlaintext[i] !== 0) {
+      throw new LayoutPaddingError("Segment padding tail must be zero");
+    }
+  }
   const slice = paddedPlaintext.slice(4, 4 + declaredLen);
   return new TextDecoder().decode(slice);
+}
+
+/**
+ * @param {number} seq
+ * @param {string} prevDigest
+ */
+export function assertPrevDigestForSeq(seq, prevDigest) {
+  if (seq === 0) {
+    if (prevDigest !== "") {
+      throw new Error("Genesis segment prev_digest must be empty");
+    }
+    return;
+  }
+  if (!PREV_DIGEST_PATTERN.test(prevDigest)) {
+    throw new Error("prev_digest must be a 64-character lowercase hex sha256");
+  }
 }
 
 /**
@@ -272,6 +298,7 @@ export function serializeLogSegmentRecord(record) {
   if (!Number.isSafeInteger(record.seq) || record.seq < 0) {
     throw new Error("Log segment record seq invalid");
   }
+  assertPrevDigestForSeq(record.seq, record.prev_digest);
   return JSON.stringify({
     dev,
     seq: record.seq,
@@ -304,6 +331,7 @@ export function parseLogSegmentRecord(jsonText) {
     throw new Error("Log segment record missing mutations");
   }
   const dev = normalizeDeviceUuid(parsed.dev);
+  assertPrevDigestForSeq(parsed.seq, parsed.prev_digest);
   return /** @type {LayoutLogSegmentRecord} */ ({
     dev,
     seq: parsed.seq,
@@ -327,25 +355,6 @@ export function layoutSegmentEnvelopeDigest(envelope) {
 }
 
 /**
- * @param {Uint8Array} key
- * @param {Uint8Array} plaintext
- * @param {Uint8Array} aad
- * @param {Uint8Array} nonce 24-byte nonce (tests only)
- */
-function encryptAeadWithFixedNonce(key, plaintext, aad, nonce) {
-  if (nonce.length !== 24) {
-    throw new Error("AEAD nonce must be 24 bytes");
-  }
-  const ct = xchacha20poly1305(key, nonce, aad).encrypt(plaintext);
-  return {
-    v: 1,
-    alg: AEAD_ALG,
-    nonce: bytesToBase64(nonce),
-    ct: bytesToBase64(ct),
-  };
-}
-
-/**
  * @param {Uint8Array} dek
  * @param {string} devH
  * @param {LayoutLogSegmentRecord} record
@@ -355,23 +364,10 @@ export function encryptLogSegment(dek, devH, record) {
   if (record.seq !== 0 && !record.prev_digest) {
     throw new Error("Non-genesis log segments require prev_digest");
   }
+  assertPrevDigestForSeq(record.seq, record.prev_digest);
   const aad = buildLayoutLogSegmentAad(devH, record.seq);
   const padded = padSegmentPlaintext(serializeLogSegmentRecord(record));
   return encryptAead(dek, padded, aad);
-}
-
-/**
- * Test-only: fixed nonce for deterministic vectors (not exported from storage/index.mjs).
- * @param {Uint8Array} dek
- * @param {string} devH
- * @param {LayoutLogSegmentRecord} record
- * @param {Uint8Array} nonce
- */
-export function encryptLogSegmentWithFixedNonceForTests(dek, devH, record, nonce) {
-  assertDevH(devH);
-  const aad = buildLayoutLogSegmentAad(devH, record.seq);
-  const padded = padSegmentPlaintext(serializeLogSegmentRecord(record));
-  return encryptAeadWithFixedNonce(dek, padded, aad, nonce);
 }
 
 /**
@@ -467,11 +463,19 @@ export function parseStrictVaultKdfParams(kdf) {
   const iterations = Number(kdf.iterations);
   const parallelism = Number(kdf.parallelism);
   const hashLength = Number(kdf.hashLength);
-  if (!Number.isSafeInteger(memorySizeKiB) || memorySizeKiB < VAULT_KDF_PARAMS.memorySizeKiB) {
-    throw new Error("vault.json kdf memorySizeKiB below minimum");
+  if (
+    !Number.isSafeInteger(memorySizeKiB) ||
+    memorySizeKiB < VAULT_KDF_PARAMS.memorySizeKiB ||
+    memorySizeKiB > KDF_MAX_MEMORY_KIB
+  ) {
+    throw new Error("vault.json kdf memorySizeKiB out of allowed range");
   }
-  if (!Number.isSafeInteger(iterations) || iterations < VAULT_KDF_PARAMS.iterations) {
-    throw new Error("vault.json kdf iterations below minimum");
+  if (
+    !Number.isSafeInteger(iterations) ||
+    iterations < VAULT_KDF_PARAMS.iterations ||
+    iterations > KDF_MAX_ITERATIONS
+  ) {
+    throw new Error("vault.json kdf iterations out of allowed range");
   }
   if (!Number.isSafeInteger(parallelism) || parallelism < 1 || parallelism > 8) {
     throw new Error("vault.json kdf parallelism out of range");
@@ -506,7 +510,27 @@ export function parseStrictWrappedDekBytes(wrappedDekBytes) {
       throw new Error(`wrapped DEK contains forbidden field: ${key}`);
     }
   }
-  return parseWrappedDekRecord(wrappedDekBytes);
+  const record = parseWrappedDekRecord(wrappedDekBytes);
+  const envelope = record.envelope;
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    throw new Error("Invalid wrapped DEK envelope");
+  }
+  for (const key of Object.keys(envelope)) {
+    if (!ENVELOPE_FIELD_NAMES.has(key)) {
+      throw new Error(`wrapped DEK envelope contains forbidden field: ${key}`);
+    }
+  }
+  return record;
+}
+
+/**
+ * @param {string} passphrase
+ * @param {string} vaultJsonText
+ */
+export async function unwrapDekFromVaultJson(passphrase, vaultJsonText) {
+  const parsed = decodeVaultJson(vaultJsonText);
+  const kek = await deriveVaultKekWithParams(passphrase, parsed.kdfSalt, parsed.kdf);
+  return unwrapDek(parsed.wrappedDekBytes, kek);
 }
 
 /**

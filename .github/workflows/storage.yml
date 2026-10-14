@@ -36,6 +36,8 @@ jobs:
           node --check apps/js-sdk/lib/storage/storage-object-move.mjs
           node --check apps/js-sdk/lib/storage/contract-suite.mjs
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
+          node --check apps/js-sdk/lib/object-store-sync.mjs
+          node --check apps/js-sdk/lib/sync-cursor.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
           node --check apps/js-sdk/lib/storage/secret-store-private-dir.mjs

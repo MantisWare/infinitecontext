@@ -26,6 +26,11 @@ function normalizeKey(key) {
   return normalized;
 }
 
+/** Layout log segments and sync meta are raw JSON/AEAD bytes, not vault storage wrappers. */
+function isInternalLayoutObjectKey(key) {
+  return /\/ic-v1\/(?:log\/[0-9A-HJKMNP-TV-Z]{26}\/\d{12}\.enc|sync\/meta\.json)$/.test(key);
+}
+
 /** @param {string} key @param {Uint8Array} body @param {number} revision */
 function computeEtag(key, body, revision) {
   const digest = storageObjectDigest(body);
@@ -84,7 +89,9 @@ export function createMemoryStorageAdapter(options = {}) {
       assertNotAborted(requestOptions.signal);
       const { normalized, entry } = readEntry(key);
       if (!entry) return null;
-      verifyStorageObjectForKey(entry.body, normalized);
+      if (!isInternalLayoutObjectKey(normalized)) {
+        verifyStorageObjectForKey(entry.body, normalized);
+      }
       return { body: entry.body.slice(), etag: entry.etag, size: entry.body.length };
     },
 
@@ -98,8 +105,10 @@ export function createMemoryStorageAdapter(options = {}) {
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
       const { normalized, entry } = readEntry(key);
-      assertStorageCiphertext(body, { objectKey: normalized });
-      scanStorageObjectForLeaks(normalized, body);
+      if (!isInternalLayoutObjectKey(normalized)) {
+        assertStorageCiphertext(body, { objectKey: normalized });
+        scanStorageObjectForLeaks(normalized, body);
+      }
       if (body.length > maxObjectBytes) {
         throw new Error(`Object exceeds maxObjectBytes (${maxObjectBytes})`);
       }

@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  normalizeVectorSyncCursor,
+  parseStoredSyncCursor,
+  serializeVectorSyncCursor,
+} from "../../js-sdk/lib/sync-cursor.mjs";
+
 import { expandHome } from "./utils.mjs";
 
 const DEFAULT_DB_PATH = "~/.infinitecontext/daemon.db";
@@ -160,18 +166,31 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
 
   function migrateDaemonPullCursor() {
     const current = stmt.getOffset.get("sync:pull_cursor");
-    const cursor = current ? parseNumber(current.offset_value, 0) : 0;
-    if (cursor > 0) return;
+    if (current?.offset_value) {
+      const parsed = parseStoredSyncCursor(current.offset_value);
+      if (parsed.kind === "vector" && Object.keys(parsed.v).length > 0) {
+        return;
+      }
+      if (typeof current.offset_value === "string" && current.offset_value.trim().startsWith("{")) {
+        return;
+      }
+      const numeric = parseNumber(current.offset_value, 0);
+      if (numeric > 0) return;
+    }
     const icDir = path.dirname(resolvedPath);
     const legacy = readJsonState(path.join(icDir, "sync-state.json"));
     const legacyCursor = legacy && typeof legacy === "object" ? parseNumber(legacy.cursor, 0) : 0;
     if (legacyCursor > 0) {
-      stmt.setOffset.run("sync:pull_cursor", legacyCursor);
+      stmt.setOffset.run("sync:pull_cursor", String(legacyCursor));
       return;
     }
     const cli = readJsonState(path.join(icDir, "sync-cli-state.json"));
+    if (cli && typeof cli === "object" && cli.cursor && typeof cli.cursor === "object") {
+      stmt.setOffset.run("sync:pull_cursor", serializeVectorSyncCursor(normalizeVectorSyncCursor(cli.cursor)));
+      return;
+    }
     const cliCursor = cli && typeof cli === "object" ? parseNumber(cli.cursor, 0) : 0;
-    if (cliCursor > 0) stmt.setOffset.run("sync:pull_cursor", cliCursor);
+    if (cliCursor > 0) stmt.setOffset.run("sync:pull_cursor", String(cliCursor));
   }
 
   migrateDaemonPullCursor();
@@ -196,10 +215,21 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     },
     getSyncPullCursor() {
       const row = stmt.getOffset.get("sync:pull_cursor");
-      return row ? parseNumber(row.offset_value, 0) : 0;
+      if (!row) return normalizeVectorSyncCursor(0);
+      const text = String(row.offset_value ?? "");
+      if (text.trim().startsWith("{")) {
+        return parseStoredSyncCursor(text);
+      }
+      const numeric = parseNumber(text, 0);
+      if (numeric > 0) return numeric;
+      return normalizeVectorSyncCursor(0);
     },
     setSyncPullCursor(value) {
-      stmt.setOffset.run("sync:pull_cursor", parseNumber(value, 0));
+      if (value && typeof value === "object" && value.kind === "vector") {
+        stmt.setOffset.run("sync:pull_cursor", serializeVectorSyncCursor(normalizeVectorSyncCursor(value)));
+        return;
+      }
+      stmt.setOffset.run("sync:pull_cursor", String(parseNumber(value, 0)));
     },
     getContextCache(cacheKey) {
       const row = stmt.getContextCache.get(String(cacheKey ?? ""));

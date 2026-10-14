@@ -126,17 +126,21 @@ function serializeKdfParams() {
 		hashLength: VAULT_KDF_PARAMS.hashLength
 	};
 }
-async function deriveVaultKek(passphrase, salt) {
+async function deriveVaultKekWithParams(passphrase, salt, kdfParams) {
+	const params = kdfParams ?? VAULT_KDF_PARAMS;
 	const hash = await argon2id({
 		password: passphrase,
 		salt,
-		parallelism: VAULT_KDF_PARAMS.parallelism,
-		iterations: VAULT_KDF_PARAMS.iterations,
-		memorySize: VAULT_KDF_PARAMS.memorySizeKiB,
-		hashLength: VAULT_KDF_PARAMS.hashLength,
+		parallelism: params.parallelism,
+		iterations: params.iterations,
+		memorySize: params.memorySizeKiB,
+		hashLength: params.hashLength,
 		outputType: "binary"
 	});
 	return hash instanceof Uint8Array ? hash : new Uint8Array(hash);
+}
+async function deriveVaultKek(passphrase, salt) {
+	return deriveVaultKekWithParams(passphrase, salt, VAULT_KDF_PARAMS);
 }
 /** Recovery key material is used directly as a 256-bit KEK (high entropy). */
 function recoveryKeyToKek(recoveryKeyBytes) {
@@ -675,4 +679,4 @@ function parseChainLinkB64(value) {
 }
 
 //#endregion
-export { AEAD_ALG, CHAIN_SCHEME_VERSION, CLEARTEXT_METADATA_KEYS, CLIENT_NODE_ID_PATTERN, ChainVerificationError, DEK_BYTES, DecryptionFailedError, ENCRYPTED_CONTENT_MARKER, ENVELOPE_VERSION, PassphrasePolicyError, RECOVERY_KEY_BYTES, ROOT_METADATA_AAD_FIELD, SERVER_MSG_ID_PATTERN, VAULT_KDF_PARAMS, WRAP_ALG, assertStrictEncryptedEnvelope, assertVaultPassphrase, base64ToBytes, bufferToWrappedDek, buildNodeAad, buildRootMetadataContextAad, bytesToBase64, bytesToBase64Url, computeChainLink, computeDekProof, constantTimeEqual, contextRootMetadata, createVaultCryptoMaterial, decodeRecoveryKey, decryptAead, decryptNodeContent, decryptNodeMetadata, dekProofToBase64, deleteBodyMetadata, deriveContextChainKey, deriveVaultKek, encodeRecoveryKey, encryptAead, encryptNodeContent, encryptNodeMetadata, envelopeContentDigest, extractMessageWrites, generateClientNodeId, isClientNodeId, isEncryptedContent, isEncryptedWritePayload, isVaultMessageWriteId, metadataHasSensitivePlaintext, parseChainLinkB64, parseDekVersion, parseWrappedDekRecord, pickCleartextMetadata, randomBytes, recoveryKeyToKek, rewrapDekWithNewPassphrase, rotateRecoveryWrap, serializeKdfParams, splitMetadata, stableClientNodeId, unwrapDek, validateEncryptedWriteShape, vaultMessageRowViolations, verifyContextMessageChain, verifyDekProof, verifyDekProofBytes, wrapDek, wrappedDekToBuffer };
+export { AEAD_ALG, CHAIN_SCHEME_VERSION, CLEARTEXT_METADATA_KEYS, CLIENT_NODE_ID_PATTERN, ChainVerificationError, DEK_BYTES, DecryptionFailedError, ENCRYPTED_CONTENT_MARKER, ENVELOPE_VERSION, PassphrasePolicyError, RECOVERY_KEY_BYTES, ROOT_METADATA_AAD_FIELD, SERVER_MSG_ID_PATTERN, VAULT_KDF_PARAMS, WRAP_ALG, assertStrictEncryptedEnvelope, assertVaultPassphrase, base64ToBytes, bufferToWrappedDek, buildNodeAad, buildRootMetadataContextAad, bytesToBase64, bytesToBase64Url, computeChainLink, computeDekProof, constantTimeEqual, contextRootMetadata, createVaultCryptoMaterial, decodeRecoveryKey, decryptAead, decryptNodeContent, decryptNodeMetadata, dekProofToBase64, deleteBodyMetadata, deriveContextChainKey, deriveVaultKek, deriveVaultKekWithParams, encodeRecoveryKey, encryptAead, encryptNodeContent, encryptNodeMetadata, envelopeContentDigest, extractMessageWrites, generateClientNodeId, isClientNodeId, isEncryptedContent, isEncryptedWritePayload, isVaultMessageWriteId, metadataHasSensitivePlaintext, parseChainLinkB64, parseDekVersion, parseWrappedDekRecord, pickCleartextMetadata, randomBytes, recoveryKeyToKek, rewrapDekWithNewPassphrase, rotateRecoveryWrap, serializeKdfParams, splitMetadata, stableClientNodeId, unwrapDek, validateEncryptedWriteShape, vaultMessageRowViolations, verifyContextMessageChain, verifyDekProof, verifyDekProofBytes, wrapDek, wrappedDekToBuffer };

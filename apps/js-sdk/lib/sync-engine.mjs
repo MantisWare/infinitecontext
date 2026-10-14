@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
+import { normalizeVectorSyncCursor } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
 
@@ -60,15 +61,28 @@ function writeSyncState(state) {
 
 function readCliSyncState() {
   const state = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
-  return { cursor: Number(state.cursor ?? 0) };
+  const raw = state.cursor;
+  if (raw && typeof raw === "object" && raw.kind === "vector") {
+    return { cursor: normalizeVectorSyncCursor(raw) };
+  }
+  return { cursor: Number(raw ?? 0) };
 }
 
 function writeCliSyncState(state) {
-  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(state.cursor ?? 0) });
+  const cursor = state.cursor;
+  if (cursor && typeof cursor === "object" && cursor.kind === "vector") {
+    writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: normalizeVectorSyncCursor(cursor) });
+    return;
+  }
+  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(cursor ?? 0) });
 }
 
 export function getSyncCursor() {
-  return readCliSyncState().cursor;
+  const cursor = readCliSyncState().cursor;
+  if (cursor && typeof cursor === "object") {
+    return cursor;
+  }
+  return Number(cursor ?? 0);
 }
 
 export function readLocalSyncState() {
@@ -264,7 +278,10 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
       writeCliSyncState({ cursor: value });
     });
 
-  let since = Number(readCursor() ?? 0);
+  let since = readCursor() ?? 0;
+  if (typeof since !== "object") {
+    since = Number(since ?? 0);
+  }
   let total = 0;
   let hasMore = true;
   let lastPage = null;
@@ -284,10 +301,15 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
           store.applySyncChange(change);
         }
       }
-      since = change.sequence;
+      if (typeof since === "number") {
+        since = change.sequence;
+      }
       total += 1;
     }
     if (replica) persistReplica();
+    if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
+      since = lastPage.next_since;
+    }
     writeCursor(since);
     hasMore = Boolean(lastPage.has_more);
     if ((lastPage.changes ?? []).length === 0) break;
@@ -309,7 +331,7 @@ export function resolveDeleteBaseSequence({ explicitBaseSequence } = {}) {
     return explicitBaseSequence;
   }
   const local = getSyncCursor();
-  if (local > 0) return local;
+  if (typeof local === "number" && local > 0) return local;
   return null;
 }
 
