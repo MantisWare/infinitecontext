@@ -43,8 +43,19 @@ export function parseGenerationFromSecretsFileName(name) {
   return Number.isSafeInteger(gen) && gen > 0 ? gen : null;
 }
 
+/** @type {((rootDir: string) => { gen: number, path: string }[]) | null} */
+let listGenerationSecretPathsOverrideForTests = null;
+
+/** @param {((rootDir: string) => { gen: number, path: string }[]) | null} fn */
+export function setListGenerationSecretPathsOverrideForTests(fn) {
+  listGenerationSecretPathsOverrideForTests = fn;
+}
+
 /** @param {string} rootDir */
 export function listGenerationSecretPaths(rootDir) {
+  if (listGenerationSecretPathsOverrideForTests) {
+    return listGenerationSecretPathsOverrideForTests(rootDir);
+  }
   /** @type {{ gen: number, path: string }[]} */
   const found = [];
   let entries;
@@ -187,6 +198,9 @@ function loadLatestSecretsMapInner(rootDir, kek, retriedAfterMissingGen) {
       error.code === "store_not_found"
     ) {
       return loadLatestSecretsMapInner(rootDir, kek, true);
+    }
+    if (error instanceof StorageError && error.code === "store_not_found") {
+      throw error;
     }
     if (error instanceof StorageError && error.code === "corrupt_secret_store") {
       throw error;

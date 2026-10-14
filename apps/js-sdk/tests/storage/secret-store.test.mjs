@@ -19,13 +19,18 @@ import {
 import {
   formatGenerationSecretsFileName,
   listGenerationSecretPaths,
+  loadLatestSecretsMap,
+  setListGenerationSecretPathsOverrideForTests,
 } from "../../lib/storage/secret-store-file-generations.mjs";
 import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
 import {
   isHardLinkCommitSupported,
   resetHardLinkProbeCacheForTests,
 } from "../../lib/storage/secret-store-file-link.mjs";
-import { ensurePrivateDir } from "../../lib/storage/secret-store-private-dir.mjs";
+import {
+  ensurePrivateDir,
+  setChmodSyncImplForTests,
+} from "../../lib/storage/secret-store-private-dir.mjs";
 import {
   isLockStaleByMtimeForTests,
   STALE_LOCK_MTIME_MS,
@@ -455,6 +460,55 @@ describe("resolveSecretStoreBackend auto", () => {
         /storage-secrets\.backend is "secret-service"/.test(error.message),
     );
     fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("loadLatestSecretsMap throws store_not_found when generation file stays missing", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-missing-gen-"));
+    const kek = new Uint8Array(32);
+    kek.fill(7);
+    const missingPath = path.join(rootDir, formatGenerationSecretsFileName(1));
+    setListGenerationSecretPathsOverrideForTests(() => [{ gen: 1, path: missingPath }]);
+    try {
+      assert.throws(
+        () => loadLatestSecretsMap(rootDir, kek),
+        (error) =>
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "store_not_found" &&
+          error.code !== "corrupt_secret_store",
+      );
+    } finally {
+      setListGenerationSecretPathsOverrideForTests(null);
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ensurePrivateDir ignores EPERM from chmod", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-chmod-eperm-"));
+    setChmodSyncImplForTests(() => {
+      const error = new Error("chmod not permitted");
+      Object.assign(error, { code: "EPERM" });
+      throw error;
+    });
+    try {
+      assert.doesNotThrow(() => ensurePrivateDir(dir));
+    } finally {
+      setChmodSyncImplForTests(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ensurePrivateDir succeeds when parent directory is 0555", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-parent555-"));
+    const store = path.join(parent, "store");
+    fs.mkdirSync(store, { mode: 0o755 });
+    fs.chmodSync(parent, 0o555);
+    try {
+      assert.doesNotThrow(() => ensurePrivateDir(store));
+    } finally {
+      fs.chmodSync(parent, 0o700);
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("ensurePrivateDir chmods an existing directory to 0700", () => {
