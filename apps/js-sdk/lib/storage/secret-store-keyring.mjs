@@ -1,5 +1,8 @@
 import { StorageError } from "./errors.mjs";
-import { isLinuxSecretServiceOnSessionBus } from "./secret-store-linux-dbus.mjs";
+import {
+  assertDbusSendAvailableOnLinux,
+  isLinuxSecretServiceOnSessionBus,
+} from "./secret-store-linux-dbus.mjs";
 import { platformKeychainMarkerId } from "./secret-store-marker.mjs";
 import { probeKeyringSecretService } from "./secret-store-keyring-probe.mjs";
 import { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
@@ -78,6 +81,9 @@ export async function assertKeyringBackendReady(options = {}) {
   const localMarker = platformKeychainMarkerId();
   const markedLabel = markedBackend ?? localMarker ?? "keyring";
 
+  if (process.platform === "linux") {
+    assertDbusSendAvailableOnLinux();
+  }
   if (process.platform === "linux" && !process.env.DBUS_SESSION_BUS_ADDRESS?.trim()) {
     throw keyringUnavailableError(
       forExplicitKeyringMode,

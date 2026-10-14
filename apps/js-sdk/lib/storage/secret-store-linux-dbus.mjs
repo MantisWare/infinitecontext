@@ -1,7 +1,32 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+
+import { StorageError } from "./errors.mjs";
 
 const DEFAULT_DBUS_TIMEOUT_MS = 2_000;
 const SECRET_SERVICE_WELL_KNOWN = "org.freedesktop.secrets";
+
+/** @returns {boolean} */
+function isDbusSendAvailable() {
+  if (process.platform === "win32") {
+    return spawnSync("where", ["dbus-send"], { stdio: "ignore" }).status === 0;
+  }
+  return spawnSync("sh", ["-c", "command -v dbus-send"], { stdio: "ignore" }).status === 0;
+}
+
+/**
+ * @throws {StorageError} when Linux Secret Service checks need dbus-send but it is missing
+ */
+export function assertDbusSendAvailableOnLinux() {
+  if (process.platform !== "linux") {
+    return;
+  }
+  if (!isDbusSendAvailable()) {
+    throw new StorageError(
+      "Linux Secret Service detection requires the dbus-send CLI (D-Bus tools package). Install dbus-x11 or dbus.",
+      "not_supported",
+    );
+  }
+}
 
 /**
  * Whether org.freedesktop.secrets is reachable on the session D-Bus (Linux only).
@@ -14,6 +39,9 @@ export function isLinuxSecretServiceOnSessionBus(timeoutMs = DEFAULT_DBUS_TIMEOU
   }
   const address = process.env.DBUS_SESSION_BUS_ADDRESS?.trim();
   if (!address) {
+    return Promise.resolve(false);
+  }
+  if (!isDbusSendAvailable()) {
     return Promise.resolve(false);
   }
   return new Promise((resolve) => {
@@ -54,7 +82,13 @@ export function isLinuxSecretServiceOnSessionBus(timeoutMs = DEFAULT_DBUS_TIMEOU
       finish(false);
     }, timeoutMs);
 
-    child.on("error", () => finish(false));
+    child.on("error", (error) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        finish(false);
+        return;
+      }
+      finish(false);
+    });
     child.on("exit", (code) => {
       if (code !== 0) {
         finish(false);
@@ -63,4 +97,13 @@ export function isLinuxSecretServiceOnSessionBus(timeoutMs = DEFAULT_DBUS_TIMEOU
       finish(/boolean\s+true/i.test(stdout));
     });
   });
+}
+
+/**
+ * Like {@link isLinuxSecretServiceOnSessionBus} but throws when dbus-send is missing on Linux.
+ * @param {number} [timeoutMs]
+ */
+export async function requireLinuxSecretServiceOnSessionBus(timeoutMs = DEFAULT_DBUS_TIMEOUT_MS) {
+  assertDbusSendAvailableOnLinux();
+  return isLinuxSecretServiceOnSessionBus(timeoutMs);
 }

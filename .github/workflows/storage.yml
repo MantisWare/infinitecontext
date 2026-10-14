@@ -30,6 +30,7 @@ jobs:
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-heartbeat-lock.mjs
           node --check apps/js-sdk/lib/storage/secret-store-linux-dbus.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe-child.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe.mjs
@@ -47,7 +48,17 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq dbus-x11 gnome-keyring
           dbus-run-session -- bash -ec '
-            eval "$(echo -n "" | gnome-keyring-daemon --unlock --components=secrets 2>/dev/null || true)"
+            cleanup() {
+              killall gcr-prompter 2>/dev/null || true
+            }
+            trap cleanup EXIT
+            eval "$(echo -n "ci-pass" | gnome-keyring-daemon --unlock --components=secrets 2>/dev/null || true)"
+            export IC_REQUIRE_SECRET_SERVICE=1
             export INFINITECONTEXT_SECRET_STORE=keyring
-            node --test --test-concurrency=1 apps/js-sdk/tests/storage/secret-store-keyring-ci.test.mjs
+            node --test --test-concurrency=1 apps/js-sdk/tests/storage/secret-store-keyring-ci.test.mjs 2>&1 | tee /tmp/ic-keyring-ci.log
+            grep -q "IC_SECRET_SERVICE_CI: passed" /tmp/ic-keyring-ci.log
+            if grep -q "# SKIP" /tmp/ic-keyring-ci.log; then
+              echo "Keyring CI test skipped but IC_REQUIRE_SECRET_SERVICE=1"
+              exit 1
+            fi
           '

@@ -10,15 +10,17 @@ import {
   resolveSecretStoreBackend,
   SecretStore,
 } from "../../lib/storage/secret-store.mjs";
+import { assertDbusSendAvailableOnLinux } from "../../lib/storage/secret-store-linux-dbus.mjs";
 import { keyringBackendAvailable } from "../../lib/storage/secret-store-keyring.mjs";
 import {
   probeKeyringSecretService,
   resetKeyringProbeCacheForTests,
 } from "../../lib/storage/secret-store-keyring-probe.mjs";
+import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
 import {
-  storageSecretFilePaths,
-  tryRecoverStaleLockForTests,
-} from "../../lib/storage/secret-store-file.mjs";
+  isLockStaleByMtimeForTests,
+  STALE_LOCK_MTIME_MS,
+} from "../../lib/storage/secret-store-heartbeat-lock.mjs";
 import {
   backendMarkerPath,
   readBackendMarker,
@@ -109,34 +111,23 @@ describe("SecretStore encrypted file backend", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it("does not steal a lock held by a live pid on this host", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-live-lock-"));
+  it("does not treat a fresh lock as stale by mtime", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-fresh-lock-"));
     const { lockPath } = storageSecretFilePaths(rootDir);
     fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
-    const payload = `${JSON.stringify({
-      pid: process.pid,
-      hostname: os.hostname(),
-      acquiredAt: 1,
-    })}\n`;
-    fs.writeFileSync(lockPath, payload, { mode: 0o600 });
-    assert.equal(tryRecoverStaleLockForTests(lockPath), false);
-    assert.ok(fs.existsSync(lockPath));
+    fs.writeFileSync(lockPath, "fresh-holder-token", { mode: 0o600 });
+    assert.equal(isLockStaleByMtimeForTests(lockPath), false);
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it("recovers from a stale lock left by a dead process", async () => {
+  it("recovers from a stale heartbeat lock (old mtime)", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-stale-lock-"));
     const { lockPath } = storageSecretFilePaths(rootDir);
     fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      lockPath,
-      `${JSON.stringify({
-        pid: 9_999_999,
-        hostname: os.hostname(),
-        acquiredAt: Date.now(),
-      })}\n`,
-      { mode: 0o600 },
-    );
+    fs.writeFileSync(lockPath, "stale-heartbeat-token", { mode: 0o600 });
+    const stale = new Date(Date.now() - STALE_LOCK_MTIME_MS - 1_000);
+    fs.utimesSync(lockPath, stale, stale);
+    assert.equal(isLockStaleByMtimeForTests(lockPath), true);
     const store = new SecretStore({ mode: "file", rootDir });
     await store.set("after-stale-lock", new Uint8Array([7, 7]));
     assert.deepEqual(await store.get("after-stale-lock"), new Uint8Array([7, 7]));
@@ -308,6 +299,26 @@ describe("resolveSecretStoreBackend auto", () => {
       }
       resetKeyringProbeCacheForTests();
       fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("on Linux reports missing dbus-send CLI", () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+    const prevPath = process.env.PATH;
+    try {
+      process.env.PATH = "/usr/bin/nonexistent-empty-path";
+      assert.throws(
+        () => assertDbusSendAvailableOnLinux(),
+        (error) =>
+          error instanceof Error &&
+          /dbus-send/.test(error.message) &&
+          "code" in error &&
+          error.code === "not_supported",
+      );
+    } finally {
+      process.env.PATH = prevPath;
     }
   });
 

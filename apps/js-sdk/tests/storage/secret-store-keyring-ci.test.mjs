@@ -9,10 +9,15 @@ import { readBackendMarker } from "../../lib/storage/secret-store-marker.mjs";
 import { platformKeychainMarkerId, SecretStore } from "../../lib/storage/secret-store.mjs";
 
 const SAMPLE_SECRET = new TextEncoder().encode("ci-keyring-round-trip");
+const REQUIRE_SECRET_SERVICE = process.env.IC_REQUIRE_SECRET_SERVICE === "1";
 
 describe("Secret store keyring (CI Secret Service)", () => {
   it("probe succeeds and round-trips a secret via Secret Service", async (t) => {
-    if (!(await probeKeyringSecretService())) {
+    const probeOk = await probeKeyringSecretService();
+    if (!probeOk) {
+      if (REQUIRE_SECRET_SERVICE) {
+        assert.fail("IC_REQUIRE_SECRET_SERVICE=1 but Secret Service probe failed");
+      }
       t.skip("Secret Service probe failed in this environment");
       return;
     }
@@ -31,6 +36,7 @@ describe("Secret store keyring (CI Secret Service)", () => {
     assert.deepEqual(await store.get(name), SAMPLE_SECRET);
     assert.equal(await store.delete(name), true);
     assert.equal(await store.get(name), null);
+    console.log("IC_SECRET_SERVICE_CI: passed round-trip via Secret Service");
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 });
