@@ -114,11 +114,15 @@ export function resolveLocalObjectStoreRootDir(opts = {}) {
  *   layoutPrefix?: string,
  *   localState?: { load: Function, save: Function },
  *   sync?: { mode?: 'cli' | 'daemon', persist?: boolean, cliStatePath?: string, dbPath?: string },
+ *   config?: Record<string, unknown>,
  *   env?: NodeJS.ProcessEnv,
  * }} [options]
  */
 export async function createLocalObjectStore(options = {}) {
-  const rootDir = path.resolve(options.rootDir ?? resolveLocalObjectStoreRootDir({ env: options.env }));
+  const rootDir = path.resolve(
+    options.rootDir ??
+      resolveLocalObjectStoreRootDir({ env: options.env, config: options.config }),
+  );
   const adapter = createFilesystemStorageAdapter({
     rootDir,
     id: options.id ?? LOCAL_OBJECT_STORE_BACKEND_ID,

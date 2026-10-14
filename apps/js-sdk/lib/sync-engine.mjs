@@ -11,8 +11,8 @@ import {
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 import {
-  refreshReplicaConflictKindsForMessage,
-  upsertReplicaLoserConflict,
+  recordMessageMutationLog,
+  recomputeReplicaConflictsForMessage,
 } from "./object-store-replica-conflicts.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
@@ -296,55 +296,24 @@ export function applySyncChangeToReplica(replica, change, persist) {
         continue;
       }
 
+      recordMessageMutationLog(replica, key, {
+        context_id: ctxId,
+        op,
+        hlc: hlcTuple,
+        data: row,
+        devH: changeSource.devH,
+        seq: changeSource.seq,
+        index: changeSource.index,
+      });
+
       if (existing?.tombstone) {
-        upsertReplicaLoserConflict(replica, {
-          context_id: ctxId,
-          client_node_id: key,
-          op,
-          hlc: change.hlc ?? null,
-          loser_hlc: hlcTuple,
-          data: row,
-          sequence,
-          created_at: change.created_at,
-          loser_dev_h: changeSource.devH,
-          loser_seq: changeSource.seq,
-          loser_index: changeSource.index,
-        });
+        recomputeReplicaConflictsForMessage(replica, key);
         continue;
       }
 
       if (existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
-        upsertReplicaLoserConflict(replica, {
-          context_id: ctxId,
-          client_node_id: key,
-          op,
-          winner_hlc: existing._hlc,
-          loser_hlc: hlcTuple,
-          data: row,
-          sequence,
-          created_at: change.created_at,
-          loser_dev_h: changeSource.devH,
-          loser_seq: changeSource.seq,
-          loser_index: changeSource.index,
-        });
+        recomputeReplicaConflictsForMessage(replica, key);
         continue;
-      }
-
-      if (existing?._hlc && shouldApplyLww(existing, hlcTuple)) {
-        const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
-        upsertReplicaLoserConflict(replica, {
-          context_id: ctxId,
-          client_node_id: key,
-          op: existing.op ?? op,
-          winner_hlc: hlcTuple,
-          loser_hlc: existing._hlc,
-          data: existing.payload ?? null,
-          sequence,
-          created_at: change.created_at,
-          loser_dev_h: prevSource.devH,
-          loser_seq: prevSource.seq,
-          loser_index: prevSource.index,
-        });
       }
 
       replica.messages[key] = {
@@ -356,6 +325,7 @@ export function applySyncChangeToReplica(replica, change, persist) {
         _hlc: hlcTuple,
         _source: { ...changeSource },
       };
+      recomputeReplicaConflictsForMessage(replica, key);
     }
     persist(replica);
     return;
@@ -363,6 +333,7 @@ export function applySyncChangeToReplica(replica, change, persist) {
 
   if (op === "message_delete") {
     const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
+    const deleteBase = change.base_vector ?? payload.base_vector ?? null;
     for (const id of deletedIds) {
       if (!id) continue;
       const key = String(id);
@@ -371,23 +342,16 @@ export function applySyncChangeToReplica(replica, change, persist) {
         delete replica.messages[key];
         continue;
       }
-      const existing = replica.messages[key];
-      if (existing && !existing.tombstone && existing.payload) {
-        const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
-        upsertReplicaLoserConflict(replica, {
-          context_id: ctxId,
-          client_node_id: key,
-          op: existing.op ?? "message_update",
-          hlc: existing._hlc ?? null,
-          loser_hlc: existing._hlc ?? null,
-          data: existing.payload,
-          sequence,
-          created_at: change.created_at,
-          loser_dev_h: prevSource.devH,
-          loser_seq: prevSource.seq,
-          loser_index: prevSource.index,
-        });
-      }
+      recordMessageMutationLog(replica, key, {
+        context_id: ctxId,
+        op: "message_delete",
+        hlc: hlcTuple,
+        data: null,
+        devH: changeSource.devH,
+        seq: changeSource.seq,
+        index: changeSource.index,
+        delete_base_vector: deleteBase,
+      });
       replica.messages[key] = {
         context_id: ctxId,
         tombstone: true,
@@ -396,7 +360,7 @@ export function applySyncChangeToReplica(replica, change, persist) {
         _hlc: hlcTuple,
         _source: { ...changeSource },
       };
-      refreshReplicaConflictKindsForMessage(replica, key);
+      recomputeReplicaConflictsForMessage(replica, key);
     }
     persist(replica);
   }

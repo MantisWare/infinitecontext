@@ -7,7 +7,11 @@ import process from "node:process";
 export const LOCK_HEARTBEAT_MS = 15_000;
 export const LOCK_STALE_MS = 60_000;
 export const LOCK_PARTIAL_GRACE_MS = 5_000;
-export const OBJECT_STORE_STATE_TMP_PATTERN = /^.+\.tmp-\d+-[0-9a-f]+$/i;
+/** @param {string} basename */
+export function objectStoreStateTmpPatternForBasename(basename) {
+  const escaped = basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}\\.tmp-(\\d+)-[0-9a-f]+$`, "i");
+}
 const LOCK_ACQUIRE_MS = 10_000;
 const QUARANTINE_SUFFIX = ".quarantine.";
 
@@ -236,14 +240,23 @@ export function releaseObjectStoreStateLock(fd, lockPath) {
   }
 }
 
-/** @param {string} dir @param {number} [maxAgeMs] */
-export function cleanupOrphanObjectStoreTmpFiles(dir, maxAgeMs = 10 * 60 * 1000) {
+/** @param {string} stateFilePath @param {number} [maxAgeMs] */
+export function cleanupOrphanObjectStoreTmpFiles(stateFilePath, maxAgeMs = 10 * 60 * 1000) {
+  const dir = path.dirname(stateFilePath);
+  const basename = path.basename(stateFilePath);
   if (!fs.existsSync(dir)) return;
+  const pattern = objectStoreStateTmpPatternForBasename(basename);
   const now = Date.now();
   for (const name of fs.readdirSync(dir)) {
-    if (!OBJECT_STORE_STATE_TMP_PATTERN.test(name)) continue;
+    const match = pattern.exec(name);
+    if (!match) continue;
     const full = path.join(dir, name);
+    const pid = Number(match[1]);
     try {
+      if (Number.isSafeInteger(pid) && pid > 0 && !isPidAlive(pid)) {
+        fs.unlinkSync(full);
+        continue;
+      }
       const stat = fs.statSync(full);
       if (now - stat.mtimeMs > maxAgeMs) fs.unlinkSync(full);
     } catch {

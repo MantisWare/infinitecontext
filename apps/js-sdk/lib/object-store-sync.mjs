@@ -351,6 +351,8 @@ function hostedPayloadFromMutation(item) {
   if (m.op === "message_delete") {
     const ids = payload.ids;
     payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
+    const baseVector = m.base_vector ?? payload.base_vector;
+    if (baseVector) payload.base_vector = baseVector;
   }
   if (m.op === "context_create") {
     payload.context_id = payload.context_id ?? m.context_id;
@@ -614,6 +616,10 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       source_seq: item.seq,
       source_index: item.index,
     };
+    if (m.op === "message_delete") {
+      const baseVector = m.base_vector ?? payload.base_vector;
+      if (baseVector) change.base_vector = baseVector;
+    }
     changes.push(change);
     state.ledger.push({
       headSum: computeHeadSequenceFromTrustedHeads(state),

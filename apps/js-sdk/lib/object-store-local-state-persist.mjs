@@ -223,7 +223,7 @@ async function saveObjectStoreStateWithLock(stateFilePath, incoming) {
 export function createCliFileObjectStoreLocalState(stateFilePath = defaultObjectStoreSyncStatePath()) {
   const legacyCli = path.join(path.dirname(stateFilePath), LEGACY_CLI_STATE_FILENAME);
   migrateLegacyObjectStoreStateIfNeeded(stateFilePath, legacyCli);
-  cleanupOrphanObjectStoreTmpFiles(path.dirname(stateFilePath));
+  cleanupOrphanObjectStoreTmpFiles(stateFilePath);
 
   return {
     load() {
