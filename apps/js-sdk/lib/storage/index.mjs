@@ -23,7 +23,10 @@ export {
 } from "./local-object-store.mjs";
 export {
   IC_LAYOUT_DIR,
+  IC_LAYOUT_LOG_AAD_VERSION,
   IC_VAULT_JSON_VERSION,
+  LayoutIntegrityError,
+  LayoutPaddingError,
   buildLayoutLogSegmentAad,
   buildVaultJsonWithWrappedDek,
   decodeVaultJson,
@@ -38,6 +41,7 @@ export {
   lockRelativePath,
   logSegmentRelativePath,
   manifestEncRelativePath,
+  normalizeDeviceUuid,
   snapEncRelativePath,
   vaultJsonRelativePath,
   verifyLogSegmentChain,
