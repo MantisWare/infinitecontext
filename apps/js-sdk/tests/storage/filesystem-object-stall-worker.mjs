@@ -39,6 +39,10 @@ try {
     console.log("STALL_RETRY");
     process.exit(2);
   }
+  if (error && typeof error === "object" && "code" in error && error.code === "precondition_failed") {
+    console.log("PreconditionFailedError");
+    process.exit(3);
+  }
   throw error;
 } finally {
   setFilesystemObjectTestStallBeforeLinkMsForTests(0);

@@ -43,9 +43,20 @@ async function withObjectsStoreLock(rootDir, fn) {
   rejectSymlinkInStoreRoot(rootDir);
   const handle = await acquireHeartbeatLock(rootDir, OBJECTS_LOCK_FILENAME);
   try {
-    return await fn(handle.assertHeld);
-  } finally {
+    const result = await fn(handle.assertHeld);
     handle.release();
+    return result;
+  } catch (error) {
+    try {
+      handle.release();
+    } catch (releaseError) {
+      if (
+        !(releaseError instanceof StorageError && releaseError.code === "lock_compromised")
+      ) {
+        throw releaseError;
+      }
+    }
+    throw error;
   }
 }
 
