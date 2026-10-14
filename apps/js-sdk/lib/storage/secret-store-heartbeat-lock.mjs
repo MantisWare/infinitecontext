@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 import { randomBytes } from "../ic-crypto.mjs";
 import { StorageError } from "./errors.mjs";
@@ -33,8 +34,8 @@ export async function acquireHeartbeatLock(rootDir, lockFileName) {
 
   sweepOrphanArtifacts(rootDir, lockFileName);
 
-  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  while (performance.now() < deadline) {
     const token = randomBytes(32).toString("hex");
     try {
       const fd = fs.openSync(lockPath, "wx", 0o600);

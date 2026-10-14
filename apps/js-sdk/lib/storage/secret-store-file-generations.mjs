@@ -89,9 +89,8 @@ export function hasPersistedSecretsStore(rootDir) {
 /**
  * @param {string} filePath
  * @param {Uint8Array} kek
- * @param {boolean} [retriedAfterEnoent]
  */
-function readSecretsMapFromFile(filePath, kek, retriedAfterEnoent = false) {
+function readSecretsMapFromFile(filePath, kek) {
   rejectSymlinkPath(filePath);
   let raw;
   try {
@@ -105,9 +104,6 @@ function readSecretsMapFromFile(filePath, kek, retriedAfterEnoent = false) {
         );
       }
       if (error.code === "ENOENT") {
-        if (!retriedAfterEnoent) {
-          return readSecretsMapFromFile(filePath, kek, true);
-        }
         throw new StorageError(
           `Storage secret generation file missing at ${filePath}`,
           "store_not_found",

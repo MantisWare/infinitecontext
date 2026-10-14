@@ -457,6 +457,18 @@ describe("resolveSecretStoreBackend auto", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it("ensurePrivateDir chmods an existing directory to 0700", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-chmod-"));
+    try {
+      fs.chmodSync(dir, 0o755);
+      ensurePrivateDir(dir);
+      const mode = fs.statSync(dir).mode & 0o777;
+      assert.equal(mode, 0o700);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid INFINITECONTEXT_SECRET_STORE values", () => {
     const prev = process.env.INFINITECONTEXT_SECRET_STORE;
     try {
