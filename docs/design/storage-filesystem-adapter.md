@@ -47,4 +47,4 @@ For **one machine** or a **desktop-synced folder** with **last-writer-wins** cav
 - **`list(prefix)`:** segment-based prefix. A trailing **`/`** requires a path separator after the prefix (`list('a/')` matches `a/x` but **not** `ab/x`).  
 - **`list`** returns a **`corrupt`** array for keys whose newest generation fails validation (the listing continues).  
 - Stale **`.ic-fs-tmp.*`** / **`.icgen.tmp.*`** files older than **1 hour** are swept on **`init`**.  
-- **Tombstone-only** keys (deleted, never recreated) whose tombstone generation file is older than **7 days** (by **`mtime`**) are removed on **`init`** (empty key directories pruned).
+- **Tombstone-only** keys (deleted, never recreated) whose tombstone generation file is older than **7 days** (by **`mtime`**) are compacted on **`init`** under the objects lock: generation files are removed but **`.icgen-high-water`** keeps the last generation index so commits never regress (stale creates/replaces cannot resurrect deleted keys). Sweep skips corrupt keys instead of failing **`init`**.

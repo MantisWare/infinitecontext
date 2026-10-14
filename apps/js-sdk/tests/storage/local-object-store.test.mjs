@@ -5,7 +5,9 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import { encryptVaultPlaintextForStoragePut } from "../../lib/storage/encrypt-storage-object.mjs";
+import { StorageError } from "../../lib/storage/errors.mjs";
 import {
+  assertUsableHomeForLocalObjectStore,
   createLocalObjectStore,
   defaultLocalObjectStoreRootDir,
   LOCAL_OBJECT_STORE_BACKEND_ID,
@@ -46,5 +48,19 @@ describe("local object store (PR 5)", () => {
     assert.ok(await store.transport.headObject(key));
     await store.close();
     fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("rejects empty HOME and relative object store roots", () => {
+    assert.throws(
+      () => assertUsableHomeForLocalObjectStore({ env: { HOME: "" } }),
+      (error) => error instanceof StorageError && error.code === "invalid_argument",
+    );
+    assert.throws(
+      () =>
+        resolveLocalObjectStoreRootDir({
+          env: { INFINITECONTEXT_OBJECT_STORE_ROOT: "relative/store" },
+        }),
+      (error) => error instanceof StorageError && error.code === "invalid_argument",
+    );
   });
 });

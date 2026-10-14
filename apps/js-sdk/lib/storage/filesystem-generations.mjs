@@ -8,6 +8,7 @@ import {
   computeObjectEtag,
   encodeObjectFile,
   fsyncDirectory,
+  FS_GEN_HIGH_WATER_BASENAME,
   FS_GEN_SUFFIX,
   FS_TEMP_PREFIX,
   readObjectFileNoFollow,
@@ -87,6 +88,49 @@ export function objectKeyDirectory(rootDir, key) {
  * @param {string} keyDir
  * @returns {{ gen: number, path: string }[]}
  */
+/**
+ * @param {string} keyDir
+ */
+export function readGenerationHighWater(keyDir) {
+  const markerPath = path.join(keyDir, FS_GEN_HIGH_WATER_BASENAME);
+  try {
+    const text = fs.readFileSync(markerPath, "utf8");
+    const parsed = JSON.parse(text);
+    const gen = Number(parsed?.high_water);
+    return Number.isSafeInteger(gen) && gen > 0 ? gen : 0;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return 0;
+    }
+    return 0;
+  }
+}
+
+/**
+ * @param {string} rootDir
+ * @param {string} keyDir
+ * @param {number} gen
+ */
+export function writeGenerationHighWater(rootDir, keyDir, gen) {
+  if (!Number.isSafeInteger(gen) || gen <= 0) {
+    throw new StorageError("Generation high-water out of range", "invalid_argument");
+  }
+  fs.mkdirSync(keyDir, { recursive: true, mode: 0o700 });
+  const markerPath = path.join(keyDir, FS_GEN_HIGH_WATER_BASENAME);
+  const payload = `${JSON.stringify({ high_water: gen })}\n`;
+  const tmpPath = path.join(
+    keyDir,
+    `${FS_TEMP_PREFIX}high-water.tmp.${process.pid}.${Date.now()}`,
+  );
+  writeExclusiveTempFile(tmpPath, new TextEncoder().encode(payload), rootDir);
+  fs.renameSync(tmpPath, markerPath);
+  try {
+    fs.chmodSync(markerPath, 0o600);
+  } catch {
+    // best effort
+  }
+}
+
 export function listGenerationPathsForKeyDir(keyDir) {
   /** @type {{ gen: number, path: string }[]} */
   const found = [];
@@ -179,7 +223,8 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
     }
 
     const latest = loadLatestObjectGeneration(rootDir, canonical);
-    const currentGen = latest?.gen ?? 0;
+    const highWater = readGenerationHighWater(keyDir);
+    const currentGen = Math.max(latest?.gen ?? 0, highWater);
     const nextGen = currentGen + 1;
     formatObjectGenerationFileName(nextGen);
 
@@ -245,6 +290,7 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
     }
 
     fsyncDirectory(keyDir);
+    writeGenerationHighWater(rootDir, keyDir, nextGen);
     try {
       fs.unlinkSync(tmpPath);
     } catch {
@@ -320,7 +366,8 @@ function removeEmptyKeyDirectories(rootDir, keyDir) {
     } catch {
       break;
     }
-    if (entries.length > 0) {
+    const nonMarkerEntries = entries.filter((name) => name !== FS_GEN_HIGH_WATER_BASENAME);
+    if (nonMarkerEntries.length > 0) {
       break;
     }
     try {
@@ -333,13 +380,23 @@ function removeEmptyKeyDirectories(rootDir, keyDir) {
 }
 
 /**
- * Remove keys whose newest generation is a tombstone older than the retention age.
+ * Remove stale tombstone-only keys while preserving generation high-water (never regress gen).
  * @param {string} rootDir
+ * @param {() => void} [assertHeld]
  */
-export function sweepStaleTombstoneOnlyKeys(rootDir) {
+export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
   const now = Date.now();
   for (const key of listAllObjectKeys(rootDir)) {
-    const latest = loadLatestObjectGeneration(rootDir, key);
+    /** @type {{ gen: number, header: import("./filesystem-object-file.mjs").StoredObjectHeader } | null} */
+    let latest;
+    try {
+      latest = loadLatestObjectGeneration(rootDir, key);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "corrupt_storage") {
+        continue;
+      }
+      throw error;
+    }
     if (!latest?.header.tombstone) {
       continue;
     }
@@ -355,11 +412,44 @@ export function sweepStaleTombstoneOnlyKeys(rootDir) {
       continue;
     }
     try {
-      fs.unlinkSync(tombPath);
+      assertHeld();
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "lock_compromised") {
+        throw new StorageError("Lost storage object lock during tombstone sweep", "store_retry");
+      }
+      throw error;
+    }
+    let recheck;
+    try {
+      recheck = loadLatestObjectGeneration(rootDir, key);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "corrupt_storage") {
+        continue;
+      }
+      throw error;
+    }
+    if (!recheck?.header.tombstone) {
+      continue;
+    }
+    const recheckPath = path.join(keyDir, formatObjectGenerationFileName(recheck.gen));
+    let recheckAgeMs;
+    try {
+      recheckAgeMs = fs.statSync(recheckPath).mtimeMs;
     } catch {
       continue;
     }
-    removeEmptyKeyDirectories(rootDir, keyDir);
+    if (now - recheckAgeMs < tombstoneSweepMaxAgeMs) {
+      continue;
+    }
+    const highWater = Math.max(readGenerationHighWater(keyDir), recheck.gen);
+    for (const row of listGenerationPathsForKeyDir(keyDir)) {
+      try {
+        fs.unlinkSync(row.path);
+      } catch {
+        // ignore
+      }
+    }
+    writeGenerationHighWater(rootDir, keyDir, highWater);
   }
 }
 

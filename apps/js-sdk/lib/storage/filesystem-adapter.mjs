@@ -94,7 +94,9 @@ export function createFilesystemStorageAdapter(options) {
         assertHardLinkCommitSupported(rootDir);
         rejectSymlinkInStoreRoot(rootDir);
         sweepStaleFilesystemTempFiles(rootDir);
-        sweepStaleTombstoneOnlyKeys(rootDir);
+        await withObjectsStoreLock(rootDir, async (assertHeld) => {
+          sweepStaleTombstoneOnlyKeys(rootDir, assertHeld);
+        });
       } catch (error) {
         throw error instanceof StorageError ? error : mapFsError(error, rootDir);
       }

@@ -9,6 +9,7 @@ import { mapFsError } from "./filesystem-paths.mjs";
 
 export const FS_TEMP_PREFIX = ".ic-fs-tmp.";
 export const FS_GEN_SUFFIX = ".icgen";
+export const FS_GEN_HIGH_WATER_BASENAME = ".icgen-high-water";
 export const FS_TEMP_SWEEP_MAX_AGE_MS = 60 * 60 * 1000;
 
 /** @param {string} name */
