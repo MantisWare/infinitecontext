@@ -11,19 +11,28 @@ Backend credentials (S3 keys, WebDAV passwords, etc.) for pluggable storage must
 | **`macos-keychain`** | macOS | `keyring` / `auto` when keychain probe succeeds |
 | **`windows-credential`** | Windows | `keyring` / `auto` when Credential Manager probe succeeds |
 
-OS keychain entries use the `infinitecontext-storage` service name. Encrypted file persistence uses `storage-secrets.enc` (mode **0600**) with AEAD.
+OS keychain entries use the `infinitecontext-storage` service name. Encrypted file persistence uses generation files **`storage-secrets.<gen>.enc`** (12-digit zero-padded `gen`, mode **0600**) with AEAD. Legacy single-file **`storage-secrets.enc`** is migrated to generation `1` on first access.
 
 ### Encrypted file limits
 
-The **KEK** (`storage-secrets.kek`, mode **0600**) sits **beside** the ciphertext file on disk. That design **only protects against casual exposure** (permissions, accidental copy, grep). Anyone with read access to both files can decrypt offline. Use the OS keychain when you need stronger isolation from disk backups.
+The **KEK** (`storage-secrets.kek`, mode **0600**) sits **beside** the ciphertext generations on disk. That design **only protects against casual exposure** (permissions, accidental copy, grep). Anyone with read access to both files can decrypt offline. Use the OS keychain when you need stronger isolation from disk backups.
 
-Writes are **atomic** (temp file + `fsync` + rename + directory `fsync`; failed writes remove the temp file) and refuse **symlinks** on store paths. Updates are serialized with a **heartbeat lock** (`storage-secrets.lock`, mode **0600**):
+**Correctness** comes from a filesystem **compare-and-swap**, not from the lock alone. The heartbeat lock reduces contention; it is not the commit fence.
 
-- The holder writes a random **token** and refreshes the lock file **mtime every ~2 s** while it holds the lock.
-- A lock is **stale** only when its mtime is older than **~10 s** (no pid/hostname metadata).
-- Stealing is serialized via a companion **`storage-secrets.lock.steal`** file (`O_EXCL`); staleness is **re-checked under the steal lock** before removing the main lock.
-- Before every atomic commit (`rename`) and before release, the holder verifies the token still matches; mismatch → **`lock_compromised`** (no silent clobber).
-- On acquire, orphaned temp files (`.storage-secrets.*.tmp.*`), old quarantine paths, and stale steal locks older than **1 h** are swept.
+- **Read:** highest generation that decrypts and validates.
+- **Write (under lock):** read generation `N`, apply change, write + fsync a temp file, then **`fs.linkSync(temp, storage-secrets.<N+1>.enc)`**. `EEXIST` means another writer committed first → re-read and retry while the lock is still held. Lost lock → **`store_retry`** (caller may retry).
+- After a successful link: fsync the directory, unlink the temp, prune generations **older than N−2**.
+- Requires **hard-link** support (local ext4/APFS/NTFS). Network or copy-on-write filesystems without link may fail with **`not_supported`**.
+
+Marker/backend files and the KEK still use temp + rename. Secret payloads never use rename-to-commit.
+
+### Heartbeat lock (`storage-secrets.lock`)
+
+- Random **token**; holder refreshes lock **mtime every ~2 s**.
+- Main lock stale when mtime **> ~10 s** behind wall clock, or **> ~60 s in the future** (clock skew between hosts is **not** a correctness signal — CAS still prevents lost writes; skew only affects steal timing).
+- **`storage-secrets.lock.steal`** serializes stealing (`O_EXCL`); stale steal files (**> ~10 s**) are removed. Staleness is re-checked under the steal lock.
+- Token checked before each CAS link and before release; mismatch → **`lock_compromised`**.
+- On acquire, sweep only our orphan names (`.storage-secrets.*.tmp.*`, `.storage-secrets.lock.tmp.*`, `storage-secrets.lock.steal`, `storage-secrets.lock.quarantine.*`) when older than **1 h**.
 
 ### Backend marker (`storage-secrets.backend`)
 

@@ -6,10 +6,13 @@ import { StorageError } from "./errors.mjs";
 
 export const HEARTBEAT_INTERVAL_MS = 2_000;
 export const STALE_LOCK_MTIME_MS = 10_000;
+export const STALE_STEAL_LOCK_MTIME_MS = 10_000;
+export const CLOCK_SKEW_FUTURE_MS = 60_000;
 export const LOCK_ACQUIRE_TIMEOUT_MS = 30_000;
 export const ORPHAN_SWEEP_MAX_AGE_MS = 60 * 60 * 1000;
 
 const STEAL_LOCK_SUFFIX = ".steal";
+const MAIN_LOCK_BASENAME = "storage-secrets.lock";
 
 /**
  * @typedef {Object} HeartbeatLockHandle
@@ -28,7 +31,7 @@ export async function acquireHeartbeatLock(rootDir, lockFileName) {
   rejectSymlinkPath(lockPath);
   rejectSymlinkPath(stealPath);
 
-  sweepOrphanArtifacts(rootDir);
+  sweepOrphanArtifacts(rootDir, lockFileName);
 
   const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -41,21 +44,42 @@ export async function acquireHeartbeatLock(rootDir, lockFileName) {
       } finally {
         fs.closeSync(fd);
       }
-      touchLockMtime(lockPath);
+      try {
+        touchLockMtime(lockPath);
+      } catch (error) {
+        throw mapLockFsError(error, lockPath);
+      }
       return createHeldLock(lockPath, token);
     } catch (error) {
+      if (error instanceof StorageError) {
+        throw error;
+      }
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
         tryStealStaleLockIfNeeded(lockPath, stealPath);
         await new Promise((resolve) => setTimeout(resolve, 15));
         continue;
       }
-      throw error;
+      throw mapLockFsError(error, lockPath);
     }
   }
   throw new StorageError(
     `Timed out waiting for storage secret store lock at ${lockPath}`,
     "lock_timeout",
   );
+}
+
+/**
+ * @param {unknown} error
+ * @param {string} lockPath
+ */
+function mapLockFsError(error, lockPath) {
+  if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    throw new StorageError(
+      `Storage secret store lock directory or path is missing (${lockPath})`,
+      "lock_path_missing",
+    );
+  }
+  return error;
 }
 
 /**
@@ -131,7 +155,24 @@ export function isLockStaleByMtimeForTests(lockPath) {
 function isLockStaleByMtime(lockPath) {
   try {
     const st = fs.statSync(lockPath);
-    return Date.now() - st.mtimeMs > STALE_LOCK_MTIME_MS;
+    const ageMs = Date.now() - st.mtimeMs;
+    if (ageMs > STALE_LOCK_MTIME_MS) {
+      return true;
+    }
+    if (st.mtimeMs - Date.now() > CLOCK_SKEW_FUTURE_MS) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {string} stealPath */
+function isStealLockStaleByMtime(stealPath) {
+  try {
+    const st = fs.statSync(stealPath);
+    return Date.now() - st.mtimeMs > STALE_STEAL_LOCK_MTIME_MS;
   } catch {
     return false;
   }
@@ -142,17 +183,23 @@ function isLockStaleByMtime(lockPath) {
  * @param {string} stealPath
  */
 function tryStealStaleLockIfNeeded(lockPath, stealPath) {
+  removeStaleStealLockFile(stealPath);
   if (!isLockStaleByMtime(lockPath)) {
     return;
   }
   let stealFd;
   try {
     stealFd = fs.openSync(stealPath, "wx", 0o600);
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      removeStaleStealLockFile(stealPath);
+      return;
+    }
     return;
   }
   try {
     fs.closeSync(stealFd);
+    touchLockMtime(stealPath);
   } catch {
     // ignore
   }
@@ -172,8 +219,23 @@ function tryStealStaleLockIfNeeded(lockPath, stealPath) {
   }
 }
 
-/** @param {string} rootDir */
-export function sweepOrphanArtifacts(rootDir) {
+/** @param {string} stealPath */
+function removeStaleStealLockFile(stealPath) {
+  if (!isStealLockStaleByMtime(stealPath)) {
+    return;
+  }
+  try {
+    fs.unlinkSync(stealPath);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * @param {string} rootDir
+ * @param {string} lockFileName
+ */
+export function sweepOrphanArtifacts(rootDir, lockFileName = MAIN_LOCK_BASENAME) {
   let entries;
   try {
     entries = fs.readdirSync(rootDir);
@@ -182,7 +244,7 @@ export function sweepOrphanArtifacts(rootDir) {
   }
   const now = Date.now();
   for (const name of entries) {
-    if (!shouldSweepEntryName(name)) {
+    if (!shouldSweepEntryName(name, lockFileName)) {
       continue;
     }
     const fullPath = path.join(rootDir, name);
@@ -201,15 +263,21 @@ export function sweepOrphanArtifacts(rootDir) {
   }
 }
 
-/** @param {string} name */
-function shouldSweepEntryName(name) {
-  if (name.endsWith(".steal")) {
-    return name.startsWith("storage-secrets.lock");
-  }
-  if (name.startsWith(".storage-secrets.") && name.includes(".tmp.")) {
+/**
+ * @param {string} name
+ * @param {string} lockFileName
+ */
+function shouldSweepEntryName(name, lockFileName) {
+  if (name === `${lockFileName}.steal`) {
     return true;
   }
-  if (name.startsWith("storage-secrets.lock.quarantine.")) {
+  if (name.startsWith(`.${lockFileName}.tmp.`)) {
+    return true;
+  }
+  if (name.startsWith(`.storage-secrets.`) && name.includes(".tmp.")) {
+    return true;
+  }
+  if (name.startsWith(`${lockFileName}.quarantine.`)) {
     return true;
   }
   return false;

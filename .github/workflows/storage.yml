@@ -31,6 +31,8 @@ jobs:
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
           node --check apps/js-sdk/lib/storage/secret-store-heartbeat-lock.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-file-link.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-file-generations.mjs
           node --check apps/js-sdk/lib/storage/secret-store-linux-dbus.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe-child.mjs
           node --check apps/js-sdk/lib/storage/secret-store-keyring-probe.mjs

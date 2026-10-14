@@ -1,36 +1,46 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { DecryptionFailedError, decryptAead, encryptAead, randomBytes } from "../ic-crypto.mjs";
+import { randomBytes } from "../ic-crypto.mjs";
 import { StorageError } from "./errors.mjs";
 import { acquireHeartbeatLock } from "./secret-store-heartbeat-lock.mjs";
+import {
+  commitSecretsMapCas,
+  hasPersistedSecretsStore,
+  LEGACY_SECRETS_FILENAME,
+  loadLatestSecretsMap,
+} from "./secret-store-file-generations.mjs";
 
-const FILE_VERSION = 1;
-const SECRETS_FILENAME = "storage-secrets.enc";
 const KEK_FILENAME = "storage-secrets.kek";
 const LOCK_FILENAME = "storage-secrets.lock";
-const FILE_AAD = new TextEncoder().encode("infinitecontext/storage-secret-store/v1");
 
 /**
  * @param {{ rootDir: string }} options
  * @returns {import('./secret-store.mjs').SecretStoreBackend}
  */
 export function createEncryptedFileSecretBackend({ rootDir }) {
-  const secretsPath = path.join(rootDir, SECRETS_FILENAME);
   const kekPath = path.join(rootDir, KEK_FILENAME);
 
   return {
     kind: "file",
     async setSecret(name, secret) {
       await withSecretsFileLock(rootDir, async (assertHeld) => {
-        const map = loadSecretsMapUnlocked(secretsPath, kekPath, rootDir);
-        map[name] = Buffer.from(secret).toString("base64");
-        saveSecretsMapUnlocked(secretsPath, kekPath, rootDir, map, assertHeld);
+        const kek = loadOrCreateKek(kekPath, rootDir, assertHeld);
+        commitSecretsMapCas(
+          rootDir,
+          kek,
+          (map) => {
+            map[name] = Buffer.from(secret).toString("base64");
+            return map;
+          },
+          assertHeld,
+        );
       });
     },
     async getSecret(name) {
-      return withSecretsFileLock(rootDir, async () => {
-        const map = loadSecretsMapUnlocked(secretsPath, kekPath, rootDir);
+      return withSecretsFileLock(rootDir, async (assertHeld) => {
+        const kek = loadOrCreateKek(kekPath, rootDir, assertHeld);
+        const { map } = loadLatestSecretsMap(rootDir, kek, assertHeld);
         const b64 = map[name];
         if (!b64) {
           return null;
@@ -40,12 +50,20 @@ export function createEncryptedFileSecretBackend({ rootDir }) {
     },
     async deleteSecret(name) {
       return withSecretsFileLock(rootDir, async (assertHeld) => {
-        const map = loadSecretsMapUnlocked(secretsPath, kekPath, rootDir);
+        const kek = loadOrCreateKek(kekPath, rootDir, assertHeld);
+        const { map } = loadLatestSecretsMap(rootDir, kek, assertHeld);
         if (!(name in map)) {
           return false;
         }
-        delete map[name];
-        saveSecretsMapUnlocked(secretsPath, kekPath, rootDir, map, assertHeld);
+        commitSecretsMapCas(
+          rootDir,
+          kek,
+          (current) => {
+            delete current[name];
+            return current;
+          },
+          assertHeld,
+        );
         return true;
       });
     },
@@ -54,8 +72,7 @@ export function createEncryptedFileSecretBackend({ rootDir }) {
 
 /** @param {string} rootDir */
 export function fileBackendHasPersistedStore(rootDir) {
-  const { secretsPath } = storageSecretFilePaths(rootDir);
-  return fs.existsSync(secretsPath);
+  return hasPersistedSecretsStore(rootDir);
 }
 
 /**
@@ -75,71 +92,11 @@ async function withSecretsFileLock(rootDir, fn) {
 }
 
 /**
- * @param {string} secretsPath
  * @param {string} kekPath
  * @param {string} rootDir
- */
-function loadSecretsMapUnlocked(secretsPath, kekPath, rootDir) {
-  ensurePrivateDir(rootDir);
-  if (!fs.existsSync(secretsPath)) {
-    return {};
-  }
-  rejectSymlinkPath(secretsPath);
-  const secretsExist = true;
-  const kek = loadOrCreateKek(kekPath, rootDir, { secretsFileExists: secretsExist });
-  const raw = fs.readFileSync(secretsPath, "utf8");
-  let envelope;
-  try {
-    envelope = JSON.parse(raw);
-  } catch {
-    throw new StorageError("Corrupt storage secret file", "corrupt_secret_store");
-  }
-  if (Number(envelope?.v) !== FILE_VERSION || !envelope?.enc) {
-    throw new StorageError("Unsupported storage secret file version", "corrupt_secret_store");
-  }
-  let plaintext;
-  try {
-    plaintext = decryptAead(kek, envelope.enc, FILE_AAD);
-  } catch (error) {
-    if (error instanceof DecryptionFailedError) {
-      throw new StorageError("Could not decrypt storage secret file", "corrupt_secret_store");
-    }
-    throw error;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(plaintext));
-  } catch {
-    throw new StorageError("Corrupt storage secret payload", "corrupt_secret_store");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new StorageError("Corrupt storage secret payload", "corrupt_secret_store");
-  }
-  return /** @type {Record<string, string>} */ (parsed);
-}
-
-/**
- * @param {string} secretsPath
- * @param {string} kekPath
- * @param {string} rootDir
- * @param {Record<string, string>} map
  * @param {() => void} assertHeld
  */
-function saveSecretsMapUnlocked(secretsPath, kekPath, rootDir, map, assertHeld) {
-  ensurePrivateDir(rootDir);
-  const secretsExist = fs.existsSync(secretsPath);
-  const kek = loadOrCreateKek(kekPath, rootDir, { secretsFileExists: secretsExist, assertHeld });
-  const envelope = encryptAead(kek, new TextEncoder().encode(JSON.stringify(map)), FILE_AAD);
-  const payload = `${JSON.stringify({ v: FILE_VERSION, enc: envelope }, null, 2)}\n`;
-  writePrivateFileAtomic(rootDir, SECRETS_FILENAME, payload, assertHeld);
-}
-
-/**
- * @param {string} kekPath
- * @param {string} rootDir
- * @param {{ secretsFileExists: boolean, assertHeld?: () => void }} context
- */
-function loadOrCreateKek(kekPath, rootDir, { secretsFileExists, assertHeld }) {
+function loadOrCreateKek(kekPath, rootDir, assertHeld) {
   ensurePrivateDir(rootDir);
   if (fs.existsSync(kekPath)) {
     rejectSymlinkPath(kekPath);
@@ -149,7 +106,7 @@ function loadOrCreateKek(kekPath, rootDir, { secretsFileExists, assertHeld }) {
     }
     return new Uint8Array(kek);
   }
-  if (secretsFileExists) {
+  if (hasPersistedSecretsStore(rootDir)) {
     throw new StorageError(
       "storage-secrets.enc exists but storage-secrets.kek is missing",
       "corrupt_secret_store",
@@ -265,7 +222,7 @@ function ensurePrivateDir(rootDir) {
 /** @param {string} rootDir @returns {{ secretsPath: string, kekPath: string, lockPath: string }} */
 export function storageSecretFilePaths(rootDir) {
   return {
-    secretsPath: path.join(rootDir, SECRETS_FILENAME),
+    secretsPath: path.join(rootDir, LEGACY_SECRETS_FILENAME),
     kekPath: path.join(rootDir, KEK_FILENAME),
     lockPath: path.join(rootDir, LOCK_FILENAME),
   };
