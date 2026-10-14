@@ -2,7 +2,7 @@ import {
   advanceVectorCursorDevH,
   normalizeVectorSyncCursor,
   vectorCursorHeadSum,
-} from "@infinitecontext/sync-cursor";
+} from "./sync-cursor.mjs";
 
 import {
   assertTrustedHeadAdvance,

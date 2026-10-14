@@ -2,9 +2,9 @@ import {
   advanceVectorCursorDevH,
   normalizeVectorSyncCursor,
   vectorCursorHeadSum,
-} from "@infinitecontext/sync-cursor";
+} from "./sync-cursor.mjs";
 
-/** @typedef {import('@infinitecontext/sync-cursor').VectorSyncCursor} VectorSyncCursor */
+/** @typedef {import('./sync-cursor.mjs').VectorSyncCursor} VectorSyncCursor */
 
 /**
  * @typedef {Object} ObjectStoreLocalSyncState
