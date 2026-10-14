@@ -15,6 +15,16 @@ import {
 import { createCliFileObjectStoreLocalState } from "../../lib/object-store-local-state-persist.mjs";
 
 describe("object store state lock", () => {
+  it("does not treat live pid on same host as stale", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-os-lock-live-"));
+    const lockPath = path.join(dir, "state.json.lock");
+    fs.writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, hostname: os.hostname(), createdAt: Date.now() - 120_000, heartbeatAt: Date.now() - 120_000 })}\n`,
+    );
+    assert.equal(isStaleObjectStoreStateLock(lockPath), false);
+  });
+
   it("breaks lock left by dead pid on same host", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-os-lock-"));
     const stateFile = path.join(dir, "object-store-sync-state.json");

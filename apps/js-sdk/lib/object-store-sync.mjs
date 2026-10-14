@@ -105,6 +105,9 @@ function segmentClockSkewWallMs(ctx, devH, seq, envelope) {
       maxWall = maxWall === null ? hlc.wall_ms : Math.max(maxWall, hlc.wall_ms);
     }
   }
+  if (maxWall !== null && Date.now() >= maxWall - HLC_MAX_SKEW_MS) {
+    return null;
+  }
   return maxWall;
 }
 
@@ -207,6 +210,24 @@ async function maxRemoteSeqForDevH(ctx, devH) {
     cursor = page.nextCursor;
   }
   return maxSeq;
+}
+
+/** @param {ObjectStoreSyncContext} ctx */
+async function listAllLogDevHs(ctx) {
+  const logRoot = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
+  /** @type {Set<string>} */
+  const devHs = new Set();
+  let cursor = undefined;
+  for (;;) {
+    const page = await ctx.adapter.list(logRoot, { limit: 500, cursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (parsed?.devH) devHs.add(parsed.devH);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return devHs;
 }
 
 /**
@@ -346,9 +367,9 @@ function hostedPayloadFromMutation(item) {
 async function hasRemoteMessageUpdateSinceVectorBase(ctx, planBase, contextId, targetClientIds) {
   const targets = new Set(targetClientIds);
   const base = planBase.v ?? {};
-  const devHs = new Set([...Object.keys(base), ...Object.keys(ctx.localState.load().trustedHeads ?? {})]);
+  const devHs = await listAllLogDevHs(ctx);
   for (const devH of devHs) {
-    const after = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : 0;
+    const after = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : -1;
     const keys = await listSegmentKeysForDevHAfter(ctx, devH, after);
     for (const key of keys) {
       const parsed = parseLogSegmentKey(key);
@@ -532,12 +553,15 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
     if (!envelope) continue;
     const skewWall = segmentClockSkewWallMs(ctx, row.devH, row.seq, envelope);
     if (skewWall !== null) {
+      const resumeAtMs = skewWall - HLC_MAX_SKEW_MS;
       clockSkew.push({
         code: "clock_skew",
         dev_h: row.devH,
         wall_ms: skewWall,
         local_now: Date.now(),
         max_skew_ms: HLC_MAX_SKEW_MS,
+        resume_at_ms: resumeAtMs,
+        message: `Remote HLC ahead of local clock; pull resumes once local time reaches ${new Date(resumeAtMs).toISOString()}`,
       });
       skewBlockedDevH.add(row.devH);
       continue;

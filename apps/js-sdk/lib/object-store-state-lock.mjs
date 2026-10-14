@@ -1,9 +1,16 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 
-const LOCK_STALE_MS = 60_000;
+export const LOCK_HEARTBEAT_MS = 15_000;
+export const LOCK_STALE_MS = 60_000;
+export const LOCK_PARTIAL_GRACE_MS = 5_000;
 const LOCK_ACQUIRE_MS = 10_000;
+
+/** @type {Map<string, NodeJS.Timeout>} */
+const heartbeatTimers = new Map();
 
 /** @param {number} ms */
 function sleep(ms) {
@@ -54,16 +61,18 @@ function isPidAlive(pid) {
  * @returns {boolean}
  */
 export function isStaleObjectStoreStateLock(lockPath) {
+  if (!fs.existsSync(lockPath)) return false;
   const record = readLockRecord(lockPath);
   if (!record) {
     try {
       const stat = fs.statSync(lockPath);
-      return Date.now() - stat.mtimeMs > LOCK_STALE_MS;
+      return Date.now() - stat.mtimeMs > LOCK_PARTIAL_GRACE_MS;
     } catch {
       return false;
     }
   }
   const sameHost = record.hostname === os.hostname();
+  if (sameHost && isPidAlive(record.pid)) return false;
   if (sameHost && !isPidAlive(record.pid)) return true;
   const age = Date.now() - Math.max(record.heartbeatAt, record.createdAt);
   return age > LOCK_STALE_MS;
@@ -73,10 +82,47 @@ export function isStaleObjectStoreStateLock(lockPath) {
 export function breakStaleObjectStoreStateLock(lockPath) {
   if (!fs.existsSync(lockPath)) return;
   if (!isStaleObjectStoreStateLock(lockPath)) return;
+  const quarantine = `${lockPath}.quarantine.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
   try {
-    fs.unlinkSync(lockPath);
+    fs.renameSync(lockPath, quarantine);
+  } catch {
+    return;
+  }
+  if (!isStaleObjectStoreStateLock(quarantine)) {
+    try {
+      fs.renameSync(quarantine, lockPath);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  try {
+    fs.unlinkSync(quarantine);
   } catch {
     /* ignore */
+  }
+}
+
+/** @param {string} lockPath */
+export function startObjectStoreStateLockHeartbeat(lockPath) {
+  stopObjectStoreStateLockHeartbeat(lockPath);
+  touchObjectStoreStateLock(lockPath);
+  const timer = setInterval(() => {
+    try {
+      touchObjectStoreStateLock(lockPath);
+    } catch {
+      /* ignore */
+    }
+  }, LOCK_HEARTBEAT_MS);
+  heartbeatTimers.set(lockPath, timer);
+}
+
+/** @param {string} lockPath */
+export function stopObjectStoreStateLockHeartbeat(lockPath) {
+  const timer = heartbeatTimers.get(lockPath);
+  if (timer) {
+    clearInterval(timer);
+    heartbeatTimers.delete(lockPath);
   }
 }
 
@@ -100,6 +146,7 @@ export async function acquireObjectStoreStateLock(lockPath, options = {}) {
         heartbeatAt: now,
       };
       fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`);
+      startObjectStoreStateLockHeartbeat(lockPath);
       return fd;
     } catch (err) {
       if (err && typeof err === "object" && "code" in err && err.code !== "EEXIST") throw err;
@@ -121,6 +168,7 @@ export function touchObjectStoreStateLock(lockPath) {
 
 /** @param {number} fd @param {string} lockPath */
 export function releaseObjectStoreStateLock(fd, lockPath) {
+  stopObjectStoreStateLockHeartbeat(lockPath);
   try {
     fs.closeSync(fd);
   } catch {
@@ -136,8 +184,23 @@ export function releaseObjectStoreStateLock(fd, lockPath) {
   }
 }
 
+/** @param {string} dir @param {number} [maxAgeMs] */
+export function cleanupOrphanObjectStoreTmpFiles(dir, maxAgeMs = 10 * 60 * 1000) {
+  if (!fs.existsSync(dir)) return;
+  const now = Date.now();
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.includes(".tmp")) continue;
+    const full = path.join(dir, name);
+    try {
+      const stat = fs.statSync(full);
+      if (now - stat.mtimeMs > maxAgeMs) fs.unlinkSync(full);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** @param {string} filePath */
 function pathDirname(filePath) {
-  const idx = filePath.lastIndexOf("/");
-  return idx >= 0 ? filePath.slice(0, idx) : ".";
+  return path.dirname(filePath);
 }

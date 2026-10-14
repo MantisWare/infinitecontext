@@ -11,6 +11,7 @@ import {
 import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
 import {
   acquireObjectStoreStateLock,
+  cleanupOrphanObjectStoreTmpFiles,
   releaseObjectStoreStateLock,
   touchObjectStoreStateLock,
 } from "./object-store-state-lock.mjs";
@@ -220,6 +221,7 @@ async function saveObjectStoreStateWithLock(stateFilePath, incoming) {
 export function createCliFileObjectStoreLocalState(stateFilePath = defaultObjectStoreSyncStatePath()) {
   const legacyCli = path.join(path.dirname(stateFilePath), LEGACY_CLI_STATE_FILENAME);
   migrateLegacyObjectStoreStateIfNeeded(stateFilePath, legacyCli);
+  cleanupOrphanObjectStoreTmpFiles(path.dirname(stateFilePath));
 
   return {
     load() {

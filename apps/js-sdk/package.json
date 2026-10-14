@@ -69,6 +69,7 @@
         "./lib/sync-push-client.mjs": "./lib/sync-push-client.mjs",
         "./lib/sync-errors.mjs": "./lib/sync-errors.mjs",
         "./lib/sync-transport.mjs": "./lib/sync-transport.mjs",
+        "./lib/sync-object-store-bootstrap.mjs": "./lib/sync-object-store-bootstrap.mjs",
         "./lib/hosted-sync-transport.mjs": "./lib/hosted-sync-transport.mjs",
         "./lib/storage/index.mjs": "./lib/storage/index.mjs"
     },

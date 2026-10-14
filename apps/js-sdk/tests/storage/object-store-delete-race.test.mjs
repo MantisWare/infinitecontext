@@ -78,4 +78,78 @@ describe("object store delete stale race", () => {
     assert.equal(del.applied.length, 0);
     assert.ok(del.conflicts.some((c) => c.kind === "delete_stale_base"));
   });
+
+  it("records stale delete when a never-pulled device races an update at seq 0", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const dek = new Uint8Array(32).fill(4);
+    const deviceA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const deviceB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const deviceC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const localB = createInMemoryObjectStoreLocalState();
+    const transportA = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: deviceA,
+      layoutPrefix: "accounts/delete-race-c",
+      localState: createInMemoryObjectStoreLocalState(),
+    });
+    const transportB = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: deviceB,
+      layoutPrefix: "accounts/delete-race-c",
+      localState: localB,
+    });
+    const transportC = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: deviceC,
+      layoutPrefix: "accounts/delete-race-c",
+      localState: createInMemoryObjectStoreLocalState(),
+    });
+    const contextId = "ctx_never_pulled";
+    await transportA.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        context_id: contextId,
+        payload: { context_id: contextId, metadata: {} },
+      },
+    ]);
+    await transportC.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    const m1 = generateClientNodeId();
+    await transportA.pushSyncMutations([
+      {
+        client_id: m1,
+        op: "message_append",
+        context_id: contextId,
+        payload: {
+          messages: [{ id: m1, role: "user", content: { body: "one" }, metadata: { ic_client_node_id: m1 } }],
+        },
+      },
+    ]);
+    await transportB.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    const planVector = snapshotVectorCursor(localB.load().vectorCursor);
+    const baseSeq = (await transportB.fetchSyncStatus()).head_sequence;
+    await transportC.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "message_update",
+        context_id: contextId,
+        payload: {
+          messages: [{ id: m1, role: "user", content: { body: "from-c" }, metadata: { ic_client_node_id: m1 } }],
+        },
+      },
+    ]);
+    const del = await transportB.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "message_delete",
+        context_id: contextId,
+        base_sequence: baseSeq,
+        base_vector: planVector,
+        payload: { ids: [m1] },
+      },
+    ]);
+    assert.equal(del.applied.length, 0);
+    assert.ok(del.conflicts.some((c) => c.kind === "delete_stale_base"));
+  });
 });

@@ -277,6 +277,12 @@ export function applySyncChangeToReplica(replica, change, persist) {
     return;
   }
 
+  const changeSource = {
+    devH: change.source_dev_h ? String(change.source_dev_h) : "",
+    seq: Number(change.source_seq ?? 0),
+    index: Number(change.source_index ?? 0),
+  };
+
   if (op === "message_append" || op === "message_update") {
     const rows = Array.isArray(payload.data) ? payload.data : [];
     for (const row of rows) {
@@ -285,26 +291,42 @@ export function applySyncChangeToReplica(replica, change, persist) {
       if (!clientNodeId) continue;
       const key = String(clientNodeId);
       const existing = replica.messages[key];
+      const ctxId = String(payload.context_id ?? contextId);
+
+      if (!hlcTuple) {
+        replica.messages[key] = {
+          context_id: ctxId,
+          payload: row,
+          sequence,
+          op,
+        };
+        continue;
+      }
+
       if (existing?.tombstone) {
         recordReplicaConflict(
           replica,
           buildTombstoneBlockedUpdateConflict({
-            context_id: String(payload.context_id ?? contextId),
+            context_id: ctxId,
             client_node_id: key,
             op,
             hlc: change.hlc ?? null,
             data: row,
             sequence,
             created_at: change.created_at,
+            loser_dev_h: changeSource.devH,
+            loser_seq: changeSource.seq,
+            loser_index: changeSource.index,
           }),
         );
         continue;
       }
-      if (hlcTuple && existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
+
+      if (existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
         recordReplicaConflict(
           replica,
           buildLwwSupersededConflict({
-            context_id: String(payload.context_id ?? contextId),
+            context_id: ctxId,
             client_node_id: key,
             op,
             winner_hlc: existing._hlc,
@@ -312,17 +334,42 @@ export function applySyncChangeToReplica(replica, change, persist) {
             data: row,
             sequence,
             created_at: change.created_at,
+            loser_dev_h: changeSource.devH,
+            loser_seq: changeSource.seq,
+            loser_index: changeSource.index,
           }),
         );
         continue;
       }
+
+      if (existing?._hlc && shouldApplyLww(existing, hlcTuple)) {
+        const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
+        recordReplicaConflict(
+          replica,
+          buildLwwSupersededConflict({
+            context_id: ctxId,
+            client_node_id: key,
+            op: existing.op ?? op,
+            winner_hlc: hlcTuple,
+            loser_hlc: existing._hlc,
+            data: existing.payload ?? null,
+            sequence,
+            created_at: change.created_at,
+            loser_dev_h: prevSource.devH,
+            loser_seq: prevSource.seq,
+            loser_index: prevSource.index,
+          }),
+        );
+      }
+
       replica.messages[key] = {
-        context_id: String(payload.context_id ?? contextId),
+        context_id: ctxId,
         payload: row,
         sequence,
         op,
         tombstone: false,
-        _hlc: hlcTuple ?? undefined,
+        _hlc: hlcTuple,
+        _source: { ...changeSource },
       };
     }
     persist(replica);
@@ -334,11 +381,37 @@ export function applySyncChangeToReplica(replica, change, persist) {
     for (const id of deletedIds) {
       if (!id) continue;
       const key = String(id);
+      const ctxId = String(payload.context_id ?? contextId);
+      if (!hlcTuple) {
+        delete replica.messages[key];
+        continue;
+      }
+      const existing = replica.messages[key];
+      if (existing && !existing.tombstone && existing.payload) {
+        const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
+        recordReplicaConflict(
+          replica,
+          buildTombstoneBlockedUpdateConflict({
+            context_id: ctxId,
+            client_node_id: key,
+            op: existing.op ?? "message_update",
+            hlc: existing._hlc ?? null,
+            data: existing.payload,
+            sequence,
+            created_at: change.created_at,
+            loser_dev_h: prevSource.devH,
+            loser_seq: prevSource.seq,
+            loser_index: prevSource.index,
+          }),
+        );
+      }
       replica.messages[key] = {
-        context_id: String(payload.context_id ?? contextId),
+        context_id: ctxId,
         tombstone: true,
         sequence,
         deleted_at: change.created_at ?? new Date().toISOString(),
+        _hlc: hlcTuple,
+        _source: { ...changeSource },
       };
     }
     persist(replica);

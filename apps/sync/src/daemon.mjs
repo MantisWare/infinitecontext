@@ -176,6 +176,15 @@ async function loadAccountSyncModules(log) {
   }
 }
 
+async function loadObjectStoreBootstrapModule() {
+  try {
+    return await import("infinitecontext/lib/sync-object-store-bootstrap.mjs");
+  } catch {
+    const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
+    return import(pathToFileURL(path.join(sdkLib, "sync-object-store-bootstrap.mjs")).href);
+  }
+}
+
 // ── exported boot function ──────────────────────────────────────
 
 export async function daemonBoot({
@@ -1192,15 +1201,23 @@ export async function daemonBoot({
     const syncEngine = accountSync?.syncEngine ?? null;
 
     if (accountSync) {
+      const runtimeConfig = await readConfigJson();
+      const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
+      const hostedBackend = !storageBackend || storageBackend === "hosted";
       try {
-        const bootstrapPath = "infinitecontext/lib/sync-object-store-bootstrap.mjs";
-        const { configureObjectStoreSyncTransportIfNeeded } = await import(bootstrapPath);
+        const { configureObjectStoreSyncTransportIfNeeded } = await loadObjectStoreBootstrapModule();
         await configureObjectStoreSyncTransportIfNeeded({
           mode: "daemon",
           baseUrl: cfg.baseUrl,
+          config: runtimeConfig,
           dbPath: cfg.dbFile,
         });
       } catch (error) {
+        if (!hostedBackend) {
+          throw new Error(
+            `Local object store sync is required for storage.backend=${String(runtimeConfig?.storage?.backend ?? "local")} but bootstrap failed: ${errorDetails(error).message ?? error}`,
+          );
+        }
         log("warn", "Local object store sync transport not configured", errorDetails(error));
       }
     }
