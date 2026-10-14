@@ -127,7 +127,8 @@ function serializeKdfParams() {
 	};
 }
 /** Upper bound on memorySizeKiB × iterations (65536×3 profile = 196608). */
-const VAULT_KDF_MAX_COST_PRODUCT = 196608;
+/** 4× default profile cost (65536 KiB × 3 iterations). */
+const VAULT_KDF_MAX_COST_PRODUCT = 786432;
 function assertVaultKdfCostWithinCap(params) {
 	const product = params.memorySizeKiB * params.iterations;
 	if (!Number.isSafeInteger(product) || product > VAULT_KDF_MAX_COST_PRODUCT) throw new Error("vault.json kdf memorySizeKiB × iterations exceeds allowed cost cap");

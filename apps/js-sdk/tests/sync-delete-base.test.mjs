@@ -12,6 +12,41 @@ describe("message_delete base_sequence", () => {
   it("resolveDeleteBaseSequence never returns server head fallback", () => {
     assert.equal(resolveDeleteBaseSequence({ explicitBaseSequence: 12 }), 12);
     assert.equal(resolveDeleteBaseSequence({}), null);
+    const vector = resolveDeleteBaseSequence({
+      localCursor: { kind: "vector", v: { ABCDEFGHJKMNPQRSTVWXYZ2345: 2 } },
+    });
+    assert.equal(vector.kind, "vector");
+    assert.equal(vector.v.ABCDEFGHJKMNPQRSTVWXYZ2345, 2);
+  });
+
+  it("object store head_sequence reflects trusted heads after first segment", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const dek = new Uint8Array(32).fill(8);
+    const transport = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: "77777777-7777-4777-8777-777777777777",
+      layoutPrefix: "accounts/head-seq",
+      localState: createInMemoryObjectStoreLocalState(),
+    });
+    await transport.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        payload: { metadata: { source: "head" } },
+      },
+    ]);
+    const status = await transport.fetchSyncStatus();
+    assert.equal(status.head_sequence, 0);
+    await transport.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        payload: { metadata: { source: "head2" } },
+      },
+    ]);
+    const after = await transport.fetchSyncStatus();
+    assert.equal(after.head_sequence, 1);
   });
 
   it("mutationForMessageDelete throws without a known base", () => {

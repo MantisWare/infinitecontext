@@ -326,15 +326,14 @@ function pageConflicts(page) {
   return Array.isArray(page?.conflicts) ? page.conflicts.length : 0;
 }
 
-export function resolveDeleteBaseSequence({ explicitBaseSequence } = {}) {
+export function resolveDeleteBaseSequence({ explicitBaseSequence, localCursor } = {}) {
   if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
     return explicitBaseSequence;
   }
-  const local = getSyncCursor();
+  const local = localCursor ?? getSyncCursor();
   if (typeof local === "number" && local > 0) return local;
   if (local && typeof local === "object" && local.kind === "vector") {
-    const sum = vectorCursorHeadSum(local);
-    return sum > 0 ? sum : null;
+    return normalizeVectorSyncCursor(local);
   }
   return null;
 }
@@ -358,7 +357,15 @@ export function mutationForMessageAppend(contextId, messages) {
 
 export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence } = {}) {
   const idList = Array.isArray(ids) ? ids : [ids];
-  const base_sequence = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence });
+  const resolvedBase = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence });
+  let base_sequence;
+  if (typeof resolvedBase === "number" && Number.isFinite(resolvedBase)) {
+    base_sequence = resolvedBase;
+  } else if (resolvedBase && typeof resolvedBase === "object" && resolvedBase.kind === "vector") {
+    base_sequence = vectorCursorHeadSum(resolvedBase);
+  } else {
+    base_sequence = null;
+  }
   if (base_sequence === null || !Number.isFinite(base_sequence)) {
     throw new Error(
       "base_sequence is required for message_delete — run sync pull or pass base_sequence from the last GET /contexts read",

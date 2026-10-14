@@ -5,7 +5,11 @@ import {
 } from "./sync-cursor.mjs";
 
 import {
-  assertTrustedHeadAdvance,
+  assertOwnPrefixHeadChainsFromTrust,
+  verifyDeviceLogThroughSeq,
+} from "./object-store-chain-verify.mjs";
+import {
+  commitTrustedHeadAdvance,
   computeHeadSequenceFromTrustedHeads,
   createEmptyObjectStoreLocalSyncState,
   headSequenceForStatus,
@@ -13,9 +17,14 @@ import {
   ObjectStoreLogRollbackError,
 } from "./object-store-local-sync-state.mjs";
 import {
-  compareMergeableMutations,
+  mergeableFromMutation,
   sortMergeableMutations,
 } from "./object-store-merge.mjs";
+import {
+  nextLocalMutationHlc,
+  observeRemoteHlc,
+  serializeMutationHlc,
+} from "./object-store-hlc.mjs";
 import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
@@ -29,7 +38,6 @@ import {
   layoutRootPath,
   layoutSegmentEnvelopeDigest,
   logSegmentRelativePath,
-  verifyLogSegmentChain,
 } from "./storage/layout.mjs";
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
 
@@ -67,6 +75,16 @@ async function readLayoutSegmentEnvelope(ctx, key) {
 
 /**
  * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ * @param {number} seq
+ */
+async function readEnvelopeAtSeq(ctx, devH, seq) {
+  const key = logSegmentRelativePath(ctx.layoutPrefix, devH, seq);
+  return readLayoutSegmentEnvelope(ctx, key);
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
  * @param {string} key
  * @param {import('./ic-crypto.mjs').AeadEnvelope} envelope
  */
@@ -82,11 +100,91 @@ async function writeLayoutSegmentEnvelope(ctx, key, envelope) {
 /**
  * @param {ObjectStoreSyncContext} ctx
  * @param {string} devH canonical
+ * @param {number} afterSeq inclusive cursor (-1 = none)
  */
-async function listSegmentKeysForDevH(ctx, devH) {
+async function listSegmentKeysForDevHAfter(ctx, devH, afterSeq) {
   const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/${devH.toLowerCase()}/`;
-  const page = await ctx.adapter.list(prefix, { limit: 10_000 });
-  return page.objects.map((o) => o.key).filter((k) => parseLogSegmentKey(k)?.devH === devH);
+  const startAfter =
+    afterSeq >= 0 ? logSegmentRelativePath(ctx.layoutPrefix, devH, afterSeq) : undefined;
+  /** @type {string[]} */
+  const keys = [];
+  let cursor = startAfter;
+  for (;;) {
+    const page = await ctx.adapter.list(prefix, { limit: 500, cursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (parsed && parsed.devH === devH && parsed.seq > afterSeq) {
+        keys.push(row.key);
+      }
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  keys.sort((a, b) => (parseLogSegmentKey(a)?.seq ?? 0) - (parseLogSegmentKey(b)?.seq ?? 0));
+  return keys;
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ */
+async function maxRemoteSeqForDevH(ctx, devH) {
+  const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/${devH.toLowerCase()}/`;
+  let maxSeq = -1;
+  let cursor = undefined;
+  for (;;) {
+    const page = await ctx.adapter.list(prefix, { limit: 500, cursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (parsed?.devH === devH && parsed.seq > maxSeq) maxSeq = parsed.seq;
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return maxSeq;
+}
+
+/**
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {Record<string, number>} remoteMaxByDevH
+ */
+function assertNoRemoteRollback(state, remoteMaxByDevH) {
+  for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
+    if (!trusted) continue;
+    const remoteMax = remoteMaxByDevH[devH];
+    if (remoteMax !== undefined && remoteMax >= 0 && remoteMax < trusted.seq) {
+      throw new ObjectStoreLogRollbackError(
+        `Remote log for ${devH} rolled back (trusted seq ${trusted.seq}, remote max ${remoteMax})`,
+      );
+    }
+  }
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ */
+async function assertTrustedHeadDigestsMatchRemote(ctx, state) {
+  for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
+    if (!trusted) continue;
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      devH,
+      undefined,
+      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+      trusted.seq,
+    );
+    const envelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
+    if (!envelope) {
+      throw new ObjectStoreLogRollbackError(
+        `Remote log for ${devH} missing trusted segment at seq ${trusted.seq}`,
+      );
+    }
+    const digest = layoutSegmentEnvelopeDigest(envelope);
+    if (digest !== trusted.digest) {
+      throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${trusted.seq}`);
+    }
+  }
 }
 
 /** @param {unknown} raw */
@@ -153,12 +251,16 @@ function resolveDeleteTargetClientIds(idsRaw, ledger, contextId) {
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
 async function reconcileOwnLogPrefix(ctx, state) {
-  const keys = await listSegmentKeysForDevH(ctx, ctx.selfDevH);
-  keys.sort((a, b) => (parseLogSegmentKey(a)?.seq ?? 0) - (parseLogSegmentKey(b)?.seq ?? 0));
+  const trustedSelf = state.trustedHeads[ctx.selfDevH];
+  const afterSeq = trustedSelf?.seq ?? -1;
+  const keys = await listSegmentKeysForDevHAfter(ctx, ctx.selfDevH, -1);
   /** @type {Set<string>} */
   const clientIds = new Set();
-  let maxSeq = -1;
-  let lastDigest = "";
+  if (keys.length === 0) {
+    return clientIds;
+  }
+  let maxSeq = afterSeq;
+  let lastDigest = trustedSelf?.digest ?? "";
   for (const key of keys) {
     const parsed = parseLogSegmentKey(key);
     if (!parsed) continue;
@@ -168,11 +270,21 @@ async function reconcileOwnLogPrefix(ctx, state) {
     for (const m of record.mutations) {
       if (m?.client_id) clientIds.add(String(m.client_id));
     }
-    maxSeq = parsed.seq;
-    lastDigest = layoutSegmentEnvelopeDigest(envelope);
+    if (parsed.seq > maxSeq) {
+      maxSeq = parsed.seq;
+      lastDigest = layoutSegmentEnvelopeDigest(envelope);
+    }
   }
-  if (maxSeq >= 0) {
-    assertTrustedHeadAdvance(state, ctx.selfDevH, { seq: maxSeq, digest: lastDigest });
+  if (maxSeq > afterSeq) {
+    const candidate = { seq: maxSeq, digest: lastDigest };
+    await assertOwnPrefixHeadChainsFromTrust(
+      ctx,
+      ctx.selfDevH,
+      trustedSelf,
+      (seq) => readEnvelopeAtSeq(ctx, ctx.selfDevH, seq),
+      candidate,
+    );
+    commitTrustedHeadAdvance(state, ctx.selfDevH, candidate);
     state.selfNextSeq = maxSeq + 1;
   }
   return clientIds;
@@ -180,26 +292,59 @@ async function reconcileOwnLogPrefix(ctx, state) {
 
 /**
  * @param {ObjectStoreSyncContext} ctx
- * @param {import('./storage/layout.mjs').LayoutLogSegmentRecord} record
- * @param {number} seq
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./sync-cursor.mjs').VectorSyncCursor} cursor
  */
-async function verifyRemoteSegmentChain(ctx, devH, seq) {
-  /** @type {{ seq: number, envelope: import('./ic-crypto.mjs').AeadEnvelope }[]} */
-  const segments = [];
-  for (let i = 0; i <= seq; i += 1) {
-    const key = logSegmentRelativePath(ctx.layoutPrefix, devH, i);
-    const envelope = await readLayoutSegmentEnvelope(ctx, key);
-    if (!envelope) {
-      throw new Error(`Missing segment ${key}`);
+async function discoverPendingSegments(ctx, state, cursor) {
+  /** @type {{ devH: string, seq: number, key: string }[]} */
+  const pending = [];
+  /** @type {Record<string, number>} */
+  const remoteMaxByDevH = {};
+
+  const devHs = new Set([
+    ...Object.keys(state.trustedHeads),
+    ...Object.keys(cursor.v ?? {}),
+  ]);
+
+  const logPrefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
+  let listCursor = state.logListCursor || undefined;
+  for (;;) {
+    const page = await ctx.adapter.list(logPrefix, { limit: 500, cursor: listCursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (!parsed) continue;
+      devHs.add(parsed.devH);
+      remoteMaxByDevH[parsed.devH] = Math.max(remoteMaxByDevH[parsed.devH] ?? -1, parsed.seq);
     }
-    segments.push({ seq: i, envelope });
+    if (!page.nextCursor) {
+      state.logListCursor = "";
+      break;
+    }
+    listCursor = page.nextCursor;
+    state.logListCursor = listCursor;
   }
-  const head = segments[segments.length - 1];
-  verifyLogSegmentChain(ctx.dek, devH, segments, {
-    seq: head.seq,
-    digest: layoutSegmentEnvelopeDigest(head.envelope),
+
+  for (const devH of devHs) {
+    if (remoteMaxByDevH[devH] === undefined) {
+      remoteMaxByDevH[devH] = await maxRemoteSeqForDevH(ctx, devH);
+    }
+  }
+  assertNoRemoteRollback(state, remoteMaxByDevH);
+  await assertTrustedHeadDigestsMatchRemote(ctx, state);
+
+  for (const devH of devHs) {
+    const after = cursor.v[devH] ?? -1;
+    const keys = await listSegmentKeysForDevHAfter(ctx, devH, after);
+    for (const key of keys) {
+      const parsed = parseLogSegmentKey(key);
+      if (parsed) pending.push({ devH: parsed.devH, seq: parsed.seq, key });
+    }
+  }
+  pending.sort((a, b) => {
+    if (a.devH !== b.devH) return a.devH.localeCompare(b.devH);
+    return a.seq - b.seq;
   });
-  return decryptLogSegment(ctx.dek, devH, seq, head.envelope);
+  return pending;
 }
 
 export async function objectStoreFetchSyncStatus(ctx) {
@@ -212,41 +357,38 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   const state = ctx.localState.load();
   const cursor = normalizeVectorSyncCursor(options.since ?? state.vectorCursor);
 
-  /** @type {{ devH: string, seq: number, key: string, record: import('./storage/layout.mjs').LayoutLogSegmentRecord }[]} */
-  const pendingSegments = [];
-  const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
-  const listed = await ctx.adapter.list(prefix, { limit: 10_000 });
-  for (const row of listed.objects) {
-    const parsed = parseLogSegmentKey(row.key);
-    if (!parsed) continue;
-    const after = cursor.v[parsed.devH] ?? -1;
-    if (parsed.seq <= after) continue;
-    pendingSegments.push({ ...parsed, key: row.key, record: null });
-  }
-  pendingSegments.sort((a, b) => a.seq - b.seq);
+  const pendingSegments = await discoverPendingSegments(ctx, state, cursor);
 
   /** @type {import('./object-store-merge.mjs').MergeableMutation[]} */
   const mergeItems = [];
   let segmentsTaken = 0;
   for (const row of pendingSegments) {
     if (segmentsTaken >= segmentLimit) break;
-    const record = await verifyRemoteSegmentChain(ctx, row.devH, row.seq);
+    const trusted = state.trustedHeads[row.devH];
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      row.devH,
+      trusted,
+      (seq) => readEnvelopeAtSeq(ctx, row.devH, seq),
+      row.seq,
+    );
     const envelope = await readLayoutSegmentEnvelope(ctx, row.key);
     if (!envelope) continue;
     const digest = layoutSegmentEnvelopeDigest(envelope);
-    assertTrustedHeadAdvance(state, row.devH, { seq: row.seq, digest });
+    commitTrustedHeadAdvance(state, row.devH, { seq: row.seq, digest });
+    const record = decryptLogSegment(ctx.dek, row.devH, row.seq, envelope);
     record.mutations.forEach((mutation, index) => {
       if (!mutation || typeof mutation !== "object") return;
-      const hlc = String(mutation.hlc ?? `${record.created_at}#${index}`);
-      mergeItems.push({
-        hlc,
-        devH: row.devH,
-        seq: row.seq,
-        index,
+      const item = mergeableFromMutation(
         mutation,
-        deviceUuid: record.dev,
-        segmentCreatedAt: record.created_at,
-      });
+        row.devH,
+        row.seq,
+        index,
+        record.dev,
+        record.created_at,
+      );
+      observeRemoteHlc(state, item.hlcTuple);
+      mergeItems.push(item);
     });
     advanceVectorCursorDevH(cursor, row.devH, row.seq);
     segmentsTaken += 1;
@@ -273,7 +415,7 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       const rows = Array.isArray(payload.messages) ? payload.messages : payload.data;
       if (Array.isArray(rows)) {
         payload.affected_client_ids = rows
-          .map((row) => row?.metadata?.ic_client_node_id ?? row?.id)
+          .map((r) => r?.metadata?.ic_client_node_id ?? r?.id)
           .filter(Boolean);
       }
     }
@@ -282,7 +424,7 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
     }
     state.ledger.push({
-      headSum: vectorCursorHeadSum(cursor),
+      headSum: computeHeadSequenceFromTrustedHeads(state),
       op: m.op,
       context_id: m.context_id ?? null,
       client_id: m.client_id,
@@ -320,7 +462,17 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   /** @type {object[]} */
   const effects = [];
 
-  const knownIds = await reconcileOwnLogPrefix(ctx, state);
+  let knownIds;
+  try {
+    knownIds = await reconcileOwnLogPrefix(ctx, state);
+  } catch (err) {
+    if (err instanceof ObjectStoreLogForkError || err instanceof ObjectStoreLogRollbackError) {
+      ctx.localState.save(state);
+      throw err;
+    }
+    throw err;
+  }
+
   for (const raw of batch) {
     const clientId = raw?.client_id ? String(raw.client_id) : "";
     if (!clientId) continue;
@@ -379,16 +531,18 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   });
 
   if (accepted.length > 0) {
-    const stamped = accepted.map((m, index) => ({
-      ...m,
-      hlc: m.hlc ?? `${new Date().toISOString()}#${index}`,
-    }));
+    const stamped = accepted.map((m) => {
+      const hlcTuple = nextLocalMutationHlc(state, ctx.selfDevH);
+      return {
+        ...m,
+        hlc: serializeMutationHlc(hlcTuple),
+      };
+    });
     let written = false;
     while (!written) {
       const seq = state.selfNextSeq;
       const trustedSelf = state.trustedHeads[ctx.selfDevH];
-      const prevDigest =
-        seq === 0 ? "" : String(trustedSelf?.digest ?? "");
+      const prevDigest = seq === 0 ? "" : String(trustedSelf?.digest ?? "");
       const record = {
         dev: ctx.deviceUuid,
         seq,
@@ -405,7 +559,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
           await ctx.testHookAfterSegmentWrite();
         }
         if (!ctx.testHookSkipLocalSaveAfterSegmentWrite) {
-          assertTrustedHeadAdvance(state, ctx.selfDevH, { seq, digest });
+          commitTrustedHeadAdvance(state, ctx.selfDevH, { seq, digest });
           state.selfNextSeq = seq + 1;
           advanceVectorCursorDevH(state.vectorCursor, ctx.selfDevH, seq);
           for (const raw of stamped) {
@@ -421,7 +575,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
               const rows = Array.isArray(payload.messages) ? payload.messages : payload.data;
               if (Array.isArray(rows)) {
                 payload.affected_client_ids = rows
-                  .map((row) => row?.metadata?.ic_client_node_id ?? row?.id)
+                  .map((r) => r?.metadata?.ic_client_node_id ?? r?.id)
                   .filter(Boolean);
               }
             }
@@ -434,7 +588,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
                   : [];
             }
             state.ledger.push({
-              headSum: vectorCursorHeadSum(state.vectorCursor),
+              headSum: computeHeadSequenceFromTrustedHeads(state),
               op: raw.op,
               context_id: raw.context_id ?? null,
               client_id: clientId,
@@ -445,6 +599,10 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
         }
         written = true;
       } catch (err) {
+        if (err instanceof ObjectStoreLogForkError || err instanceof ObjectStoreLogRollbackError) {
+          ctx.localState.save(state);
+          throw err;
+        }
         if (!(err instanceof PreconditionFailedError)) throw err;
         const rediscovered = await reconcileOwnLogPrefix(ctx, state);
         for (const raw of stamped) {
@@ -487,6 +645,5 @@ export {
   deriveDevH,
   ObjectStoreLogForkError,
   ObjectStoreLogRollbackError,
-  compareMergeableMutations,
   sortMergeableMutations,
 };

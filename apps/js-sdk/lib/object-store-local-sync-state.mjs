@@ -14,6 +14,8 @@ import {
  * @property {object[]} ledger local merged ledger for delete stale checks
  * @property {object[]} conflicts
  * @property {number} changeOrdinal monotonic hosted-shaped sequence for emitted changes
+ * @property {{ wall_ms: number, counter: number }} localHlc hybrid logical clock for local stamps
+ * @property {string} [logListCursor] pagination cursor for discovering remote log prefixes
  */
 
 /** @returns {ObjectStoreLocalSyncState} */
@@ -25,6 +27,8 @@ export function createEmptyObjectStoreLocalSyncState() {
     ledger: [],
     conflicts: [],
     changeOrdinal: 0,
+    localHlc: { wall_ms: 0, counter: 0 },
+    logListCursor: "",
   };
 }
 
@@ -41,7 +45,23 @@ export function computeHeadSequenceFromTrustedHeads(state) {
 
 /** @param {ObjectStoreLocalSyncState} state */
 export function headSequenceForStatus(state) {
-  return vectorCursorHeadSum(state.vectorCursor);
+  return computeHeadSequenceFromTrustedHeads(state);
+}
+
+/**
+ * @param {{ seq: number, digest: string } | undefined} prev
+ * @param {{ seq: number, digest: string }} nextHead
+ */
+export function checkTrustedHeadAdvance(prev, nextHead) {
+  if (!prev) return;
+  if (nextHead.seq < prev.seq) {
+    throw new ObjectStoreLogRollbackError(
+      `Remote log for device rolled back (local seq ${prev.seq}, remote ${nextHead.seq})`,
+    );
+  }
+  if (nextHead.seq === prev.seq && nextHead.digest !== prev.digest) {
+    throw new ObjectStoreLogForkError(`Remote log fork at seq ${nextHead.seq}`);
+  }
 }
 
 /**
@@ -49,22 +69,37 @@ export function headSequenceForStatus(state) {
  * @param {string} devH canonical
  * @param {{ seq: number, digest: string }} nextHead
  */
-export function assertTrustedHeadAdvance(state, devH, nextHead) {
+export function commitTrustedHeadAdvance(state, devH, nextHead) {
   const prev = state.trustedHeads[devH];
-  if (!prev) {
+  checkTrustedHeadAdvance(prev, nextHead);
+  if (!prev || nextHead.seq > prev.seq || nextHead.digest !== prev.digest) {
     state.trustedHeads[devH] = { seq: nextHead.seq, digest: nextHead.digest };
-    return;
   }
-  if (nextHead.seq < prev.seq) {
-    throw new ObjectStoreLogRollbackError(
-      `Remote log for ${devH} rolled back (local seq ${prev.seq}, remote ${nextHead.seq})`,
-    );
-  }
-  if (nextHead.seq === prev.seq && nextHead.digest !== prev.digest) {
-    throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${nextHead.seq}`);
-  }
-  if (nextHead.seq > prev.seq) {
-    state.trustedHeads[devH] = { seq: nextHead.seq, digest: nextHead.digest };
+}
+
+/** @param {ObjectStoreLocalSyncState} state @param {string} devH @param {{ seq: number, digest: string }} nextHead */
+export function assertTrustedHeadAdvance(state, devH, nextHead) {
+  commitTrustedHeadAdvance(state, devH, nextHead);
+}
+
+/**
+ * Persist trusted heads only when moving forward (for atomic save backends).
+ * @param {ObjectStoreLocalSyncState} persisted
+ * @param {ObjectStoreLocalSyncState} incoming
+ */
+export function mergeTrustedHeadsForwardOnly(persisted, incoming) {
+  for (const [devH, head] of Object.entries(incoming.trustedHeads ?? {})) {
+    if (!head) continue;
+    const prev = persisted.trustedHeads[devH];
+    if (!prev) {
+      persisted.trustedHeads[devH] = { ...head };
+      continue;
+    }
+    if (head.seq > prev.seq) {
+      persisted.trustedHeads[devH] = { seq: head.seq, digest: head.digest };
+    } else if (head.seq === prev.seq && head.digest === prev.digest) {
+      persisted.trustedHeads[devH] = { seq: prev.seq, digest: prev.digest };
+    }
   }
 }
 

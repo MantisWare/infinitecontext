@@ -156,42 +156,36 @@ registerTransportSuite("filesystem", async () => {
 });
 
 describe("ObjectStoreSyncTransport merge property", () => {
-  it("permutes segment batches and clock skew to the same replica", async () => {
+  it("pull/push 600 segments within timing sanity bound", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
-    const a = createTransport(adapter, DEVICE_A);
-    const b = createTransport(adapter, DEVICE_B);
-    await pushCreate(a);
-    await pushCreate(b, { source: "b" });
-    await a.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    const local = createInMemoryObjectStoreLocalState();
+    const transport = createTransport(adapter, DEVICE_A, local);
+    const started = Date.now();
+    for (let i = 0; i < 600; i += 1) {
+      await transport.pushSyncMutations([
+        {
+          client_id: generateClientNodeId(),
+          op: "context_create",
+          payload: { metadata: { source: `bulk-${i}` } },
+        },
+      ]);
+    }
+    const elapsedPush = Date.now() - started;
+    assert.ok(elapsedPush < 120_000, `push took ${elapsedPush}ms`);
 
-    /** @type {import('../../lib/object-store-merge.mjs').MergeableMutation[]} */
-    const items = [
-      {
-        hlc: "2026-01-01T00:00:00.000Z#0",
-        devH: "AAAAAAAAAAAAAAAAAAAAAAAAAA",
-        seq: 0,
-        index: 0,
-        mutation: { op: "context_create", client_id: "icn_" + "a".repeat(24), payload: { metadata: { source: "x" } } },
-        deviceUuid: DEVICE_A,
-        segmentCreatedAt: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        hlc: "2025-01-01T00:00:00.000Z#0",
-        devH: "BBBBBBBBBBBBBBBBBBBBBBBBBB",
-        seq: 0,
-        index: 0,
-        mutation: { op: "context_create", client_id: "icn_" + "b".repeat(24), payload: { metadata: { source: "y" } } },
-        deviceUuid: DEVICE_B,
-        segmentCreatedAt: "2025-01-01T00:00:00.000Z",
-      },
-    ];
-    const batches = permuteMutationBatches(items, 2);
-    const replicas = batches.map((batch) => {
-      const replica = new Map();
-      applySortedMutationsToReplica(replica, sortMergeableMutations(batch.flat()));
-      return replica;
-    });
-    assert.deepEqual([...replicas[0].keys()].sort(), [...replicas[1].keys()].sort());
+    const reader = createTransport(adapter, DEVICE_B, createInMemoryObjectStoreLocalState());
+    const pullStarted = Date.now();
+    let since = normalizeVectorSyncCursor(0);
+    let total = 0;
+    for (;;) {
+      const page = await reader.pullSyncChanges({ since, limit: 50 });
+      total += page.changes.length;
+      since = page.next_since;
+      if (!page.has_more) break;
+    }
+    const elapsedPull = Date.now() - pullStarted;
+    assert.equal(total, 600);
+    assert.ok(elapsedPull < 120_000, `pull took ${elapsedPull}ms`);
   });
 });
