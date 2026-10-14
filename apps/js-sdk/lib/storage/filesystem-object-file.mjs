@@ -8,6 +8,7 @@ import { StorageError } from "./errors.mjs";
 import { mapFsError } from "./filesystem-paths.mjs";
 
 export const FS_TEMP_PREFIX = ".ic-fs-tmp.";
+export const FS_GEN_SUFFIX = ".icgen";
 export const FS_TEMP_SWEEP_MAX_AGE_MS = 60 * 60 * 1000;
 
 /**
@@ -16,6 +17,7 @@ export const FS_TEMP_SWEEP_MAX_AGE_MS = 60 * 60 * 1000;
  * @property {number} revision
  * @property {number} size
  * @property {string} modifiedAt
+ * @property {boolean} [tombstone]
  */
 
 /**
@@ -51,10 +53,11 @@ export function encodeObjectFile(header, body) {
 }
 
 /**
+ * @param {string} key
  * @param {Uint8Array} fileBytes
  * @returns {{ header: StoredObjectHeader, body: Uint8Array }}
  */
-export function decodeObjectFile(fileBytes) {
+export function decodeAndVerifyObjectFile(key, fileBytes) {
   if (fileBytes.length < 4) {
     throw new StorageError("Corrupt storage object file (too short)", "corrupt_storage");
   }
@@ -81,22 +84,29 @@ export function decodeObjectFile(fileBytes) {
   if (body.length !== header.size) {
     throw new StorageError("Corrupt storage object file (size mismatch)", "corrupt_storage");
   }
-  return {
-    header: {
-      etag: header.etag,
-      revision: header.revision,
-      size: header.size,
-      modifiedAt: typeof header.modifiedAt === "string" ? header.modifiedAt : new Date().toISOString(),
-    },
-    body,
+  const normalized = {
+    etag: header.etag,
+    revision: header.revision,
+    size: header.size,
+    modifiedAt: typeof header.modifiedAt === "string" ? header.modifiedAt : new Date().toISOString(),
+    tombstone: header.tombstone === true,
   };
+  if (!normalized.tombstone) {
+    const expected = computeObjectEtag(key, body, normalized.revision);
+    if (expected !== normalized.etag) {
+      throw new StorageError("Corrupt storage object file (etag mismatch)", "corrupt_storage");
+    }
+  }
+  return { header: normalized, body };
 }
 
 /**
  * @param {string} objectPath
+ * @param {string} key
+ * @param {string} rootDir
  * @returns {{ header: StoredObjectHeader, body: Uint8Array } | null}
  */
-export function readObjectFileNoFollow(objectPath) {
+export function readObjectFileNoFollow(objectPath, key, rootDir) {
   let fd;
   try {
     fd = fs.openSync(objectPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -113,46 +123,43 @@ export function readObjectFileNoFollow(objectPath) {
     }
     const buf = Buffer.alloc(st.size);
     fs.readSync(fd, buf, 0, st.size, 0);
-    return decodeObjectFile(new Uint8Array(buf));
+    assertRealpathUnderRoot(objectPath, rootDir);
+    return decodeAndVerifyObjectFile(key, new Uint8Array(buf));
   } finally {
     fs.closeSync(fd);
   }
 }
 
 /**
- * @param {string} objectPath
+ * @param {string} targetPath
+ * @param {string} rootDir
+ */
+export function assertRealpathUnderRoot(targetPath, rootDir) {
+  const rootReal = fs.realpathSync(rootDir);
+  const targetReal = fs.realpathSync(targetPath);
+  if (targetReal !== rootReal && !targetReal.startsWith(`${rootReal}${path.sep}`)) {
+    throw new StorageError("Storage object path escapes the store root", "invalid_argument");
+  }
+}
+
+/**
+ * @param {string} tempPath
  * @param {Uint8Array} payload
  */
-export function writeObjectFileExclusiveAtomic(objectPath, payload) {
-  const dir = path.dirname(objectPath);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${FS_TEMP_PREFIX}${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`,
-  );
+export function writeExclusiveTempFile(tempPath, payload) {
+  fs.mkdirSync(path.dirname(tempPath), { recursive: true, mode: 0o700 });
   let fd;
   try {
-    fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     fs.writeSync(fd, payload, 0, payload.length);
     fs.fsyncSync(fd);
   } catch (error) {
-    throw mapFsError(error, tmp);
+    throw mapFsError(error, tempPath);
   } finally {
     if (fd !== undefined) {
       fs.closeSync(fd);
     }
   }
-  try {
-    fs.renameSync(tmp, objectPath);
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      // ignore
-    }
-    throw mapFsError(error, objectPath);
-  }
-  fsyncDirectory(dir);
 }
 
 /** @param {string} dirPath */
@@ -162,7 +169,7 @@ export function fsyncDirectory(dirPath) {
     dirFd = fs.openSync(dirPath, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
     fs.fsyncSync(dirFd);
   } catch {
-    // best effort (platforms without O_DIRECTORY)
+    // best effort
   } finally {
     if (dirFd !== undefined) {
       fs.closeSync(dirFd);

@@ -30,6 +30,7 @@ jobs:
           node --check apps/js-sdk/lib/storage/filesystem-keys.mjs
           node --check apps/js-sdk/lib/storage/filesystem-paths.mjs
           node --check apps/js-sdk/lib/storage/filesystem-object-file.mjs
+          node --check apps/js-sdk/lib/storage/filesystem-generations.mjs
           node --check apps/js-sdk/lib/storage/contract-suite.mjs
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs

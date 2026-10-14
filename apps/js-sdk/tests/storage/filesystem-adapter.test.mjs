@@ -74,18 +74,18 @@ describe("filesystem storage adapter", () => {
 
   it("rejects symlink escape under the store root", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fs-storage-symlink-"));
-    const outside = path.join(os.tmpdir(), `ic-fs-outside-${Date.now()}.secret`);
-    fs.writeFileSync(outside, "secret", { mode: 0o600 });
-    const trapDir = path.join(rootDir, "trap");
-    fs.mkdirSync(trapDir, { recursive: true });
-    const linkPath = path.join(trapDir, "link.enc");
-    fs.symlinkSync(outside, linkPath);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fs-outside-"));
+    fs.mkdirSync(path.join(rootDir, "objects"), { recursive: true });
+    fs.symlinkSync(outside, path.join(rootDir, "objects", "escape"));
 
     const adapter = createFilesystemStorageAdapter({ rootDir });
     await adapter.init();
-    await assert.rejects(() => adapter.get("trap/link.enc"), (error) => error instanceof StorageError);
+    await assert.rejects(
+      () => adapter.get("escape/obj.enc"),
+      (error) => error instanceof StorageError,
+    );
     fs.rmSync(rootDir, { recursive: true, force: true });
-    fs.unlinkSync(outside);
+    fs.rmSync(outside, { recursive: true, force: true });
   });
 
   it(`${RACE_PROCESSES} processes: exactly one ifNoneMatch:* create winner`, async () => {

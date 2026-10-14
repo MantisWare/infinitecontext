@@ -116,6 +116,21 @@ export function parseStorageObject(body) {
  * @param {Uint8Array} body
  * @param {string} objectKey
  */
+/**
+ * Rebind storage object AAD to a new key (rename). Ciphertext bytes unchanged.
+ * @param {Uint8Array} body
+ * @param {string} newObjectKey
+ */
+export function rebindStorageObjectForKey(body, newObjectKey) {
+  const parsed = parseStorageObject(body);
+  const seq = Number(String(parsed.aad).split("|").pop());
+  const enc = parsed.enc;
+  if (!enc || typeof enc !== "object") {
+    throw new Error("Storage object missing enc envelope");
+  }
+  return buildStorageObjectBytes(newObjectKey, /** @type {Record<string, unknown>} */ (enc), { seq });
+}
+
 export function verifyStorageObjectForKey(body, objectKey) {
   const record = parseStorageObject(body);
   assertStorageObjectRecord(record);

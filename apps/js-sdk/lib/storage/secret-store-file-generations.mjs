@@ -43,19 +43,8 @@ export function parseGenerationFromSecretsFileName(name) {
   return Number.isSafeInteger(gen) && gen > 0 ? gen : null;
 }
 
-/** @type {((rootDir: string) => { gen: number, path: string }[]) | null} */
-let listGenerationSecretPathsOverrideForTests = null;
-
-/** @param {((rootDir: string) => { gen: number, path: string }[]) | null} fn */
-export function setListGenerationSecretPathsOverrideForTests(fn) {
-  listGenerationSecretPathsOverrideForTests = fn;
-}
-
 /** @param {string} rootDir */
 export function listGenerationSecretPaths(rootDir) {
-  if (listGenerationSecretPathsOverrideForTests) {
-    return listGenerationSecretPathsOverrideForTests(rootDir);
-  }
   /** @type {{ gen: number, path: string }[]} */
   const found = [];
   let entries;

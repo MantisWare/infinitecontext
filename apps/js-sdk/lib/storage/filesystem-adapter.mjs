@@ -1,27 +1,29 @@
-import fs from "node:fs";
 import path from "node:path";
 
 import {
   assertStorageCiphertext,
   scanStorageObjectForLeaks,
+  rebindStorageObjectForKey,
   verifyStorageObjectForKey,
 } from "./ciphertext.mjs";
 import { PreconditionFailedError, StorageError } from "./errors.mjs";
-import { assertCanonicalStorageObjectKey, normalizeListPrefix } from "./filesystem-keys.mjs";
 import {
-  computeObjectEtag,
-  encodeObjectFile,
-  readObjectFileNoFollow,
-  sweepStaleFilesystemTempFiles,
-  writeObjectFileExclusiveAtomic,
-} from "./filesystem-object-file.mjs";
+  assertCanonicalStorageObjectKey,
+  keyMatchesListPrefix,
+  normalizeListPrefix,
+} from "./filesystem-keys.mjs";
 import {
-  mapFsError,
-  rejectSymlinkInStoreRoot,
-  rejectSymlinkPath,
-  resolveObjectFilePath,
-} from "./filesystem-paths.mjs";
+  buildLiveObjectHeader,
+  buildTombstoneHeader,
+  commitObjectGenerationCas,
+  listAllObjectKeys,
+  loadLatestObjectGeneration,
+  removeObjectGenerationForRepair,
+} from "./filesystem-generations.mjs";
+import { sweepStaleFilesystemTempFiles } from "./filesystem-object-file.mjs";
+import { mapFsError, rejectSymlinkInStoreRoot } from "./filesystem-paths.mjs";
 import { acquireHeartbeatLock } from "./secret-store-heartbeat-lock.mjs";
+import { assertHardLinkCommitSupported } from "./secret-store-file-link.mjs";
 import { ensurePrivateDir } from "./secret-store-private-dir.mjs";
 import { STORAGE_CAPABILITIES, assertNotAborted, storageCapabilitySet } from "./types.mjs";
 
@@ -46,10 +48,23 @@ async function withObjectsStoreLock(rootDir, fn) {
 }
 
 /**
+ * @param {string} rootDir
+ * @param {string} key
+ */
+function readLiveObject(rootDir, key) {
+  const latest = loadLatestObjectGeneration(rootDir, key);
+  if (!latest || latest.header.tombstone) {
+    return null;
+  }
+  verifyStorageObjectForKey(latest.body, key);
+  return latest;
+}
+
+/**
  * Local directory storage for ciphertext objects (dev, tests, synced-folder backends).
  *
  * @param {{ rootDir: string, id?: string, maxObjectBytes?: number, exposeInternalsForTests?: boolean }} options
- * @returns {StorageAdapter & { exposeInternalsForTests?: () => import("./contract-suite.mjs").StorageBackingSnapshot }}
+ * @returns {StorageAdapter & { exposeInternalsForTests?: () => import("./contract-suite.mjs").StorageBackingSnapshot, removeCorruptGeneration?: (key: string, gen: number) => void }}
  */
 export function createFilesystemStorageAdapter(options) {
   const rootDir = path.resolve(options.rootDir);
@@ -75,6 +90,7 @@ export function createFilesystemStorageAdapter(options) {
     async init() {
       try {
         ensurePrivateDir(rootDir);
+        assertHardLinkCommitSupported(rootDir);
         rejectSymlinkInStoreRoot(rootDir);
         sweepStaleFilesystemTempFiles(rootDir);
       } catch (error) {
@@ -82,21 +98,18 @@ export function createFilesystemStorageAdapter(options) {
       }
     },
 
-    async close() {
-      // stateless
-    },
+    async close() {},
 
     async get(key, requestOptions = {}) {
       assertNotAborted(requestOptions.signal);
       try {
-        const { canonical, objectPath } = resolveObjectFilePath(rootDir, key);
-        const stored = readObjectFileNoFollow(objectPath);
-        if (!stored) return null;
-        verifyStorageObjectForKey(stored.body, canonical);
+        const canonical = assertCanonicalStorageObjectKey(key);
+        const live = readLiveObject(rootDir, canonical);
+        if (!live) return null;
         return {
-          body: stored.body.slice(),
-          etag: stored.header.etag,
-          size: stored.body.length,
+          body: live.body.slice(),
+          etag: live.header.etag,
+          size: live.body.length,
         };
       } catch (error) {
         throw error instanceof StorageError ? error : mapFsError(error, rootDir);
@@ -106,10 +119,10 @@ export function createFilesystemStorageAdapter(options) {
     async head(key, requestOptions = {}) {
       assertNotAborted(requestOptions.signal);
       try {
-        const { objectPath } = resolveObjectFilePath(rootDir, key);
-        const stored = readObjectFileNoFollow(objectPath);
-        if (!stored) return null;
-        return { etag: stored.header.etag, size: stored.body.length };
+        const canonical = assertCanonicalStorageObjectKey(key);
+        const live = readLiveObject(rootDir, canonical);
+        if (!live) return null;
+        return { etag: live.header.etag, size: live.body.length };
       } catch (error) {
         throw error instanceof StorageError ? error : mapFsError(error, rootDir);
       }
@@ -117,37 +130,27 @@ export function createFilesystemStorageAdapter(options) {
 
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
-      assertCanonicalStorageObjectKey(key);
-      assertStorageCiphertext(body, { objectKey: key });
-      scanStorageObjectForLeaks(key, body);
+      const canonical = assertCanonicalStorageObjectKey(key);
+      assertStorageCiphertext(body, { objectKey: canonical });
+      scanStorageObjectForLeaks(canonical, body);
       if (body.length > maxObjectBytes) {
         throw new StorageError(`Object exceeds maxObjectBytes (${maxObjectBytes})`, "invalid_argument");
       }
+      const storedBody = body.slice();
 
       return withObjectsStoreLock(rootDir, async (assertHeld) => {
-        const { canonical, objectPath } = resolveObjectFilePath(rootDir, key);
-        const current = readObjectFileNoFollow(objectPath);
-        checkPutPreconditions(current?.header.etag ?? null, putOptions);
-
-        assertHeld();
-        const revision = (current?.header.revision ?? 0) + 1;
-        const storedBody = body.slice();
-        const modifiedAt = new Date().toISOString();
-        const etag = computeObjectEtag(canonical, storedBody, revision);
-        const payload = encodeObjectFile(
-          { etag, revision, size: storedBody.length, modifiedAt },
-          storedBody,
-        );
-
-        assertHeld();
-        writeObjectFileExclusiveAtomic(objectPath, payload);
-
+        const committed = commitObjectGenerationCas(rootDir, assertHeld, canonical, (state) => {
+          const live = state.header && !state.header.tombstone;
+          checkPutPreconditions(live ? state.header.etag : null, putOptions);
+          const revision = (state.header?.revision ?? 0) + 1;
+          return buildLiveObjectHeader(canonical, storedBody, revision);
+        });
         return {
           key: canonical,
-          etag,
-          revision: String(revision),
-          size: storedBody.length,
-          modifiedAt,
+          etag: committed.header.etag,
+          revision: String(committed.header.revision),
+          size: committed.body.length,
+          modifiedAt: committed.header.modifiedAt,
         };
       });
     },
@@ -155,9 +158,11 @@ export function createFilesystemStorageAdapter(options) {
     async list(prefix, listOptions = {}) {
       assertNotAborted(listOptions.signal);
       try {
-        const normalizedPrefix = normalizeListPrefix(prefix);
+        const listPrefix = normalizeListPrefix(prefix);
         const limit = listOptions.limit ?? 1000;
-        let keys = listObjectKeys(rootDir).filter((key) => key.startsWith(normalizedPrefix)).sort();
+        let keys = listAllObjectKeys(rootDir)
+          .filter((key) => keyMatchesListPrefix(key, listPrefix))
+          .sort();
         if (listOptions.cursor) {
           const cursor = String(listOptions.cursor);
           keys = keys.filter((key) => key > cursor);
@@ -167,22 +172,28 @@ export function createFilesystemStorageAdapter(options) {
         /** @type {import("./types.mjs").StorageObjectInfo[]} */
         const objects = [];
         for (const key of page) {
+          let live;
           try {
-            const { objectPath } = resolveObjectFilePath(rootDir, key);
-            const stored = readObjectFileNoFollow(objectPath);
-            if (!stored) {
-              continue;
+            live = readLiveObject(rootDir, key);
+          } catch (error) {
+            if (error instanceof StorageError && error.code === "corrupt_storage") {
+              throw new StorageError(
+                `Corrupt storage object at key ${key} (${error.message})`,
+                "corrupt_storage",
+              );
             }
-            objects.push({
-              key,
-              etag: stored.header.etag,
-              revision: String(stored.header.revision),
-              size: stored.body.length,
-              modifiedAt: stored.header.modifiedAt,
-            });
-          } catch {
+            throw error;
+          }
+          if (!live) {
             continue;
           }
+          objects.push({
+            key,
+            etag: live.header.etag,
+            revision: String(live.header.revision),
+            size: live.body.length,
+            modifiedAt: live.header.modifiedAt,
+          });
         }
         return { objects, nextCursor };
       } catch (error) {
@@ -192,55 +203,74 @@ export function createFilesystemStorageAdapter(options) {
 
     async delete(key, deleteOptions = {}) {
       assertNotAborted(deleteOptions.signal);
+      const canonical = assertCanonicalStorageObjectKey(key);
       return withObjectsStoreLock(rootDir, async (assertHeld) => {
-        const { objectPath } = resolveObjectFilePath(rootDir, key);
-        const current = readObjectFileNoFollow(objectPath);
-        if (!current) {
+        const latest = loadLatestObjectGeneration(rootDir, canonical);
+        const live = latest && !latest.header.tombstone;
+        if (!live) {
           if (deleteOptions.ifMatch !== undefined) {
             throw new PreconditionFailedError("ifMatch precondition failed");
           }
           return;
         }
-        if (deleteOptions.ifMatch !== undefined && current.header.etag !== deleteOptions.ifMatch) {
-          throw new PreconditionFailedError("ifMatch precondition failed");
-        }
-        assertHeld();
-        try {
-          fs.unlinkSync(objectPath);
-        } catch (error) {
-          throw mapFsError(error, objectPath);
-        }
+        commitObjectGenerationCas(rootDir, assertHeld, canonical, (state) => {
+          const stillLive = state.header && !state.header.tombstone;
+          if (!stillLive) {
+            throw new PreconditionFailedError("ifMatch precondition failed");
+          }
+          if (deleteOptions.ifMatch !== undefined && state.header.etag !== deleteOptions.ifMatch) {
+            throw new PreconditionFailedError("ifMatch precondition failed");
+          }
+          const revision = (state.header?.revision ?? 0) + 1;
+          return buildTombstoneHeader(revision);
+        });
       });
     },
 
     async rename(fromKey, toKey, renameOptions = {}) {
       assertNotAborted(renameOptions.signal);
+      const fromCanonical = assertCanonicalStorageObjectKey(fromKey);
+      const toCanonical = assertCanonicalStorageObjectKey(toKey);
       return withObjectsStoreLock(rootDir, async (assertHeld) => {
-        const from = resolveObjectFilePath(rootDir, fromKey);
-        const to = resolveObjectFilePath(rootDir, toKey);
-        const current = readObjectFileNoFollow(from.objectPath);
-        if (!current) {
+        const src = loadLatestObjectGeneration(rootDir, fromCanonical);
+        if (!src || src.header.tombstone) {
           throw new PreconditionFailedError("rename source missing");
         }
-        if (readObjectFileNoFollow(to.objectPath)) {
-          throw new PreconditionFailedError("rename destination already exists");
-        }
-        if (renameOptions.ifMatch !== undefined && current.header.etag !== renameOptions.ifMatch) {
+        if (renameOptions.ifMatch !== undefined && src.header.etag !== renameOptions.ifMatch) {
           throw new PreconditionFailedError("ifMatch precondition failed");
         }
-        assertHeld();
-        fs.mkdirSync(path.dirname(to.objectPath), { recursive: true, mode: 0o700 });
-        try {
-          fs.renameSync(from.objectPath, to.objectPath);
-        } catch (error) {
-          throw mapFsError(error, to.objectPath);
+        const dstLive = readLiveObject(rootDir, toCanonical);
+        if (dstLive) {
+          throw new PreconditionFailedError("rename destination already exists");
         }
+
+        commitObjectGenerationCas(rootDir, assertHeld, fromCanonical, (state) => {
+          const live = state.header && !state.header.tombstone;
+          if (!live || state.header.etag !== src.header.etag) {
+            throw new PreconditionFailedError("ifMatch precondition failed");
+          }
+          const revision = (state.header?.revision ?? 0) + 1;
+          return buildTombstoneHeader(revision);
+        });
+
+        const rebound = rebindStorageObjectForKey(src.body.slice(), toCanonical);
+        const committed = commitObjectGenerationCas(rootDir, assertHeld, toCanonical, (state) => {
+          if (state.header && !state.header.tombstone) {
+            throw new PreconditionFailedError("rename destination already exists");
+          }
+          checkPutPreconditions(state.header && !state.header.tombstone ? state.header.etag : null, {
+            ifNoneMatch: "*",
+          });
+          const revision = (state.header?.revision ?? 0) + 1;
+          return buildLiveObjectHeader(toCanonical, rebound, revision);
+        });
+
         return {
-          key: to.canonical,
-          etag: current.header.etag,
-          revision: String(current.header.revision),
-          size: current.body.length,
-          modifiedAt: current.header.modifiedAt,
+          key: toCanonical,
+          etag: committed.header.etag,
+          revision: String(committed.header.revision),
+          size: committed.body.length,
+          modifiedAt: committed.header.modifiedAt,
         };
       });
     },
@@ -249,6 +279,9 @@ export function createFilesystemStorageAdapter(options) {
   if (options.exposeInternalsForTests) {
     adapter.exposeInternalsForTests = () => collectBackingSnapshot(rootDir);
   }
+  adapter.removeCorruptGeneration = (key, gen) => {
+    removeObjectGenerationForRepair(rootDir, key, gen);
+  };
 
   return adapter;
 }
@@ -277,71 +310,20 @@ function checkPutPreconditions(currentEtag, putOptions) {
 }
 
 /** @param {string} rootDir */
-function listObjectKeys(rootDir) {
-  /** @type {string[]} */
-  const keys = [];
-  const root = path.resolve(rootDir);
-  if (!fs.existsSync(root)) {
-    return keys;
-  }
-  rejectSymlinkPath(root);
-
-  /** @param {string} dir @param {string} relPrefix */
-  const walk = (dir, relPrefix) => {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".ic-fs-") || entry.name === OBJECTS_LOCK_FILENAME) {
-        continue;
-      }
-      const full = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        walk(full, relPrefix ? `${relPrefix}/${entry.name}` : entry.name);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const relKey = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-      try {
-        assertCanonicalStorageObjectKey(relKey);
-        keys.push(relKey);
-      } catch {
-        // skip non-object artifacts
-      }
-    }
-  };
-  walk(root, "");
-  return keys;
-}
-
-/** @param {string} rootDir */
 function collectBackingSnapshot(rootDir) {
-  const keys = listObjectKeys(rootDir).sort();
+  const keys = listAllObjectKeys(rootDir).sort();
   /** @type {Uint8Array[]} */
   const bodies = [];
   /** @type {Record<string, unknown>[]} */
   const metadata = [];
   for (const key of keys) {
+    const live = readLiveObject(rootDir, key);
+    if (!live) continue;
+    bodies.push(live.body);
     try {
-      const { objectPath } = resolveObjectFilePath(rootDir, key);
-      const stored = readObjectFileNoFollow(objectPath);
-      if (!stored) continue;
-      bodies.push(stored.body);
-      try {
-        metadata.push(JSON.parse(new TextDecoder().decode(stored.body)));
-      } catch {
-        metadata.push({});
-      }
+      metadata.push(JSON.parse(new TextDecoder().decode(live.body)));
     } catch {
-      // skip
+      metadata.push({});
     }
   }
   return { keys, bodies, metadata };
