@@ -14,6 +14,7 @@ export {
 } from "./ciphertext.mjs";
 export { encryptVaultPlaintextForStoragePut } from "./encrypt-storage-object.mjs";
 export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
+export { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 export { SecretStore, resolveSecretStoreBackend } from "./secret-store.mjs";
 export { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 export {
