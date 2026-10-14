@@ -237,7 +237,7 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
     } catch {
       // ignore
     }
-    pruneOldGenerations(rootDir, keyDir, nextGen);
+    pruneOldGenerations(rootDir, keyDir, nextGen, built.header, canonical);
     return { gen: nextGen, header: built.header, body: built.body };
   }
   throw new StorageError("Storage object CAS commit exceeded retry limit", "store_retry");
@@ -247,9 +247,13 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
  * @param {string} rootDir
  * @param {string} keyDir
  * @param {number} committedGen
+ * @param {import("./filesystem-object-file.mjs").StoredObjectHeader} committedHeader
+ * @param {string} canonicalKey
  */
-function pruneOldGenerations(rootDir, keyDir, committedGen) {
-  const keepFrom = committedGen - 2;
+function pruneOldGenerations(rootDir, keyDir, committedGen, committedHeader, canonicalKey) {
+  const tombstoneCommit = committedHeader.tombstone === true;
+  /** Generations at or above this index are kept (retention window = last 2 live commits). */
+  const keepFrom = tombstoneCommit ? committedGen : committedGen - 2;
   let removedAny = false;
   for (const row of listGenerationPathsForKeyDir(keyDir)) {
     if (row.gen >= keepFrom) {
@@ -260,6 +264,28 @@ function pruneOldGenerations(rootDir, keyDir, committedGen) {
       removedAny = true;
     } catch {
       // ignore
+    }
+  }
+  if (!tombstoneCommit) {
+    const retentionFloor = committedGen - 1;
+    for (const row of listGenerationPathsForKeyDir(keyDir)) {
+      if (row.gen >= retentionFloor) {
+        continue;
+      }
+      try {
+        const decoded = readObjectFileNoFollow(row.path, canonicalKey, rootDir);
+        if (!decoded?.header.tombstone) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      try {
+        fs.unlinkSync(row.path);
+        removedAny = true;
+      } catch {
+        // ignore
+      }
     }
   }
   if (removedAny) {

@@ -24,7 +24,7 @@ Readers use the **highest generation only**. A corrupt newest generation is **`c
 
 ## Concurrency
 
-Conditional **`put` / `delete` / `rename`** evaluate preconditions, then commit via **hard-link CAS** so a stall between lock refresh and commit cannot drop an acknowledged write. The **heartbeat lock** (`storage-objects.lock`) serializes writers; correctness is from **CAS**, not the lock alone.
+Conditional **`put` / `delete`** evaluate preconditions, then commit via **hard-link CAS** so a stall between lock refresh and commit cannot drop an acknowledged write. The **heartbeat lock** (`storage-objects.lock`) serializes writers; correctness is from **CAS**, not the lock alone.
 
 **Symlinks** are rejected under the store root (`lstat` per segment, **`O_NOFOLLOW`** on read, **`realpath`** check after open).
 

@@ -159,8 +159,18 @@ export function writeExclusiveTempFile(tempPath, payload, rootDir) {
     fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     fs.writeSync(fd, payload, 0, payload.length);
     fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
     assertRealpathUnderRoot(tempPath, rootDir);
   } catch (error) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // ignore
+    }
+    if (error instanceof StorageError) {
+      throw error;
+    }
     throw mapFsError(error, tempPath);
   } finally {
     if (fd !== undefined) {
