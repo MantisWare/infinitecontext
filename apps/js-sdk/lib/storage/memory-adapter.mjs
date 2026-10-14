@@ -7,6 +7,7 @@ import {
   verifyStorageObjectForKey,
 } from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
+import { keyMatchesListPrefix, normalizeListPrefix } from "./filesystem-keys.mjs";
 import { STORAGE_CAPABILITIES, assertNotAborted, storageCapabilitySet } from "./types.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -67,7 +68,6 @@ export function createMemoryStorageAdapter(options = {}) {
       STORAGE_CAPABILITIES.delete,
       STORAGE_CAPABILITIES.conditionalCreate,
       STORAGE_CAPABILITIES.conditionalReplace,
-      STORAGE_CAPABILITIES.atomicRename,
       STORAGE_CAPABILITIES.strongListAfterWrite,
     ]),
 
@@ -144,10 +144,10 @@ export function createMemoryStorageAdapter(options = {}) {
 
     async list(prefix, listOptions = {}) {
       assertNotAborted(listOptions.signal);
-      const normalizedPrefix = normalizePrefix(prefix);
+      const listPrefix = normalizeListPrefix(prefix);
       const limit = listOptions.limit ?? 1000;
       let keys = [...objects.keys()]
-        .filter((key) => key.startsWith(normalizedPrefix))
+        .filter((key) => keyMatchesListPrefix(key, listPrefix))
         .sort();
       if (listOptions.cursor) {
         const cursor = String(listOptions.cursor);
@@ -185,29 +185,6 @@ export function createMemoryStorageAdapter(options = {}) {
       objects.delete(normalized);
     },
 
-    async rename(fromKey, toKey, renameOptions = {}) {
-      assertNotAborted(renameOptions.signal);
-      const from = readEntry(fromKey);
-      const to = readEntry(toKey);
-      if (!from.entry) {
-        throw new PreconditionFailedError("rename source missing");
-      }
-      if (to.entry) {
-        throw new PreconditionFailedError("rename destination already exists");
-      }
-      if (renameOptions.ifMatch !== undefined && from.entry.etag !== renameOptions.ifMatch) {
-        throw new PreconditionFailedError("ifMatch precondition failed");
-      }
-      objects.set(to.normalized, from.entry);
-      objects.delete(from.normalized);
-      return {
-        key: to.normalized,
-        etag: from.entry.etag,
-        revision: String(from.entry.revision),
-        size: from.entry.body.length,
-        modifiedAt: from.entry.modifiedAt,
-      };
-    },
   };
 
   if (options.exposeInternalsForTests) {

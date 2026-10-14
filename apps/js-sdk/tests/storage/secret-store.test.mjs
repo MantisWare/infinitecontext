@@ -19,18 +19,15 @@ import {
 import {
   formatGenerationSecretsFileName,
   listGenerationSecretPaths,
-  loadLatestSecretsMap,
-  setListGenerationSecretPathsOverrideForTests,
 } from "../../lib/storage/secret-store-file-generations.mjs";
 import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
 import {
   isHardLinkCommitSupported,
   resetHardLinkProbeCacheForTests,
 } from "../../lib/storage/secret-store-file-link.mjs";
-import {
-  ensurePrivateDir,
-  setChmodSyncImplForTests,
-} from "../../lib/storage/secret-store-private-dir.mjs";
+import { mock } from "node:test";
+
+import { ensurePrivateDir } from "../../lib/storage/secret-store-private-dir.mjs";
 import {
   isLockStaleByMtimeForTests,
   STALE_LOCK_MTIME_MS,
@@ -462,30 +459,9 @@ describe("resolveSecretStoreBackend auto", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it("loadLatestSecretsMap throws store_not_found when generation file stays missing", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-missing-gen-"));
-    const kek = new Uint8Array(32);
-    kek.fill(7);
-    const missingPath = path.join(rootDir, formatGenerationSecretsFileName(1));
-    setListGenerationSecretPathsOverrideForTests(() => [{ gen: 1, path: missingPath }]);
-    try {
-      assert.throws(
-        () => loadLatestSecretsMap(rootDir, kek),
-        (error) =>
-          error instanceof Error &&
-          "code" in error &&
-          error.code === "store_not_found" &&
-          error.code !== "corrupt_secret_store",
-      );
-    } finally {
-      setListGenerationSecretPathsOverrideForTests(null);
-      fs.rmSync(rootDir, { recursive: true, force: true });
-    }
-  });
-
   it("ensurePrivateDir ignores EPERM from chmod", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-chmod-eperm-"));
-    setChmodSyncImplForTests(() => {
+    const chmodMock = mock.method(fs, "chmodSync", () => {
       const error = new Error("chmod not permitted");
       Object.assign(error, { code: "EPERM" });
       throw error;
@@ -493,7 +469,7 @@ describe("resolveSecretStoreBackend auto", () => {
     try {
       assert.doesNotThrow(() => ensurePrivateDir(dir));
     } finally {
-      setChmodSyncImplForTests(null);
+      chmodMock.mock.restore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

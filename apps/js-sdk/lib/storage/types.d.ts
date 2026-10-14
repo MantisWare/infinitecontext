@@ -6,7 +6,6 @@ export type StorageCapability =
   | "delete"
   | "conditionalCreate"
   | "conditionalReplace"
-  | "atomicRename"
   | "strongListAfterWrite"
   | "serverSideTimestamps";
 
@@ -48,13 +47,16 @@ export type StorageListOptions = StorageRequestOptions & {
   cursor?: string;
 };
 
-export type StorageListResult = {
-  objects: StorageObjectInfo[];
-  nextCursor?: string;
+export type StorageCorruptEntry = {
+  key: string;
+  gen?: number;
+  message: string;
 };
 
-export type StorageRenameOptions = StorageRequestOptions & {
-  ifMatch?: string;
+export type StorageListResult = {
+  objects: StorageObjectInfo[];
+  corrupt?: StorageCorruptEntry[];
+  nextCursor?: string;
 };
 
 export interface StorageAdapter {
@@ -69,7 +71,6 @@ export interface StorageAdapter {
   put(key: string, body: Uint8Array, options?: StoragePutOptions): Promise<StorageObjectInfo>;
   list(prefix: string, options?: StorageListOptions): Promise<StorageListResult>;
   delete(key: string, options?: StorageDeleteOptions): Promise<void>;
-  rename?(fromKey: string, toKey: string, options?: StorageRenameOptions): Promise<StorageObjectInfo>;
 }
 
 export declare const STORAGE_CAPABILITIES: Readonly<Record<string, StorageCapability>>;

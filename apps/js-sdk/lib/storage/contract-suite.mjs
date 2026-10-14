@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { assertStorageCiphertext, buildStorageObjectBytes, scanStorageObjectForLeaks } from "./ciphertext.mjs";
+import {
+  assertStorageCiphertext,
+  buildStorageObjectBytes,
+  scanStorageObjectForLeaks,
+} from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 
@@ -22,7 +26,7 @@ export function sampleEncryptedObjectBytesForKey(objectKey) {
 }
 
 /** @param {string} objectKey @param {number} tagByte */
-function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
+export function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
   const ct = Buffer.alloc(16, tagByte).toString("base64");
   return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
@@ -141,6 +145,25 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       await adapter.delete(key);
       assert.equal(await adapter.get(key), null);
       assertBackingIsCiphertextOnly();
+    });
+
+    // List prefix semantics: `prefix` is segment-based. A trailing `/` requires a path
+    // separator after the prefix (`list('a/')` matches `a/x` but not `ab/x`).
+    it("list prefix with trailing slash does not match sibling keys", async () => {
+      useHarness(await createHarness());
+      requireInspectBacking();
+      await adapter.init();
+      await adapter.put("ab/x.enc", sampleEncryptedObjectBytesForKey("ab/x.enc"), { ifNoneMatch: "*" });
+      await adapter.put("a/y.enc", sampleEncryptedObjectBytesForKey("a/y.enc"), { ifNoneMatch: "*" });
+      const listed = await adapter.list("a/");
+      assert.equal(
+        listed.objects.some((row) => row.key === "a/y.enc"),
+        true,
+      );
+      assert.equal(
+        listed.objects.some((row) => row.key === "ab/x.enc"),
+        false,
+      );
     });
 
     it("lists root prefix and paginates with cursor", async () => {

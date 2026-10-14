@@ -2,14 +2,6 @@ import fs from "node:fs";
 
 import { StorageError } from "./errors.mjs";
 
-/** @type {typeof fs.chmodSync | null} */
-let chmodSyncImplForTests = null;
-
-/** @param {typeof fs.chmodSync | null} fn */
-export function setChmodSyncImplForTests(fn) {
-  chmodSyncImplForTests = fn;
-}
-
 const CHMOD_IGNORE_CODES = new Set(["EPERM", "EACCES", "ENOTSUP", "EROFS"]);
 
 /**
@@ -29,9 +21,8 @@ export function ensurePrivateDir(rootDir) {
  * @param {string} rootDir
  */
 function tryChmod0700(rootDir) {
-  const chmodSync = chmodSyncImplForTests ?? fs.chmodSync;
   try {
-    chmodSync(rootDir, 0o700);
+    fs.chmodSync(rootDir, 0o700);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && CHMOD_IGNORE_CODES.has(String(error.code))) {
       if (process.env.INFINITECONTEXT_DEBUG) {
