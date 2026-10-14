@@ -22,7 +22,7 @@ export function sampleEncryptedObjectBytesForKey(objectKey) {
 }
 
 /** @param {string} objectKey @param {number} tagByte */
-function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
+export function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
   const ct = Buffer.alloc(16, tagByte).toString("base64");
   return buildStorageObjectBytes(objectKey, {
     __ic_enc: 1,
