@@ -7,7 +7,9 @@ import process from "node:process";
 export const LOCK_HEARTBEAT_MS = 15_000;
 export const LOCK_STALE_MS = 60_000;
 export const LOCK_PARTIAL_GRACE_MS = 5_000;
+export const OBJECT_STORE_STATE_TMP_PATTERN = /^.+\.tmp-\d+-[0-9a-f]+$/i;
 const LOCK_ACQUIRE_MS = 10_000;
+const QUARANTINE_SUFFIX = ".quarantine.";
 
 /** @type {Map<string, NodeJS.Timeout>} */
 const heartbeatTimers = new Map();
@@ -78,6 +80,62 @@ export function isStaleObjectStoreStateLock(lockPath) {
   return age > LOCK_STALE_MS;
 }
 
+/** @param {string} quarantinePath */
+function discardQuarantinedLock(quarantinePath) {
+  try {
+    fs.unlinkSync(quarantinePath);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @param {string} lockPath @param {string} quarantinePath */
+function tryRestoreQuarantinedLock(lockPath, quarantinePath) {
+  if (!fs.existsSync(quarantinePath)) return;
+  if (fs.existsSync(lockPath)) {
+    discardQuarantinedLock(quarantinePath);
+    return;
+  }
+  try {
+    fs.linkSync(quarantinePath, lockPath);
+    discardQuarantinedLock(quarantinePath);
+  } catch {
+    discardQuarantinedLock(quarantinePath);
+  }
+}
+
+/** @param {string} name */
+function quarantinePidFromName(name) {
+  const match = /\.quarantine\.(\d+)\./.exec(name);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) ? pid : null;
+}
+
+/** @param {string} dir */
+export function cleanupDeadObjectStoreLockQuarantines(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.includes(QUARANTINE_SUFFIX)) continue;
+    const full = path.join(dir, name);
+    const record = readLockRecord(full);
+    let remove = false;
+    if (record) {
+      const sameHost = record.hostname === os.hostname();
+      remove = sameHost && !isPidAlive(record.pid);
+    } else {
+      const breakerPid = quarantinePidFromName(name);
+      remove = breakerPid !== null && !isPidAlive(breakerPid);
+    }
+    if (!remove) continue;
+    try {
+      fs.unlinkSync(full);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** @param {string} lockPath */
 export function breakStaleObjectStoreStateLock(lockPath) {
   if (!fs.existsSync(lockPath)) return;
@@ -89,18 +147,10 @@ export function breakStaleObjectStoreStateLock(lockPath) {
     return;
   }
   if (!isStaleObjectStoreStateLock(quarantine)) {
-    try {
-      fs.renameSync(quarantine, lockPath);
-    } catch {
-      /* ignore */
-    }
+    tryRestoreQuarantinedLock(lockPath, quarantine);
     return;
   }
-  try {
-    fs.unlinkSync(quarantine);
-  } catch {
-    /* ignore */
-  }
+  discardQuarantinedLock(quarantine);
 }
 
 /** @param {string} lockPath */
@@ -133,7 +183,9 @@ export function stopObjectStoreStateLockHeartbeat(lockPath) {
 export async function acquireObjectStoreStateLock(lockPath, options = {}) {
   const timeoutMs = options.timeoutMs ?? LOCK_ACQUIRE_MS;
   const started = Date.now();
-  fs.mkdirSync(pathDirname(lockPath), { recursive: true, mode: 0o700 });
+  const dir = pathDirname(lockPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  cleanupDeadObjectStoreLockQuarantines(dir);
   for (;;) {
     breakStaleObjectStoreStateLock(lockPath);
     try {
@@ -189,7 +241,7 @@ export function cleanupOrphanObjectStoreTmpFiles(dir, maxAgeMs = 10 * 60 * 1000)
   if (!fs.existsSync(dir)) return;
   const now = Date.now();
   for (const name of fs.readdirSync(dir)) {
-    if (!name.includes(".tmp")) continue;
+    if (!OBJECT_STORE_STATE_TMP_PATTERN.test(name)) continue;
     const full = path.join(dir, name);
     try {
       const stat = fs.statSync(full);

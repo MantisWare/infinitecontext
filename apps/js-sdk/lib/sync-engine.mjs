@@ -11,8 +11,8 @@ import {
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 import {
-  buildLwwSupersededConflict,
-  buildTombstoneBlockedUpdateConflict,
+  refreshReplicaConflictKindsForMessage,
+  upsertReplicaLoserConflict,
 } from "./object-store-replica-conflicts.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
@@ -228,13 +228,6 @@ function shouldApplyLww(existing, incoming) {
   return compareHlc(/** @type {{ _hlc: import('./object-store-hlc.mjs').HlcTuple }} */ (existing)._hlc, incoming) <= 0;
 }
 
-function recordReplicaConflict(replica, conflict) {
-  if (!Array.isArray(replica.sync_conflicts)) replica.sync_conflicts = [];
-  const id = String(conflict.id ?? "");
-  if (!id || replica.sync_conflicts.some((row) => row.id === id)) return;
-  replica.sync_conflicts.push(conflict);
-}
-
 export function applySyncChangeToReplica(replica, change, persist) {
   if (!change || typeof change !== "object") return;
   const op = String(change.op ?? "");
@@ -304,62 +297,54 @@ export function applySyncChangeToReplica(replica, change, persist) {
       }
 
       if (existing?.tombstone) {
-        recordReplicaConflict(
-          replica,
-          buildTombstoneBlockedUpdateConflict({
-            context_id: ctxId,
-            client_node_id: key,
-            op,
-            hlc: change.hlc ?? null,
-            data: row,
-            sequence,
-            created_at: change.created_at,
-            loser_dev_h: changeSource.devH,
-            loser_seq: changeSource.seq,
-            loser_index: changeSource.index,
-          }),
-        );
+        upsertReplicaLoserConflict(replica, {
+          context_id: ctxId,
+          client_node_id: key,
+          op,
+          hlc: change.hlc ?? null,
+          loser_hlc: hlcTuple,
+          data: row,
+          sequence,
+          created_at: change.created_at,
+          loser_dev_h: changeSource.devH,
+          loser_seq: changeSource.seq,
+          loser_index: changeSource.index,
+        });
         continue;
       }
 
       if (existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
-        recordReplicaConflict(
-          replica,
-          buildLwwSupersededConflict({
-            context_id: ctxId,
-            client_node_id: key,
-            op,
-            winner_hlc: existing._hlc,
-            loser_hlc: hlcTuple,
-            data: row,
-            sequence,
-            created_at: change.created_at,
-            loser_dev_h: changeSource.devH,
-            loser_seq: changeSource.seq,
-            loser_index: changeSource.index,
-          }),
-        );
+        upsertReplicaLoserConflict(replica, {
+          context_id: ctxId,
+          client_node_id: key,
+          op,
+          winner_hlc: existing._hlc,
+          loser_hlc: hlcTuple,
+          data: row,
+          sequence,
+          created_at: change.created_at,
+          loser_dev_h: changeSource.devH,
+          loser_seq: changeSource.seq,
+          loser_index: changeSource.index,
+        });
         continue;
       }
 
       if (existing?._hlc && shouldApplyLww(existing, hlcTuple)) {
         const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
-        recordReplicaConflict(
-          replica,
-          buildLwwSupersededConflict({
-            context_id: ctxId,
-            client_node_id: key,
-            op: existing.op ?? op,
-            winner_hlc: hlcTuple,
-            loser_hlc: existing._hlc,
-            data: existing.payload ?? null,
-            sequence,
-            created_at: change.created_at,
-            loser_dev_h: prevSource.devH,
-            loser_seq: prevSource.seq,
-            loser_index: prevSource.index,
-          }),
-        );
+        upsertReplicaLoserConflict(replica, {
+          context_id: ctxId,
+          client_node_id: key,
+          op: existing.op ?? op,
+          winner_hlc: hlcTuple,
+          loser_hlc: existing._hlc,
+          data: existing.payload ?? null,
+          sequence,
+          created_at: change.created_at,
+          loser_dev_h: prevSource.devH,
+          loser_seq: prevSource.seq,
+          loser_index: prevSource.index,
+        });
       }
 
       replica.messages[key] = {
@@ -389,21 +374,19 @@ export function applySyncChangeToReplica(replica, change, persist) {
       const existing = replica.messages[key];
       if (existing && !existing.tombstone && existing.payload) {
         const prevSource = existing._source ?? { devH: "", seq: 0, index: 0 };
-        recordReplicaConflict(
-          replica,
-          buildTombstoneBlockedUpdateConflict({
-            context_id: ctxId,
-            client_node_id: key,
-            op: existing.op ?? "message_update",
-            hlc: existing._hlc ?? null,
-            data: existing.payload,
-            sequence,
-            created_at: change.created_at,
-            loser_dev_h: prevSource.devH,
-            loser_seq: prevSource.seq,
-            loser_index: prevSource.index,
-          }),
-        );
+        upsertReplicaLoserConflict(replica, {
+          context_id: ctxId,
+          client_node_id: key,
+          op: existing.op ?? "message_update",
+          hlc: existing._hlc ?? null,
+          loser_hlc: existing._hlc ?? null,
+          data: existing.payload,
+          sequence,
+          created_at: change.created_at,
+          loser_dev_h: prevSource.devH,
+          loser_seq: prevSource.seq,
+          loser_index: prevSource.index,
+        });
       }
       replica.messages[key] = {
         context_id: ctxId,
@@ -413,6 +396,7 @@ export function applySyncChangeToReplica(replica, change, persist) {
         _hlc: hlcTuple,
         _source: { ...changeSource },
       };
+      refreshReplicaConflictKindsForMessage(replica, key);
     }
     persist(replica);
   }

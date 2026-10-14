@@ -11,6 +11,18 @@ import { normalizeDeviceUuid } from "./storage/layout.mjs";
 /** @type {import('./storage/local-object-store.mjs').createLocalObjectStore extends (...args: any) => Promise<infer R> ? R : never} */
 let openLocalStore = null;
 
+/** Reset module singleton between tests. */
+export async function resetObjectStoreBootstrapForTests() {
+  if (openLocalStore?.close) {
+    try {
+      await openLocalStore.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  openLocalStore = null;
+}
+
 /**
  * @param {{ mode?: 'cli' | 'daemon', baseUrl?: string, config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, dbPath?: string }} [options]
  */
@@ -19,7 +31,11 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
   if (isHostedStorageBackend(config)) return null;
 
   const baseUrl = options.baseUrl ?? resolveBaseUrl({ config, env: options.env });
-  const dek = await getUnlockedDek({ baseUrl });
+  const unlocked =
+    typeof options.resolveUnlockedDek === "function"
+      ? await options.resolveUnlockedDek({ baseUrl })
+      : await getUnlockedDek({ baseUrl });
+  const dek = unlocked?.dek;
   if (!dek) {
     throw new Error("Vault unlock required for local object store sync");
   }

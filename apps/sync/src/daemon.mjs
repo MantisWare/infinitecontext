@@ -185,6 +185,42 @@ async function loadObjectStoreBootstrapModule() {
   }
 }
 
+/**
+ * @param {object} params
+ * @param {boolean} params.accountSyncLoaded
+ * @param {Record<string, unknown>} params.runtimeConfig
+ * @param {(message: string, details?: unknown) => void} params.log
+ * @param {() => Promise<{ configureObjectStoreSyncTransportIfNeeded: Function }>} [params.loadBootstrapModule]
+ * @param {{ mode?: string, baseUrl?: string, dbPath?: string }} [params.bootstrapOptions]
+ */
+export async function configureDaemonObjectStoreSyncTransport({
+  accountSyncLoaded,
+  runtimeConfig,
+  log,
+  loadBootstrapModule = loadObjectStoreBootstrapModule,
+  bootstrapOptions = {},
+}) {
+  if (!accountSyncLoaded) return;
+  const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
+  const hostedBackend = !storageBackend || storageBackend === "hosted";
+  try {
+    const { configureObjectStoreSyncTransportIfNeeded } = await loadBootstrapModule();
+    await configureObjectStoreSyncTransportIfNeeded({
+      mode: "daemon",
+      ...bootstrapOptions,
+      config: runtimeConfig,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!hostedBackend) {
+      throw new Error(
+        `Local object store sync is required for storage.backend=${String(runtimeConfig?.storage?.backend ?? "local")} but bootstrap failed: ${detail}`,
+      );
+    }
+    log("warn", "Local object store sync transport not configured", { error: detail });
+  }
+}
+
 // ── exported boot function ──────────────────────────────────────
 
 export async function daemonBoot({
@@ -192,6 +228,7 @@ export async function daemonBoot({
   resolveDbPath,
   createInfiniteContextClient,
   assertSyncAuth,
+  loadObjectStoreBootstrapModule: loadBootstrapModule = loadObjectStoreBootstrapModule,
 }) {
   if (typeof createInfiniteContextClient !== "function" || typeof assertSyncAuth !== "function") {
     throw new Error(
@@ -1202,24 +1239,13 @@ export async function daemonBoot({
 
     if (accountSync) {
       const runtimeConfig = await readConfigJson();
-      const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
-      const hostedBackend = !storageBackend || storageBackend === "hosted";
-      try {
-        const { configureObjectStoreSyncTransportIfNeeded } = await loadObjectStoreBootstrapModule();
-        await configureObjectStoreSyncTransportIfNeeded({
-          mode: "daemon",
-          baseUrl: cfg.baseUrl,
-          config: runtimeConfig,
-          dbPath: cfg.dbFile,
-        });
-      } catch (error) {
-        if (!hostedBackend) {
-          throw new Error(
-            `Local object store sync is required for storage.backend=${String(runtimeConfig?.storage?.backend ?? "local")} but bootstrap failed: ${errorDetails(error).message ?? error}`,
-          );
-        }
-        log("warn", "Local object store sync transport not configured", errorDetails(error));
-      }
+      await configureDaemonObjectStoreSyncTransport({
+        accountSyncLoaded: true,
+        runtimeConfig,
+        log,
+        loadBootstrapModule: loadBootstrapModule,
+        bootstrapOptions: { baseUrl: cfg.baseUrl, dbPath: cfg.dbFile },
+      });
     }
 
     // connectivity check

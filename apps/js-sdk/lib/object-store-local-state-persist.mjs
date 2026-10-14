@@ -27,7 +27,9 @@ export function defaultObjectStoreSyncStatePath() {
 
 /** @param {string} filePath */
 function uniqueTmpPath(filePath) {
-  return `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  return path.join(dir, `${base}.tmp-${process.pid}-${crypto.randomBytes(6).toString("hex")}`);
 }
 
 /** @param {string} filePath @param {string} contents */
