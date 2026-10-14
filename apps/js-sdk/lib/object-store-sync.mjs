@@ -26,10 +26,13 @@ import {
   sortMergeableMutations,
 } from "./object-store-merge.mjs";
 import {
+  HLC_MAX_SKEW_MS,
   nextLocalMutationHlc,
   observeRemoteHlc,
+  parseMutationHlc,
   serializeMutationHlc,
 } from "./object-store-hlc.mjs";
+import { saveObjectStoreLocalStateBestEffort } from "./object-store-local-state-persist.mjs";
 import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
@@ -47,6 +50,63 @@ import {
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
+const FULL_CHAIN_VERIFY_EVERY_N = 32;
+let pullsSinceBoot = 0;
+
+/** Reset for tests. */
+export function resetObjectStorePullVerifyGenerationForTests() {
+  pullsSinceBoot = 0;
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {{ bestEffort?: boolean }} [options]
+ */
+async function persistLocalState(ctx, state, options = {}) {
+  if (options.bestEffort) {
+    await saveObjectStoreLocalStateBestEffort(ctx.localState, state);
+    return;
+  }
+  await ctx.localState.save(state);
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ */
+async function verifyFullTrustedChains(ctx, state) {
+  for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
+    if (!trusted) continue;
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      devH,
+      undefined,
+      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+      trusted.seq,
+    );
+    await assertTrustedHeadIntegrity(ctx, devH, trusted);
+  }
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ * @param {number} seq
+ * @param {import('./ic-crypto.mjs').AeadEnvelope} envelope
+ */
+function segmentClockSkewWallMs(ctx, devH, seq, envelope) {
+  const record = decryptLogSegment(ctx.dek, devH, seq, envelope);
+  const limit = Date.now() + HLC_MAX_SKEW_MS;
+  let maxWall = null;
+  for (const mutation of record.mutations) {
+    const hlc = parseMutationHlc(mutation?.hlc, devH);
+    if (hlc && hlc.wall_ms > limit) {
+      maxWall = maxWall === null ? hlc.wall_ms : Math.max(maxWall, hlc.wall_ms);
+    }
+  }
+  return maxWall;
+}
 
 /**
  * @typedef {Object} ObjectStoreSyncContext
@@ -288,7 +348,7 @@ async function hasRemoteMessageUpdateSinceVectorBase(ctx, planBase, contextId, t
   const base = planBase.v ?? {};
   const devHs = new Set([...Object.keys(base), ...Object.keys(ctx.localState.load().trustedHeads ?? {})]);
   for (const devH of devHs) {
-    const after = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : -1;
+    const after = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : 0;
     const keys = await listSegmentKeysForDevHAfter(ctx, devH, after);
     for (const key of keys) {
       const parsed = parseLogSegmentKey(key);
@@ -451,13 +511,37 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   const state = ctx.localState.load();
   const cursor = normalizeVectorSyncCursor(options.since ?? state.vectorCursor);
 
+  pullsSinceBoot += 1;
+  if (pullsSinceBoot === 1 || pullsSinceBoot % FULL_CHAIN_VERIFY_EVERY_N === 0) {
+    await verifyFullTrustedChains(ctx, state);
+  }
+
   const pendingSegments = await discoverPendingSegments(ctx, state, cursor);
 
   /** @type {import('./object-store-merge.mjs').MergeableMutation[]} */
   const mergeItems = [];
+  /** @type {Set<string>} */
+  const skewBlockedDevH = new Set();
+  /** @type {object[]} */
+  const clockSkew = [];
   let segmentsTaken = 0;
   for (const row of pendingSegments) {
     if (segmentsTaken >= segmentLimit) break;
+    if (skewBlockedDevH.has(row.devH)) continue;
+    const envelope = await readLayoutSegmentEnvelope(ctx, row.key);
+    if (!envelope) continue;
+    const skewWall = segmentClockSkewWallMs(ctx, row.devH, row.seq, envelope);
+    if (skewWall !== null) {
+      clockSkew.push({
+        code: "clock_skew",
+        dev_h: row.devH,
+        wall_ms: skewWall,
+        local_now: Date.now(),
+        max_skew_ms: HLC_MAX_SKEW_MS,
+      });
+      skewBlockedDevH.add(row.devH);
+      continue;
+    }
     const trusted = state.trustedHeads[row.devH];
     await verifyDeviceLogThroughSeq(
       ctx,
@@ -466,8 +550,6 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       (seq) => readEnvelopeAtSeq(ctx, row.devH, seq),
       row.seq,
     );
-    const envelope = await readLayoutSegmentEnvelope(ctx, row.key);
-    if (!envelope) continue;
     const digest = layoutSegmentEnvelopeDigest(envelope);
     commitTrustedHeadAdvance(state, row.devH, { seq: row.seq, digest });
     const record = decryptLogSegment(ctx.dek, row.devH, row.seq, envelope);
@@ -523,7 +605,7 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   }
 
   state.vectorCursor = cursor;
-  ctx.localState.save(state);
+  await persistLocalState(ctx, state);
 
   const hasMore = pendingSegments.length > segmentsTaken;
   return {
@@ -532,6 +614,7 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
     next_since: cursor,
     has_more: hasMore,
     conflicts: state.conflicts,
+    clock_skew: clockSkew.length ? clockSkew : undefined,
   };
 }
 
@@ -555,7 +638,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
     knownIds = await reconcileOwnLogPrefix(ctx, state);
   } catch (err) {
     if (err instanceof ObjectStoreLogForkError || err instanceof ObjectStoreLogRollbackError) {
-      ctx.localState.save(state);
+      await persistLocalState(ctx, state);
       throw err;
     }
     throw err;
@@ -592,11 +675,20 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
         });
         continue;
       }
+      if (!raw.base_vector && !raw.payload?.base_vector) {
+        failed.push({
+          client_id: clientId,
+          code: "invalid_input",
+          message: "base_vector is required for message_delete",
+          retryable: false,
+        });
+        continue;
+      }
       const contextId = String(raw.context_id ?? "");
       const idList = resolveDeleteTargetClientIds(raw.payload?.ids, state.ledger, contextId);
-      const planBase = raw.base_vector
-        ? snapshotVectorCursor(normalizeVectorSyncCursor(raw.base_vector))
-        : snapshotVectorCursor(state.vectorCursor);
+      const planBase = snapshotVectorCursor(
+        normalizeVectorSyncCursor(raw.base_vector ?? raw.payload?.base_vector),
+      );
       const staleLocal = hasMessageUpdateSinceVectorBase(state.ledger, planBase, idList);
       const staleRemote = await hasRemoteMessageUpdateSinceVectorBase(ctx, planBase, contextId, idList);
       if (staleLocal || staleRemote) {
@@ -687,12 +779,12 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
               sourceSeq: seq,
             });
           }
-          ctx.localState.save(state);
+          await persistLocalState(ctx, state, { bestEffort: true });
         }
         written = true;
       } catch (err) {
         if (err instanceof ObjectStoreLogForkError || err instanceof ObjectStoreLogRollbackError) {
-          ctx.localState.save(state);
+          await persistLocalState(ctx, state, { bestEffort: true });
           throw err;
         }
         if (!(err instanceof PreconditionFailedError)) throw err;
@@ -705,7 +797,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
         }
         const remaining = stamped.filter((m) => !rediscovered.has(String(m.client_id)));
         if (remaining.length === 0) {
-          ctx.localState.save(state);
+          await persistLocalState(ctx, state, { bestEffort: true });
           written = true;
           break;
         }
@@ -716,7 +808,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   }
 
   state.conflicts = [...state.conflicts, ...conflicts];
-  ctx.localState.save(state);
+  await persistLocalState(ctx, state, { bestEffort: true });
 
   return {
     head_sequence: headSequenceForStatus(state),

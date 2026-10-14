@@ -20,6 +20,7 @@ import {
 import { resolveBaseUrl } from "../../lib/client-config.mjs";
 import { getValidAccessToken } from "../../lib/credentials.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
+import { configureObjectStoreSyncTransportIfNeeded } from "../../lib/sync-object-store-bootstrap.mjs";
 
 function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
@@ -68,6 +69,7 @@ Environment:
   }
 
   await requireSession(baseUrl);
+  await configureObjectStoreSyncTransportIfNeeded({ mode: "cli", baseUrl });
 
   if (cmd === "status") {
     return run(async () => {

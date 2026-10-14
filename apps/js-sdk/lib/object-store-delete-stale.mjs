@@ -21,7 +21,7 @@ export function hasMessageUpdateSinceVectorBase(ledger, planBaseVector, targetCl
     const devH = row.sourceDevH ? String(row.sourceDevH) : "";
     const seq = Number(row.sourceSeq);
     if (!devH || !Number.isSafeInteger(seq) || seq < 0) continue;
-    const threshold = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : -1;
+    const threshold = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : 0;
     if (seq <= threshold) continue;
     const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
     const ids = [];

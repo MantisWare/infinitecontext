@@ -50,20 +50,15 @@ describe("message_delete base_sequence", () => {
     assert.equal(after.head_sequence, 1);
   });
 
-  it("mutationForMessageDelete throws without a known base", () => {
-    assert.throws(
-      () => mutationForMessageDelete("ctx_test", ["icn_" + "a".repeat(24)]),
-      /base_sequence is required/,
-    );
-  });
-
-  it("mutationForMessageDelete accepts explicit base_sequence", () => {
-    const mutation = mutationForMessageDelete("ctx_test", [0], { base_sequence: 7 });
+  it("mutationForMessageDelete carries explicit base_vector snapshot", () => {
+    const base_vector = { kind: "vector", v: { ABCDEFGHJKMNPQRSTVWXYZ2345: 2 } };
+    const mutation = mutationForMessageDelete("ctx_test", [0], { base_sequence: 7, base_vector });
     assert.equal(mutation.base_sequence, 7);
+    assert.deepEqual(mutation.base_vector.v, base_vector.v);
     assert.equal(mutation.op, "message_delete");
   });
 
-  it("object store transport rejects message_delete without base_sequence", async () => {
+  it("object store transport rejects message_delete without base_vector", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
     const dek = new Uint8Array(32).fill(4);
@@ -100,10 +95,15 @@ describe("message_delete base_sequence", () => {
         client_id: delClient,
         op: "message_delete",
         context_id: contextId,
+        base_sequence: 0,
         payload: { ids: [msgId] },
       },
     ]);
-    assert.ok(result.failed?.some((f) => f.code === "invalid_input" && f.client_id === delClient));
+    assert.ok(
+      result.failed?.some(
+        (f) => f.code === "invalid_input" && f.client_id === delClient && /base_vector/.test(String(f.message)),
+      ),
+    );
   });
 
   it("object store transport records delete_stale_base conflict", async () => {

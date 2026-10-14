@@ -1191,6 +1191,20 @@ export async function daemonBoot({
     const accountSync = useAccountSync ? await loadAccountSyncModules(log) : null;
     const syncEngine = accountSync?.syncEngine ?? null;
 
+    if (accountSync) {
+      try {
+        const bootstrapPath = "infinitecontext/lib/sync-object-store-bootstrap.mjs";
+        const { configureObjectStoreSyncTransportIfNeeded } = await import(bootstrapPath);
+        await configureObjectStoreSyncTransportIfNeeded({
+          mode: "daemon",
+          baseUrl: cfg.baseUrl,
+          dbPath: cfg.dbFile,
+        });
+      } catch (error) {
+        log("warn", "Local object store sync transport not configured", errorDetails(error));
+      }
+    }
+
     // connectivity check
     try {
       if (accountSync?.fetchSyncStatus) {

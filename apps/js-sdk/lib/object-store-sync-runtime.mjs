@@ -5,6 +5,7 @@ import { infinitecontextHome } from "./client-config.mjs";
 import {
   createCliFileObjectStoreLocalState,
   createDaemonDbObjectStoreLocalState,
+  defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 
 function expandHome(filePath) {
@@ -19,16 +20,16 @@ export function resolveDaemonDbPathFromEnv(env = process.env) {
   return path.resolve(expandHome(raw));
 }
 
-/** Default CLI sync-cli-state path (~/.infinitecontext/sync-cli-state.json). */
+/** @deprecated use defaultObjectStoreSyncStatePath */
 export function defaultCliObjectStoreStatePath() {
-  return path.join(infinitecontextHome(), "sync-cli-state.json");
+  return defaultObjectStoreSyncStatePath();
 }
 
 /**
  * @param {{ mode?: 'cli' | 'daemon', cliStatePath?: string, dbPath?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 export function createProductionObjectStoreLocalState(options = {}) {
-  const mode = options.mode ?? (options.env?.INFINITECONTEXT_DB_FILE ? "daemon" : "cli");
+  const mode = options.mode ?? "cli";
   if (mode === "daemon") {
     const dbPath = options.dbPath ?? resolveDaemonDbPathFromEnv(options.env ?? process.env);
     return createDaemonDbObjectStoreLocalState(dbPath);

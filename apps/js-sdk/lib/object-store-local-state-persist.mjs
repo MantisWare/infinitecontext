@@ -3,38 +3,40 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { infinitecontextHome } from "./client-config.mjs";
 import {
   checkTrustedHeadAdvance,
   createEmptyObjectStoreLocalSyncState,
 } from "./object-store-local-sync-state.mjs";
 import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
+import {
+  acquireObjectStoreStateLock,
+  releaseObjectStoreStateLock,
+  touchObjectStoreStateLock,
+} from "./object-store-state-lock.mjs";
 import { advanceVectorCursorDevH, normalizeVectorSyncCursor } from "./sync-cursor.mjs";
+
+export const OBJECT_STORE_SYNC_STATE_FILENAME = "object-store-sync-state.json";
+export const LEGACY_CLI_STATE_FILENAME = "sync-cli-state.json";
+
+/** Default dedicated object-store sync state path. */
+export function defaultObjectStoreSyncStatePath() {
+  return path.join(infinitecontextHome(), OBJECT_STORE_SYNC_STATE_FILENAME);
+}
 
 /** @param {string} filePath */
 function uniqueTmpPath(filePath) {
   return `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
 }
 
-/** @param {string} lockPath */
-function acquireFileLock(lockPath) {
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-  const fd = fs.openSync(lockPath, "wx", 0o600);
-  fs.writeFileSync(fd, `${process.pid}\n`);
-  return fd;
-}
-
-/** @param {number} fd @param {string} lockPath */
-function releaseFileLock(fd, lockPath) {
-  try {
-    fs.closeSync(fd);
-  } catch {
-    /* ignore */
-  }
-  try {
-    fs.unlinkSync(lockPath);
-  } catch {
-    /* ignore */
-  }
+/** @param {string} filePath @param {string} contents */
+function atomicWriteJsonFile(filePath, contents) {
+  const tmp = uniqueTmpPath(filePath);
+  fs.writeFileSync(tmp, contents, { mode: 0o600 });
+  const fd = fs.openSync(tmp, "r+");
+  fs.fsyncSync(fd);
+  fs.closeSync(fd);
+  fs.renameSync(tmp, filePath);
 }
 
 /** @param {unknown} raw @param {string} label */
@@ -158,56 +160,124 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
 }
 
 /**
- * Atomic JSON file backend (~/.infinitecontext/sync-cli-state.json objectStoreSync field).
- * @param {string} cliStateFilePath
+ * @param {string} stateFilePath
+ * @param {string} legacyCliStatePath
  */
-export function createCliFileObjectStoreLocalState(cliStateFilePath) {
-  const lockPath = `${cliStateFilePath}.lock`;
+function migrateLegacyObjectStoreStateIfNeeded(stateFilePath, legacyCliStatePath) {
+  if (fs.existsSync(stateFilePath)) return;
+  /** @type {unknown} */
+  let legacyRaw = null;
+  if (fs.existsSync(legacyCliStatePath)) {
+    try {
+      legacyRaw = JSON.parse(fs.readFileSync(legacyCliStatePath, "utf8"));
+    } catch {
+      return;
+    }
+  }
+  if (!legacyRaw || typeof legacyRaw !== "object" || Array.isArray(legacyRaw)) return;
+  const envelope = /** @type {Record<string, unknown>} */ (legacyRaw);
+  if (!envelope.objectStoreSync) return;
+  const migrated = serializeObjectStoreLocalSyncState(
+    hydrateObjectStoreLocalSyncState(envelope.objectStoreSync, LEGACY_CLI_STATE_FILENAME),
+  );
+  fs.mkdirSync(path.dirname(stateFilePath), { recursive: true, mode: 0o700 });
+  atomicWriteJsonFile(stateFilePath, `${JSON.stringify(migrated, null, 2)}\n`);
+}
+
+/**
+ * @param {string} stateFilePath
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} incoming
+ */
+async function saveObjectStoreStateWithLock(stateFilePath, incoming) {
+  const lockPath = `${stateFilePath}.lock`;
+  const lockFd = await acquireObjectStoreStateLock(lockPath);
+  try {
+    touchObjectStoreStateLock(lockPath);
+    let persisted = createEmptyObjectStoreLocalSyncState();
+    if (fs.existsSync(stateFilePath)) {
+      try {
+        persisted = hydrateObjectStoreLocalSyncState(
+          JSON.parse(fs.readFileSync(stateFilePath, "utf8")),
+          OBJECT_STORE_SYNC_STATE_FILENAME,
+        );
+      } catch (err) {
+        if (err instanceof ObjectStoreSyncStateError) throw err;
+        throw new ObjectStoreSyncStateError(`Corrupt ${OBJECT_STORE_SYNC_STATE_FILENAME}`, "corrupt_state");
+      }
+    }
+    mergeObjectStoreLocalSyncState(persisted, incoming);
+    touchObjectStoreStateLock(lockPath);
+    atomicWriteJsonFile(stateFilePath, `${JSON.stringify(serializeObjectStoreLocalSyncState(persisted), null, 2)}\n`);
+  } finally {
+    releaseObjectStoreStateLock(lockFd, lockPath);
+  }
+}
+
+/**
+ * Dedicated JSON file (~/.infinitecontext/object-store-sync-state.json).
+ * @param {string} [stateFilePath]
+ */
+export function createCliFileObjectStoreLocalState(stateFilePath = defaultObjectStoreSyncStatePath()) {
+  const legacyCli = path.join(path.dirname(stateFilePath), LEGACY_CLI_STATE_FILENAME);
+  migrateLegacyObjectStoreStateIfNeeded(stateFilePath, legacyCli);
+
   return {
     load() {
-      if (!fs.existsSync(cliStateFilePath)) {
+      if (!fs.existsSync(stateFilePath)) {
         return createEmptyObjectStoreLocalSyncState();
       }
-      let parsed;
       try {
-        parsed = JSON.parse(fs.readFileSync(cliStateFilePath, "utf8"));
-      } catch {
-        throw new ObjectStoreSyncStateError("Corrupt sync-cli-state.json", "corrupt_state");
+        return hydrateObjectStoreLocalSyncState(
+          JSON.parse(fs.readFileSync(stateFilePath, "utf8")),
+          OBJECT_STORE_SYNC_STATE_FILENAME,
+        );
+      } catch (err) {
+        if (err instanceof ObjectStoreSyncStateError) throw err;
+        throw new ObjectStoreSyncStateError(`Corrupt ${OBJECT_STORE_SYNC_STATE_FILENAME}`, "corrupt_state");
       }
-      if (!parsed.objectStoreSync) {
-        return createEmptyObjectStoreLocalSyncState();
-      }
-      return hydrateObjectStoreLocalSyncState(parsed.objectStoreSync, "sync-cli-state.json");
     },
-    save(incoming) {
-      const dir = path.dirname(cliStateFilePath);
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const lockFd = acquireFileLock(lockPath);
-      try {
-        let envelope = { cursor: 0 };
-        if (fs.existsSync(cliStateFilePath)) {
-          try {
-            envelope = JSON.parse(fs.readFileSync(cliStateFilePath, "utf8"));
-          } catch {
-            throw new ObjectStoreSyncStateError("Corrupt sync-cli-state.json", "corrupt_state");
-          }
+    async save(incoming) {
+      const attempts = 5;
+      /** @type {unknown} */
+      let lastErr = null;
+      for (let i = 0; i < attempts; i += 1) {
+        try {
+          await saveObjectStoreStateWithLock(stateFilePath, incoming);
+          return;
+        } catch (err) {
+          lastErr = err;
+          if (i + 1 < attempts) await sleep(40 + Math.floor(Math.random() * 80));
         }
-        const persisted = envelope.objectStoreSync
-          ? hydrateObjectStoreLocalSyncState(envelope.objectStoreSync, "sync-cli-state.json")
-          : createEmptyObjectStoreLocalSyncState();
-        mergeObjectStoreLocalSyncState(persisted, incoming);
-        envelope.objectStoreSync = serializeObjectStoreLocalSyncState(persisted);
-        const tmp = uniqueTmpPath(cliStateFilePath);
-        fs.writeFileSync(tmp, `${JSON.stringify(envelope, null, 2)}\n`, { mode: 0o600 });
-        const fd = fs.openSync(tmp, "r+");
-        fs.fsyncSync(fd);
-        fs.closeSync(fd);
-        fs.renameSync(tmp, cliStateFilePath);
-      } finally {
-        releaseFileLock(lockFd, lockPath);
       }
+      throw lastErr;
     },
   };
+}
+
+/** Back-compat alias used in tests. */
+export const createCliFileObjectStoreLocalStateFromPath = createCliFileObjectStoreLocalState;
+
+/** @param {number} ms */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry save without throwing (segment already committed remotely).
+ * @param {{ save: (s: import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState) => void | Promise<void> }} localState
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ */
+export async function saveObjectStoreLocalStateBestEffort(localState, state) {
+  const attempts = 8;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await localState.save(state);
+      return true;
+    } catch {
+      if (i + 1 < attempts) await sleep(50 + Math.floor(Math.random() * 100));
+    }
+  }
+  return false;
 }
 
 /**

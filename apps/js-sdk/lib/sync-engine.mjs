@@ -1,9 +1,19 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
-import { compareHlc, normalizeMutationHlc } from "./object-store-hlc.mjs";
+import { compareHlc, HLC_MAX_SKEW_MS, normalizeMutationHlc } from "./object-store-hlc.mjs";
+import { snapshotVectorCursor } from "./object-store-delete-stale.mjs";
+import {
+  createCliFileObjectStoreLocalState,
+  defaultObjectStoreSyncStatePath,
+} from "./object-store-local-state-persist.mjs";
+import {
+  buildLwwSupersededConflict,
+  buildTombstoneBlockedUpdateConflict,
+} from "./object-store-replica-conflicts.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
@@ -22,8 +32,8 @@ function readJsonFile(filePath, fallback) {
 }
 
 function writeJsonFile(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmp, filePath);
 }
@@ -174,7 +184,20 @@ export async function flushSyncOutbox({ baseUrl, log, transport } = {}) {
 }
 
 function readReplica() {
-  return readJsonFile(SYNC_REPLICA_FILE, { contexts: {}, messages: {} });
+  const replica = readJsonFile(SYNC_REPLICA_FILE, { contexts: {}, messages: {} });
+  if (!replica.sync_conflicts) replica.sync_conflicts = [];
+  return replica;
+}
+
+/** Vector cursor from dedicated object-store sync state (not sync-cli-state.json). */
+export function readObjectStoreSyncVectorCursor() {
+  const backend = createCliFileObjectStoreLocalState(defaultObjectStoreSyncStatePath());
+  return normalizeVectorSyncCursor(backend.load().vectorCursor);
+}
+
+/** Snapshot for message_delete planning (carried on outbox mutations). */
+export function snapshotObjectStoreBaseVector() {
+  return snapshotVectorCursor(readObjectStoreSyncVectorCursor());
 }
 
 function writeReplica(replica) {
@@ -205,6 +228,13 @@ function shouldApplyLww(existing, incoming) {
   return compareHlc(/** @type {{ _hlc: import('./object-store-hlc.mjs').HlcTuple }} */ (existing)._hlc, incoming) <= 0;
 }
 
+function recordReplicaConflict(replica, conflict) {
+  if (!Array.isArray(replica.sync_conflicts)) replica.sync_conflicts = [];
+  const id = String(conflict.id ?? "");
+  if (!id || replica.sync_conflicts.some((row) => row.id === id)) return;
+  replica.sync_conflicts.push(conflict);
+}
+
 export function applySyncChangeToReplica(replica, change, persist) {
   if (!change || typeof change !== "object") return;
   const op = String(change.op ?? "");
@@ -212,6 +242,9 @@ export function applySyncChangeToReplica(replica, change, persist) {
   const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
   const sequence = Number(change.sequence ?? 0);
   const hlcTuple = change.hlc ? changeHlcTuple(change) : null;
+  if (hlcTuple && hlcTuple.wall_ms > Date.now() + HLC_MAX_SKEW_MS) {
+    return;
+  }
 
   if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
     const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
@@ -252,12 +285,43 @@ export function applySyncChangeToReplica(replica, change, persist) {
       if (!clientNodeId) continue;
       const key = String(clientNodeId);
       const existing = replica.messages[key];
-      if (hlcTuple && !shouldApplyLww(existing, hlcTuple)) continue;
+      if (existing?.tombstone) {
+        recordReplicaConflict(
+          replica,
+          buildTombstoneBlockedUpdateConflict({
+            context_id: String(payload.context_id ?? contextId),
+            client_node_id: key,
+            op,
+            hlc: change.hlc ?? null,
+            data: row,
+            sequence,
+            created_at: change.created_at,
+          }),
+        );
+        continue;
+      }
+      if (hlcTuple && existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
+        recordReplicaConflict(
+          replica,
+          buildLwwSupersededConflict({
+            context_id: String(payload.context_id ?? contextId),
+            client_node_id: key,
+            op,
+            winner_hlc: existing._hlc,
+            loser_hlc: hlcTuple,
+            data: row,
+            sequence,
+            created_at: change.created_at,
+          }),
+        );
+        continue;
+      }
       replica.messages[key] = {
         context_id: String(payload.context_id ?? contextId),
         payload: row,
         sequence,
         op,
+        tombstone: false,
         _hlc: hlcTuple ?? undefined,
       };
     }
@@ -268,7 +332,14 @@ export function applySyncChangeToReplica(replica, change, persist) {
   if (op === "message_delete") {
     const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
     for (const id of deletedIds) {
-      if (id) delete replica.messages[String(id)];
+      if (!id) continue;
+      const key = String(id);
+      replica.messages[key] = {
+        context_id: String(payload.context_id ?? contextId),
+        tombstone: true,
+        sequence,
+        deleted_at: change.created_at ?? new Date().toISOString(),
+      };
     }
     persist(replica);
   }
@@ -360,16 +431,19 @@ export function mutationForMessageAppend(contextId, messages) {
   };
 }
 
-export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence } = {}) {
+export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence, base_vector: baseVector } = {}) {
   const idList = Array.isArray(ids) ? ids : [ids];
-  const resolvedBase = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence });
+  const base_vector = baseVector
+    ? snapshotVectorCursor(normalizeVectorSyncCursor(baseVector))
+    : snapshotObjectStoreBaseVector();
+  const resolvedBase = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence, localCursor: base_vector });
   let base_sequence;
   if (typeof resolvedBase === "number" && Number.isFinite(resolvedBase)) {
     base_sequence = resolvedBase;
   } else if (resolvedBase && typeof resolvedBase === "object" && resolvedBase.kind === "vector") {
     base_sequence = vectorCursorHeadSum(resolvedBase);
   } else {
-    base_sequence = null;
+    base_sequence = vectorCursorHeadSum(base_vector);
   }
   if (base_sequence === null || !Number.isFinite(base_sequence)) {
     throw new Error(
@@ -381,7 +455,8 @@ export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSe
     op: "message_delete",
     context_id: contextId,
     base_sequence,
-    payload: { ids: idList },
+    base_vector,
+    payload: { ids: idList, base_vector },
   };
 }
 
