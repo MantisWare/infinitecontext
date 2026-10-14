@@ -12,7 +12,7 @@
     "scripts": {
         "build": "pnpm --filter @infinitecontext/crypto run build && node scripts/copy-ic-crypto.mjs && tsdown",
         "dev": "tsdown --watch",
-        "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/config-cli.mjs && node --check src/cli/vault.mjs && node --check lib/update-check.mjs && node --check lib/vault-require.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && node --check lib/sync-transport.mjs && node --check lib/hosted-sync-transport.mjs && node --check lib/sync-api.mjs && node --check lib/sync-engine.mjs && node --check lib/storage/ciphertext.mjs && node --check lib/storage/types.mjs && node --check lib/storage/errors.mjs && node --check lib/storage/memory-adapter.mjs && node --check lib/storage/contract-suite.mjs && node --check lib/storage/encrypt-storage-object.mjs && node --check lib/storage/object-store-sync-transport.mjs && node --check lib/storage/index.mjs && pnpm run build",
+        "check": "node --check src/cli/entry.mjs && node --check src/cli/login.mjs && node --check src/cli/config-cli.mjs && node --check src/cli/vault.mjs && node --check lib/update-check.mjs && node --check lib/vault-require.mjs && node --check lib/credentials.mjs && node --check lib/vault-session.mjs && node --check lib/encrypted-client.mjs && node --check lib/sync-transport.mjs && node --check lib/hosted-sync-transport.mjs && node --check lib/sync-api.mjs && node --check lib/sync-engine.mjs && node --check lib/storage/ciphertext.mjs && node --check lib/storage/types.mjs && node --check lib/storage/errors.mjs && node --check lib/storage/memory-adapter.mjs && node --check lib/storage/contract-suite.mjs && node --check lib/storage/encrypt-storage-object.mjs && node --check lib/storage/object-store-sync-transport.mjs && node --check lib/storage/secret-store-constants.mjs && node --check lib/storage/secret-store-private-dir.mjs && node --check lib/storage/secret-store-heartbeat-lock.mjs && node --check lib/storage/secret-store-file-link.mjs && node --check lib/storage/secret-store-file-generations.mjs && node --check lib/storage/secret-store-linux-dbus.mjs && node --check lib/storage/secret-store-keyring-probe-child.mjs && node --check lib/storage/secret-store-keyring-probe.mjs && node --check lib/storage/secret-store-marker.mjs && node --check lib/storage/secret-store-keyring.mjs && node --check lib/storage/secret-store-file.mjs && node --check lib/storage/secret-store.mjs && node --check lib/storage/index.mjs && pnpm run build",
         "prepack": "node scripts/prepack-vendor.mjs && pnpm run build",
         "postinstall": "node postinstall.mjs",
         "test": "node --test --test-concurrency=1 tests/**/*.test.mjs tests/*.test.mjs && node --import tsx --test tests-integration/vault-migrate.test.mjs tests/npm-pack-offline.test.mjs && node --test ../../tests/standalone-pack-all.test.mjs ../../tests/fresh-clone-sync-source.test.mjs"
@@ -86,12 +86,13 @@
         "node-pty": "^1.1.0"
     },
     "dependencies": {
+        "@mishieck/ink-titled-box": "^0.4.2",
+        "@napi-rs/keyring": "^2.1.1",
         "@noble/ciphers": "^1.3.0",
         "@noble/hashes": "^1.8.0",
-        "hash-wasm": "^4.12.0",
-        "@mishieck/ink-titled-box": "^0.4.2",
         "fast-glob": "^3.3.3",
         "figlet": "^1.10.0",
+        "hash-wasm": "^4.12.0",
         "ink": "^6.7.0",
         "react": "^19.2.4"
     },
@@ -99,8 +100,8 @@
         "@infinitecontext/core": "workspace:*",
         "@infinitecontext/parsers": "workspace:*",
         "@infinitecontext/sync": "workspace:*",
-        "tsx": "^4.20.5",
         "tsdown": "^0.20.3",
+        "tsx": "^4.20.5",
         "typescript": "^5.9.3"
     },
     "packageManager": "pnpm@10.28.1"
