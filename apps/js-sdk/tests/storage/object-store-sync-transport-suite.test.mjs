@@ -7,6 +7,16 @@ import { describe, it } from "node:test";
 import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
 import {
+  copyVerifiedStoragePutBodyForAdapter,
+  encryptVaultPlaintextForStoragePut,
+} from "../../lib/storage/encrypt-storage-object.mjs";
+import {
+  deriveDevH,
+  encryptLogSegment,
+  layoutSegmentEnvelopeDigest,
+  logSegmentRelativePath,
+} from "../../lib/storage/layout.mjs";
+import {
   applySortedMutationsToReplica,
   permuteMutationBatches,
   sortMergeableMutations,
@@ -155,37 +165,75 @@ registerTransportSuite("filesystem", async () => {
   return adapter;
 });
 
+/**
+ * @param {import('../../lib/storage/types.mjs').StorageAdapter} adapter
+ * @param {number} seq
+ * @param {string} prevDigest
+ */
+async function writeDirectLogSegment(adapter, seq, prevDigest) {
+  const devH = deriveDevH(TEST_DEK, DEVICE_A);
+  const record = {
+    dev: DEVICE_A,
+    seq,
+    prev_digest: prevDigest,
+    created_at: new Date().toISOString(),
+    mutations: [
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        payload: { metadata: { source: `bulk-${seq}` } },
+        hlc: { wall_ms: seq, counter: 0 },
+      },
+    ],
+  };
+  const envelope = encryptLogSegment(TEST_DEK, devH, record);
+  const key = logSegmentRelativePath(LAYOUT_PREFIX, devH, seq);
+  const sealed = encryptVaultPlaintextForStoragePut(TEST_DEK, key, {
+    ic_layout_segment_envelope_v1: envelope,
+  });
+  await adapter.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
+  return layoutSegmentEnvelopeDigest(envelope);
+}
+
+/** @param {import('../../lib/storage/types.mjs').StorageAdapter} adapter @param {number} count */
+async function seedDirectLogSegments(adapter, count) {
+  let prevDigest = "";
+  for (let seq = 0; seq < count; seq += 1) {
+    prevDigest = await writeDirectLogSegment(adapter, seq, prevDigest);
+  }
+  return prevDigest;
+}
+
 describe("ObjectStoreSyncTransport merge property", () => {
-  it("pull/push 600 segments within timing sanity bound", async () => {
+  it("2400-segment pull uses cached trusted prefix on incremental sync", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
-    const local = createInMemoryObjectStoreLocalState();
-    const transport = createTransport(adapter, DEVICE_A, local);
-    const started = Date.now();
-    for (let i = 0; i < 600; i += 1) {
-      await transport.pushSyncMutations([
-        {
-          client_id: generateClientNodeId(),
-          op: "context_create",
-          payload: { metadata: { source: `bulk-${i}` } },
-        },
-      ]);
-    }
-    const elapsedPush = Date.now() - started;
-    assert.ok(elapsedPush < 120_000, `push took ${elapsedPush}ms`);
+    await seedDirectLogSegments(adapter, 2400);
 
-    const reader = createTransport(adapter, DEVICE_B, createInMemoryObjectStoreLocalState());
-    const pullStarted = Date.now();
+    const readerLocal = createInMemoryObjectStoreLocalState();
+    const reader = createTransport(adapter, DEVICE_B, readerLocal);
     let since = normalizeVectorSyncCursor(0);
     let total = 0;
+    const initialPullStarted = Date.now();
     for (;;) {
-      const page = await reader.pullSyncChanges({ since, limit: 50 });
+      const page = await reader.pullSyncChanges({ since, limit: 100 });
       total += page.changes.length;
       since = page.next_since;
       if (!page.has_more) break;
     }
-    const elapsedPull = Date.now() - pullStarted;
-    assert.equal(total, 600);
-    assert.ok(elapsedPull < 120_000, `pull took ${elapsedPull}ms`);
+    const elapsedInitialPull = Date.now() - initialPullStarted;
+    assert.equal(total, 2400);
+    assert.ok(elapsedInitialPull < 300_000, `initial pull took ${elapsedInitialPull}ms`);
+
+    const devH = deriveDevH(TEST_DEK, DEVICE_A);
+    const trusted = readerLocal.load().trustedHeads[devH];
+    assert.ok(trusted);
+    await writeDirectLogSegment(adapter, trusted.seq + 1, trusted.digest);
+
+    const incrementalStarted = Date.now();
+    const tailPage = await reader.pullSyncChanges({ since: readerLocal.load().vectorCursor, limit: 50 });
+    const elapsedIncremental = Date.now() - incrementalStarted;
+    assert.equal(tailPage.changes.length, 1);
+    assert.ok(elapsedIncremental < 15_000, `incremental pull took ${elapsedIncremental}ms`);
   });
 });

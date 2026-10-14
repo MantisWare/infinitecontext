@@ -5,6 +5,7 @@ import { generateClientNodeId } from "../lib/ic-crypto.mjs";
 import { mutationForMessageDelete, resolveDeleteBaseSequence } from "../lib/sync-engine.mjs";
 import { normalizeVectorSyncCursor } from "../lib/sync-cursor.mjs";
 import { createInMemoryObjectStoreLocalState } from "../lib/object-store-local-sync-state.mjs";
+import { snapshotVectorCursor } from "../lib/object-store-delete-stale.mjs";
 import { createMemoryStorageAdapter } from "../lib/storage/memory-adapter.mjs";
 import { ObjectStoreSyncTransport } from "../lib/storage/object-store-sync-transport.mjs";
 
@@ -117,11 +118,12 @@ describe("message_delete base_sequence", () => {
       layoutPrefix: "accounts/stale-base",
       localState: createInMemoryObjectStoreLocalState(),
     });
+    const localB = createInMemoryObjectStoreLocalState();
     const transportB = new ObjectStoreSyncTransport(adapter, {
       dek,
       deviceUuid: deviceB,
       layoutPrefix: "accounts/stale-base",
-      localState: createInMemoryObjectStoreLocalState(),
+      localState: localB,
     });
     const createId = generateClientNodeId();
     const contextId = "ctx_stale_base";
@@ -151,6 +153,7 @@ describe("message_delete base_sequence", () => {
     cursorB = pullAppend.next_since;
     const statusBeforeUpdate = await transportB.fetchSyncStatus();
     const baseSeq = Number(statusBeforeUpdate.head_sequence);
+    const planVector = snapshotVectorCursor(localB.load().vectorCursor);
     const m2 = generateClientNodeId();
     await transportA.pushSyncMutations([
       {
@@ -171,9 +174,14 @@ describe("message_delete base_sequence", () => {
         op: "message_delete",
         context_id: contextId,
         base_sequence: baseSeq,
+        base_vector: planVector,
         payload: { ids: [m1] },
       },
     ]);
-    assert.ok(stale.conflicts.some((c) => c.kind === "delete_stale_base" && c.client_id === delClient));
+    assert.ok(
+      stale.conflicts.some(
+        (c) => c.kind === "delete_stale_base" && c.client_id === delClient && c.id.startsWith("delete_stale_base:"),
+      ),
+    );
   });
 });

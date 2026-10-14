@@ -17,6 +17,11 @@ import {
   ObjectStoreLogRollbackError,
 } from "./object-store-local-sync-state.mjs";
 import {
+  buildDeleteStaleBaseConflict,
+  hasMessageUpdateSinceVectorBase,
+  snapshotVectorCursor,
+} from "./object-store-delete-stale.mjs";
+import {
   mergeableFromMutation,
   sortMergeableMutations,
 } from "./object-store-merge.mjs";
@@ -164,26 +169,76 @@ function assertNoRemoteRollback(state, remoteMaxByDevH) {
  * @param {ObjectStoreSyncContext} ctx
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
-async function assertTrustedHeadDigestsMatchRemote(ctx, state) {
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ * @param {{ seq: number, digest: string }} trusted
+ */
+async function assertTrustedAnchorDigest(ctx, devH, trusted) {
+  const envelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
+  if (!envelope) {
+    throw new ObjectStoreLogRollbackError(
+      `Remote log for ${devH} missing trusted segment at seq ${trusted.seq}`,
+    );
+  }
+  const digest = layoutSegmentEnvelopeDigest(envelope);
+  if (digest !== trusted.digest) {
+    throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${trusted.seq}`);
+  }
+}
+
+/**
+ * Re-check trusted tip and its prev_digest link (catches mid-chain rewrite after TOFU).
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ * @param {{ seq: number, digest: string }} trusted
+ */
+async function assertTrustedHeadIntegrity(ctx, devH, trusted) {
+  await assertTrustedAnchorDigest(ctx, devH, trusted);
+  if (trusted.seq === 0) return;
+  const prevEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq - 1);
+  if (!prevEnvelope) {
+    throw new ObjectStoreLogRollbackError(
+      `Remote log for ${devH} missing segment at seq ${trusted.seq - 1}`,
+    );
+  }
+  const curEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
+  if (!curEnvelope) {
+    throw new ObjectStoreLogRollbackError(
+      `Remote log for ${devH} missing trusted segment at seq ${trusted.seq}`,
+    );
+  }
+  const prevDigest = layoutSegmentEnvelopeDigest(prevEnvelope);
+  const record = decryptLogSegment(ctx.dek, devH, trusted.seq, curEnvelope);
+  if (record.prev_digest !== prevDigest) {
+    throw new ObjectStoreLogForkError(
+      `Log segment prev_digest mismatch at ${devH} seq ${trusted.seq}`,
+    );
+  }
+}
+
+/**
+ * Owner-side: re-verify cached trusted prefix exists and matches on every push.
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {string} devH
+ * @param {{ seq: number, digest: string }} trusted
+ */
+async function verifyOwnerTrustedPrefix(ctx, devH, trusted) {
+  await assertTrustedAnchorDigest(ctx, devH, trusted);
+  await verifyDeviceLogThroughSeq(
+    ctx,
+    devH,
+    undefined,
+    (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+    trusted.seq,
+  );
+}
+
+/** @param {ObjectStoreSyncContext} ctx @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
+async function assertTrustedAnchorsMatchRemote(ctx, state) {
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
     if (!trusted) continue;
-    await verifyDeviceLogThroughSeq(
-      ctx,
-      devH,
-      undefined,
-      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
-      trusted.seq,
-    );
-    const envelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
-    if (!envelope) {
-      throw new ObjectStoreLogRollbackError(
-        `Remote log for ${devH} missing trusted segment at seq ${trusted.seq}`,
-      );
-    }
-    const digest = layoutSegmentEnvelopeDigest(envelope);
-    if (digest !== trusted.digest) {
-      throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${trusted.seq}`);
-    }
+    await assertTrustedHeadIntegrity(ctx, devH, trusted);
   }
 }
 
@@ -199,23 +254,59 @@ function parseStrictBaseSequence(raw) {
   return null;
 }
 
+/** @param {import('./object-store-merge.mjs').MergeableMutation} item */
+function hostedPayloadFromMutation(item) {
+  const m = item.mutation;
+  const payload = m.payload && typeof m.payload === "object" ? { ...m.payload } : {};
+  if (m.op === "message_append" || m.op === "message_update") {
+    const rows = Array.isArray(payload.messages) ? payload.messages : payload.data;
+    if (Array.isArray(rows)) {
+      payload.data = rows;
+      payload.affected_client_ids = rows
+        .map((r) => r?.metadata?.ic_client_node_id ?? r?.id)
+        .filter(Boolean);
+    }
+  }
+  if (m.op === "message_delete") {
+    const ids = payload.ids;
+    payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
+  }
+  if (m.op === "context_create") {
+    payload.context_id = payload.context_id ?? m.context_id;
+  }
+  return payload;
+}
+
 /**
- * @param {object[]} ledger
- * @param {number} baseSum
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./sync-cursor.mjs').VectorSyncCursor} planBase
+ * @param {string} contextId
  * @param {string[]} targetClientIds
  */
-function hasMessageMutationSinceHeadSum(ledger, baseSum, targetClientIds) {
+async function hasRemoteMessageUpdateSinceVectorBase(ctx, planBase, contextId, targetClientIds) {
   const targets = new Set(targetClientIds);
-  for (const row of ledger) {
-    if (Number(row.headSum) <= baseSum) continue;
-    const op = String(row.op ?? "");
-    if (op !== "message_update" && op !== "message_delete") continue;
-    const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
-    for (const key of ["affected_client_ids", "deleted_client_ids"]) {
-      const list = payload[key];
-      if (!Array.isArray(list)) continue;
-      for (const id of list) {
-        if (typeof id === "string" && targets.has(id)) return true;
+  const base = planBase.v ?? {};
+  const devHs = new Set([...Object.keys(base), ...Object.keys(ctx.localState.load().trustedHeads ?? {})]);
+  for (const devH of devHs) {
+    const after = Object.prototype.hasOwnProperty.call(base, devH) ? Number(base[devH]) : -1;
+    const keys = await listSegmentKeysForDevHAfter(ctx, devH, after);
+    for (const key of keys) {
+      const parsed = parseLogSegmentKey(key);
+      if (!parsed) continue;
+      const envelope = await readLayoutSegmentEnvelope(ctx, key);
+      if (!envelope) continue;
+      const record = decryptLogSegment(ctx.dek, devH, parsed.seq, envelope);
+      for (const mutation of record.mutations) {
+        if (!mutation || typeof mutation !== "object") continue;
+        const op = String(mutation.op ?? "");
+        if (op !== "message_update" && op !== "message_append") continue;
+        if (String(mutation.context_id ?? "") !== contextId) continue;
+        const payload = mutation.payload && typeof mutation.payload === "object" ? mutation.payload : {};
+        const rows = Array.isArray(payload.messages) ? payload.messages : [];
+        for (const row of rows) {
+          const cid = row?.metadata?.ic_client_node_id ?? row?.id;
+          if (typeof cid === "string" && targets.has(cid)) return true;
+        }
       }
     }
   }
@@ -252,6 +343,9 @@ function resolveDeleteTargetClientIds(idsRaw, ledger, contextId) {
  */
 async function reconcileOwnLogPrefix(ctx, state) {
   const trustedSelf = state.trustedHeads[ctx.selfDevH];
+  if (trustedSelf) {
+    await verifyOwnerTrustedPrefix(ctx, ctx.selfDevH, trustedSelf);
+  }
   const afterSeq = trustedSelf?.seq ?? -1;
   const keys = await listSegmentKeysForDevHAfter(ctx, ctx.selfDevH, -1);
   /** @type {Set<string>} */
@@ -330,7 +424,7 @@ async function discoverPendingSegments(ctx, state, cursor) {
     }
   }
   assertNoRemoteRollback(state, remoteMaxByDevH);
-  await assertTrustedHeadDigestsMatchRemote(ctx, state);
+  await assertTrustedAnchorsMatchRemote(ctx, state);
 
   for (const devH of devHs) {
     const after = cursor.v[devH] ?? -1;
@@ -400,29 +494,21 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   for (const item of sorted) {
     state.changeOrdinal += 1;
     const m = item.mutation;
+    const payload = hostedPayloadFromMutation(item);
     const change = {
       sequence: state.changeOrdinal,
       op: m.op,
       context_id: m.context_id ?? null,
       client_id: m.client_id,
-      payload: m.payload ?? {},
+      payload,
       device_id: item.deviceUuid,
       created_at: item.segmentCreatedAt,
+      hlc: serializeMutationHlc(item.hlcTuple),
+      source_dev_h: item.devH,
+      source_seq: item.seq,
+      source_index: item.index,
     };
     changes.push(change);
-    let payload = m.payload && typeof m.payload === "object" ? { ...m.payload } : {};
-    if (m.op === "message_update") {
-      const rows = Array.isArray(payload.messages) ? payload.messages : payload.data;
-      if (Array.isArray(rows)) {
-        payload.affected_client_ids = rows
-          .map((r) => r?.metadata?.ic_client_node_id ?? r?.id)
-          .filter(Boolean);
-      }
-    }
-    if (m.op === "message_delete") {
-      const ids = payload.ids;
-      payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
-    }
     state.ledger.push({
       headSum: computeHeadSequenceFromTrustedHeads(state),
       op: m.op,
@@ -431,6 +517,8 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       payload,
       clientNodeId: payload.affected_client_ids?.[0],
       messageIndex: payload.message_index,
+      sourceDevH: item.devH,
+      sourceSeq: item.seq,
     });
   }
 
@@ -506,18 +594,20 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
       }
       const contextId = String(raw.context_id ?? "");
       const idList = resolveDeleteTargetClientIds(raw.payload?.ids, state.ledger, contextId);
-      if (hasMessageMutationSinceHeadSum(state.ledger, baseSeq, idList)) {
-        conflicts.push({
-          id: `conf_${clientId}`,
-          context_id: contextId,
-          kind: "delete_stale_base",
-          client_id: clientId,
-          sequence: headSum + 1,
-          left_payload: { base_sequence: baseSeq, server_sequence: baseSeq, op: "message_delete" },
-          right_payload: { delete_targets: idList },
-          created_at: new Date().toISOString(),
-          resolved_at: null,
-        });
+      const planBase = raw.base_vector
+        ? snapshotVectorCursor(normalizeVectorSyncCursor(raw.base_vector))
+        : snapshotVectorCursor(state.vectorCursor);
+      const staleLocal = hasMessageUpdateSinceVectorBase(state.ledger, planBase, idList);
+      const staleRemote = await hasRemoteMessageUpdateSinceVectorBase(ctx, planBase, contextId, idList);
+      if (staleLocal || staleRemote) {
+        conflicts.push(
+          buildDeleteStaleBaseConflict({
+            client_id: clientId,
+            context_id: contextId,
+            base_vector: planBase,
+            delete_targets: idList,
+          }),
+        );
         continue;
       }
     }
@@ -593,6 +683,8 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
               context_id: raw.context_id ?? null,
               client_id: clientId,
               payload,
+              sourceDevH: ctx.selfDevH,
+              sourceSeq: seq,
             });
           }
           ctx.localState.save(state);

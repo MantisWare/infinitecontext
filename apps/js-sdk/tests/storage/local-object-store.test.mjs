@@ -35,6 +35,23 @@ describe("local object store (PR 5)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it("createLocalObjectStore wires persisted ObjectStoreSyncTransport for daemon mode", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-local-store-daemon-"));
+    const dbPath = path.join(rootDir, "daemon.db");
+    const dek = new Uint8Array(32).fill(7);
+    const deviceUuid = "44444444-4444-4444-8444-444444444444";
+    const store = await createLocalObjectStore({
+      rootDir,
+      dek,
+      deviceUuid,
+      sync: { mode: "daemon", dbPath, persist: true },
+    });
+    assert.equal(typeof store.transport.pushSyncMutations, "function");
+    await store.close();
+    assert.ok(fs.existsSync(dbPath));
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
   it("createLocalObjectStore returns sealed transport over filesystem adapter", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-local-store-open-"));
     const dek = new Uint8Array(32).fill(9);

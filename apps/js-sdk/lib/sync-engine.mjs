@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
+import { compareHlc, normalizeMutationHlc } from "./object-store-hlc.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
@@ -192,18 +193,34 @@ export function createCliSyncStore() {
   };
 }
 
+function changeHlcTuple(change) {
+  const devH = change.source_dev_h ? String(change.source_dev_h) : "UNKNOWN";
+  const index = Number(change.source_index ?? 0);
+  return normalizeMutationHlc(change.hlc, devH, index);
+}
+
+/** @param {Record<string, unknown> | undefined} existing @param {import('./object-store-hlc.mjs').HlcTuple} incoming */
+function shouldApplyLww(existing, incoming) {
+  if (!existing || typeof existing !== "object" || !existing._hlc) return true;
+  return compareHlc(/** @type {{ _hlc: import('./object-store-hlc.mjs').HlcTuple }} */ (existing)._hlc, incoming) <= 0;
+}
+
 export function applySyncChangeToReplica(replica, change, persist) {
   if (!change || typeof change !== "object") return;
   const op = String(change.op ?? "");
   const contextId = change.context_id ? String(change.context_id) : "";
   const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
   const sequence = Number(change.sequence ?? 0);
+  const hlcTuple = change.hlc ? changeHlcTuple(change) : null;
 
   if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
     const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
     const id = String(payload.context_id ?? contextId ?? "");
     if (id) {
-      replica.contexts[id] = { metadata: meta, sequence, deleted: false };
+      const existing = replica.contexts[id];
+      if (!hlcTuple || shouldApplyLww(existing, hlcTuple)) {
+        replica.contexts[id] = { metadata: meta, sequence, deleted: false, _hlc: hlcTuple ?? undefined };
+      }
     }
     persist(replica);
     return;
@@ -227,16 +244,21 @@ export function applySyncChangeToReplica(replica, change, persist) {
     return;
   }
 
-  if (op === "message_append") {
+  if (op === "message_append" || op === "message_update") {
     const rows = Array.isArray(payload.data) ? payload.data : [];
     for (const row of rows) {
       if (!row || typeof row !== "object") continue;
       const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
       if (!clientNodeId) continue;
-      replica.messages[String(clientNodeId)] = {
+      const key = String(clientNodeId);
+      const existing = replica.messages[key];
+      if (hlcTuple && !shouldApplyLww(existing, hlcTuple)) continue;
+      replica.messages[key] = {
         context_id: String(payload.context_id ?? contextId),
         payload: row,
         sequence,
+        op,
+        _hlc: hlcTuple ?? undefined,
       };
     }
     persist(replica);
@@ -247,23 +269,6 @@ export function applySyncChangeToReplica(replica, change, persist) {
     const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
     for (const id of deletedIds) {
       if (id) delete replica.messages[String(id)];
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "message_update") {
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-      if (!clientNodeId) continue;
-      replica.messages[String(clientNodeId)] = {
-        context_id: String(payload.context_id ?? contextId),
-        payload: row,
-        sequence,
-        op,
-      };
     }
     persist(replica);
   }

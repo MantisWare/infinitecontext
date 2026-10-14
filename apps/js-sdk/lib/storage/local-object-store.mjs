@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { infinitecontextHome } from "../client-config.mjs";
+import { createProductionObjectStoreLocalState } from "../object-store-sync-runtime.mjs";
 import { StorageError } from "./errors.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 import { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
@@ -104,21 +105,53 @@ export function resolveLocalObjectStoreRootDir(opts = {}) {
 
 /**
  * Open the default local ciphertext object store (filesystem adapter + sealed transport).
- * @param {{ rootDir?: string, id?: string, maxObjectBytes?: number }} [options]
+ * @param {{
+ *   rootDir?: string,
+ *   id?: string,
+ *   maxObjectBytes?: number,
+ *   dek?: Uint8Array,
+ *   deviceUuid?: string,
+ *   layoutPrefix?: string,
+ *   localState?: { load: Function, save: Function },
+ *   sync?: { mode?: 'cli' | 'daemon', persist?: boolean, cliStatePath?: string, dbPath?: string },
+ *   env?: NodeJS.ProcessEnv,
+ * }} [options]
  */
 export async function createLocalObjectStore(options = {}) {
-  const rootDir = path.resolve(options.rootDir ?? resolveLocalObjectStoreRootDir());
+  const rootDir = path.resolve(options.rootDir ?? resolveLocalObjectStoreRootDir({ env: options.env }));
   const adapter = createFilesystemStorageAdapter({
     rootDir,
     id: options.id ?? LOCAL_OBJECT_STORE_BACKEND_ID,
     maxObjectBytes: options.maxObjectBytes,
   });
   await adapter.init();
-  const transport = new ObjectStoreSyncTransport(adapter);
+  const persist = options.sync?.persist !== false;
+  const localState =
+    options.localState ??
+    (persist && options.dek && options.deviceUuid
+      ? createProductionObjectStoreLocalState({
+          mode: options.sync?.mode,
+          cliStatePath: options.sync?.cliStatePath,
+          dbPath: options.sync?.dbPath,
+          env: options.env,
+        })
+      : null);
+  const transport = new ObjectStoreSyncTransport(
+    adapter,
+    options.dek && options.deviceUuid && localState
+      ? {
+          dek: options.dek,
+          deviceUuid: options.deviceUuid,
+          layoutPrefix: options.layoutPrefix ?? "accounts/local",
+          localState,
+        }
+      : null,
+  );
   return {
     rootDir,
     adapter,
     transport,
+    localState,
     close: () => adapter.close(),
   };
 }

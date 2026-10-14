@@ -15,6 +15,7 @@ import {
   parseWrappedDekRecord,
   serializeKdfParams,
   unwrapDek,
+  VAULT_KDF_MAX_COST_PRODUCT,
   wrapDek,
 } from "../ic-crypto.mjs";
 
@@ -28,7 +29,7 @@ export const MAX_SEGMENT_BUCKETS = 64;
 
 const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const DEVH_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const KDF_MAX_COST_PRODUCT = 196_608;
+const KDF_MAX_COST_PRODUCT = VAULT_KDF_MAX_COST_PRODUCT;
 const DEVICE_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PREV_DIGEST_PATTERN = /^[0-9a-f]{64}$/;

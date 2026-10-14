@@ -22,9 +22,8 @@ export function parseMutationHlc(raw, devH) {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const wall = Number(raw.wall_ms);
     const counter = Number(raw.counter);
-    const d = raw.devH ? canonicalDevH(String(raw.devH)) : canonicalDevH(devH);
     if (Number.isSafeInteger(wall) && wall >= 0 && Number.isSafeInteger(counter) && counter >= 0) {
-      return { wall_ms: wall, counter, devH: d };
+      return { wall_ms: wall, counter, devH: canonicalDevH(devH) };
     }
   }
   return null;
@@ -89,13 +88,17 @@ export function nextLocalMutationHlc(state, selfDevH) {
  * @param {{ localHlc?: { wall_ms: number, counter: number } }} state
  * @param {HlcTuple} remote
  */
+export const HLC_MAX_SKEW_MS = 5 * 60 * 1000;
+
 export function observeRemoteHlc(state, remote) {
   const prev = state.localHlc ?? { wall_ms: 0, counter: 0 };
-  if (remote.wall_ms > prev.wall_ms) {
-    state.localHlc = { wall_ms: remote.wall_ms, counter: remote.counter };
+  const now = Date.now();
+  const cappedWall = Math.min(remote.wall_ms, now + HLC_MAX_SKEW_MS);
+  if (cappedWall > prev.wall_ms) {
+    state.localHlc = { wall_ms: cappedWall, counter: remote.counter };
     return;
   }
-  if (remote.wall_ms === prev.wall_ms && remote.counter > prev.counter) {
+  if (cappedWall === prev.wall_ms && remote.counter > prev.counter) {
     state.localHlc = { wall_ms: prev.wall_ms, counter: remote.counter };
   }
 }
