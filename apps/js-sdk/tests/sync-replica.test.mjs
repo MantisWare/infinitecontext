@@ -24,13 +24,14 @@ describe("sync replica apply", () => {
     assert.equal(replica.contexts.ctx_missing.deleted, false);
   });
 
-  it("message_delete removes only deleted_client_ids", () => {
+  it("message_delete sets permanent tombstones for deleted_client_ids", () => {
     const replica = {
       contexts: {},
       messages: {
         icn_a: { context_id: "ctx_1", payload: {} },
         icn_b: { context_id: "ctx_1", payload: {} },
       },
+      sync_conflicts: [],
     };
     applySyncChangeToReplica(
       replica,
@@ -38,11 +39,13 @@ describe("sync replica apply", () => {
         op: "message_delete",
         context_id: "ctx_1",
         sequence: 2,
+        created_at: "2026-01-01T00:00:00.000Z",
         payload: { deleted_client_ids: ["icn_a"], version: 1 },
       },
       () => {},
     );
-    assert.equal(replica.messages.icn_a, undefined);
+    assert.equal(replica.messages.icn_a.tombstone, true);
     assert.ok(replica.messages.icn_b);
+    assert.equal(replica.messages.icn_b.tombstone, undefined);
   });
 });
