@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomBytes } from "../ic-crypto.mjs";
 import { StorageError } from "./errors.mjs";
 import { acquireHeartbeatLock } from "./secret-store-heartbeat-lock.mjs";
+import { ensurePrivateDir } from "./secret-store-private-dir.mjs";
 import {
   commitSecretsMapCas,
   hasPersistedSecretsStore,
@@ -206,16 +207,6 @@ function fsyncDirectory(dir) {
         // ignore
       }
     }
-  }
-}
-
-/** @param {string} rootDir */
-function ensurePrivateDir(rootDir) {
-  fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
-  try {
-    fs.chmodSync(rootDir, 0o700);
-  } catch {
-    // best effort on platforms without chmod semantics
   }
 }
 

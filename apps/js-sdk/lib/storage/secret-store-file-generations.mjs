@@ -89,13 +89,31 @@ export function hasPersistedSecretsStore(rootDir) {
 /**
  * @param {string} filePath
  * @param {Uint8Array} kek
+ * @param {boolean} [retriedAfterEnoent]
  */
-function readSecretsMapFromFile(filePath, kek) {
+function readSecretsMapFromFile(filePath, kek, retriedAfterEnoent = false) {
   rejectSymlinkPath(filePath);
   let raw;
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error) {
+      if (error.code === "EACCES") {
+        throw new StorageError(
+          `Permission denied reading storage secret file at ${filePath}`,
+          "permission_denied",
+        );
+      }
+      if (error.code === "ENOENT") {
+        if (!retriedAfterEnoent) {
+          return readSecretsMapFromFile(filePath, kek, true);
+        }
+        throw new StorageError(
+          `Storage secret generation file missing at ${filePath}`,
+          "store_not_found",
+        );
+      }
+    }
     throw corruptGenerationError(filePath, "Could not read storage secret file", error);
   }
   let envelope;
@@ -148,6 +166,16 @@ function corruptGenerationError(filePath, detail, cause) {
  */
 export function loadLatestSecretsMap(rootDir, kek, assertHeld = () => {}) {
   migrateLegacySecretsFileIfNeeded(rootDir, kek, assertHeld);
+  return loadLatestSecretsMapInner(rootDir, kek, false);
+}
+
+/**
+ * @param {string} rootDir
+ * @param {Uint8Array} kek
+ * @param {boolean} retriedAfterMissingGen
+ * @returns {{ gen: number, map: Record<string, string> }}
+ */
+function loadLatestSecretsMapInner(rootDir, kek, retriedAfterMissingGen) {
   const paths = listGenerationSecretPaths(rootDir);
   if (paths.length === 0) {
     return { gen: 0, map: {} };
@@ -157,7 +185,17 @@ export function loadLatestSecretsMap(rootDir, kek, assertHeld = () => {}) {
     const map = readSecretsMapFromFile(highest.path, kek);
     return { gen: highest.gen, map: { ...map } };
   } catch (error) {
+    if (
+      !retriedAfterMissingGen &&
+      error instanceof StorageError &&
+      error.code === "store_not_found"
+    ) {
+      return loadLatestSecretsMapInner(rootDir, kek, true);
+    }
     if (error instanceof StorageError && error.code === "corrupt_secret_store") {
+      throw error;
+    }
+    if (error instanceof StorageError && error.code === "permission_denied") {
       throw error;
     }
     throw corruptGenerationError(highest.path, "Could not load storage secret file", error);

@@ -21,7 +21,12 @@ import {
   listGenerationSecretPaths,
 } from "../../lib/storage/secret-store-file-generations.mjs";
 import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
-import { isHardLinkCommitSupported } from "../../lib/storage/secret-store-file-link.mjs";
+import {
+  assertHardLinkCommitSupported,
+  isHardLinkCommitSupported,
+  resetHardLinkProbeCacheForTests,
+} from "../../lib/storage/secret-store-file-link.mjs";
+import { ensurePrivateDir } from "../../lib/storage/secret-store-private-dir.mjs";
 import {
   isLockStaleByMtimeForTests,
   STALE_LOCK_MTIME_MS,
@@ -106,6 +111,56 @@ describe("SecretStore encrypted file backend", () => {
 
   it("supports hard-link CAS on this filesystem", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-link-"));
+    assert.equal(isHardLinkCommitSupported(rootDir), true);
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("mode=file succeeds when rootDir does not exist yet", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-newdir-parent-"));
+    const rootDir = path.join(parent, "nested", "store");
+    assert.ok(!fs.existsSync(rootDir));
+    resetHardLinkProbeCacheForTests();
+    const store = new SecretStore({ mode: "file", rootDir });
+    await store.set("first", new Uint8Array([8]));
+    assert.deepEqual(await store.get("first"), new Uint8Array([8]));
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
+  it("auto selects file when rootDir does not exist yet and keyring unavailable", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-auto-newdir-"));
+    const rootDir = path.join(parent, "fresh", "home");
+    assert.ok(!fs.existsSync(rootDir));
+    resetHardLinkProbeCacheForTests();
+    const prev = process.env.INFINITECONTEXT_KEYRING_DURABLE;
+    try {
+      process.env.INFINITECONTEXT_KEYRING_DURABLE = "0";
+      resetKeyringProbeCacheForTests();
+      const store = new SecretStore({ mode: "auto", rootDir });
+      await store.set("auto-first", new Uint8Array([3]));
+      assert.equal(await store.backendKind(), "file");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.INFINITECONTEXT_KEYRING_DURABLE;
+      } else {
+        process.env.INFINITECONTEXT_KEYRING_DURABLE = prev;
+      }
+      resetKeyringProbeCacheForTests();
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cache link probe ENOENT when the directory appears later", () => {
+    resetHardLinkProbeCacheForTests();
+    const rootDir = path.join(os.tmpdir(), `ic-secret-store-probe-enoent-${Date.now()}`);
+    assert.ok(!fs.existsSync(rootDir));
+    assert.throws(
+      () => isHardLinkCommitSupported(rootDir),
+      (error) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "store_directory_missing",
+    );
+    ensurePrivateDir(rootDir);
     assert.equal(isHardLinkCommitSupported(rootDir), true);
     fs.rmSync(rootDir, { recursive: true, force: true });
   });

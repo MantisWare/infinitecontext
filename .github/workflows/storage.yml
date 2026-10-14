@@ -30,6 +30,7 @@ jobs:
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs
           node --check apps/js-sdk/lib/storage/object-store-sync-transport.mjs
           node --check apps/js-sdk/lib/storage/secret-store-constants.mjs
+          node --check apps/js-sdk/lib/storage/secret-store-private-dir.mjs
           node --check apps/js-sdk/lib/storage/secret-store-heartbeat-lock.mjs
           node --check apps/js-sdk/lib/storage/secret-store-file-link.mjs
           node --check apps/js-sdk/lib/storage/secret-store-file-generations.mjs

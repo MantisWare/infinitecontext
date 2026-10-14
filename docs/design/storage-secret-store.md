@@ -22,7 +22,8 @@ The **KEK** (`storage-secrets.kek`, mode **0600**) sits **beside** the ciphertex
 - **Write (under lock):** read generation `N`, apply change, write + fsync a temp file, then **`fs.linkSync(temp, storage-secrets.<N+1>.enc)`**. `EEXIST` means another writer committed first → re-read and retry while the lock is still held. Lost lock → **`store_retry`** (caller may retry). If the **link succeeded** but a later step (directory fsync, temp unlink, or your process) errors, generation **N+1 may already be on disk** — callers must **retry idempotently** (re-read and apply the same logical change).
 - **Read:** only the **highest-numbered** generation file is used. If that file is corrupt or fails validation, operations fail with **`corrupt_secret_store`** naming the path — **no silent fallback** to older generations.
 - After a successful link: fsync the directory, unlink the temp, prune generations **older than N−2**.
-- Requires **hard-link** support (local ext4/APFS/NTFS). Network or copy-on-write filesystems without link may fail with **`not_supported`**.
+- Requires **hard-link** support (local ext4/APFS/NTFS). Network or copy-on-write filesystems without link may fail with **`not_supported`**. The store directory is created (**0700**) before the link probe; **`ENOENT`** / **`EACCES`** on the directory are not cached as “unsupported”.
+- **`corrupt_secret_store`** on the **newest** generation: remove that file manually to roll back to generation **N−1** (you lose the last committed write). A future **`ic secrets repair`** CLI may automate this (see linked issue in the PR).
 
 Marker/backend files and the KEK still use temp + rename. Secret payloads never use rename-to-commit.
 
