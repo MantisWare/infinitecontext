@@ -11,6 +11,7 @@ export const GEN_SECRETS_SUFFIX = ".enc";
 const FILE_VERSION = 1;
 const FILE_AAD = new TextEncoder().encode("infinitecontext/storage-secret-store/v1");
 const GEN_PAD = 12;
+const MAX_GENERATION = 999_999_999_999;
 const MAX_CAS_ATTEMPTS = 64;
 
 /** @type {number} */
@@ -23,6 +24,9 @@ export function setTestStallBeforeLinkMsForTests(ms) {
 
 /** @param {number} gen */
 export function formatGenerationSecretsFileName(gen) {
+  if (!Number.isSafeInteger(gen) || gen <= 0 || gen > MAX_GENERATION) {
+    throw new StorageError("Storage secret generation number out of range", "not_supported");
+  }
   return `${GEN_SECRETS_PREFIX}${String(gen).padStart(GEN_PAD, "0")}${GEN_SECRETS_SUFFIX}`;
 }
 
@@ -69,6 +73,12 @@ export function listGenerationSecretPaths(rootDir) {
 }
 
 /** @param {string} rootDir */
+export function highestGenerationNumber(rootDir) {
+  const paths = listGenerationSecretPaths(rootDir);
+  return paths.length > 0 ? paths[0].gen : 0;
+}
+
+/** @param {string} rootDir */
 export function hasPersistedSecretsStore(rootDir) {
   if (fs.existsSync(path.join(rootDir, LEGACY_SECRETS_FILENAME))) {
     return true;
@@ -82,22 +92,27 @@ export function hasPersistedSecretsStore(rootDir) {
  */
 function readSecretsMapFromFile(filePath, kek) {
   rejectSymlinkPath(filePath);
-  const raw = fs.readFileSync(filePath, "utf8");
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    throw corruptGenerationError(filePath, "Could not read storage secret file", error);
+  }
   let envelope;
   try {
     envelope = JSON.parse(raw);
   } catch {
-    throw new StorageError("Corrupt storage secret file", "corrupt_secret_store");
+    throw corruptGenerationError(filePath, "Corrupt storage secret file (invalid JSON)");
   }
   if (Number(envelope?.v) !== FILE_VERSION || !envelope?.enc) {
-    throw new StorageError("Unsupported storage secret file version", "corrupt_secret_store");
+    throw corruptGenerationError(filePath, "Unsupported storage secret file version");
   }
   let plaintext;
   try {
     plaintext = decryptAead(kek, envelope.enc, FILE_AAD);
   } catch (error) {
     if (error instanceof DecryptionFailedError) {
-      throw new StorageError("Could not decrypt storage secret file", "corrupt_secret_store");
+      throw corruptGenerationError(filePath, "Could not decrypt storage secret file");
     }
     throw error;
   }
@@ -105,12 +120,25 @@ function readSecretsMapFromFile(filePath, kek) {
   try {
     parsed = JSON.parse(new TextDecoder().decode(plaintext));
   } catch {
-    throw new StorageError("Corrupt storage secret payload", "corrupt_secret_store");
+    throw corruptGenerationError(filePath, "Corrupt storage secret payload");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new StorageError("Corrupt storage secret payload", "corrupt_secret_store");
+    throw corruptGenerationError(filePath, "Corrupt storage secret payload");
   }
   return /** @type {Record<string, string>} */ (parsed);
+}
+
+/**
+ * @param {string} filePath
+ * @param {string} detail
+ * @param {unknown} [cause]
+ */
+function corruptGenerationError(filePath, detail, cause) {
+  const message = `${detail} at ${filePath}`;
+  if (cause instanceof Error && cause.message && !message.includes(cause.message)) {
+    return new StorageError(`${message} (${cause.message})`, "corrupt_secret_store");
+  }
+  return new StorageError(message, "corrupt_secret_store");
 }
 
 /**
@@ -121,24 +149,19 @@ function readSecretsMapFromFile(filePath, kek) {
 export function loadLatestSecretsMap(rootDir, kek, assertHeld = () => {}) {
   migrateLegacySecretsFileIfNeeded(rootDir, kek, assertHeld);
   const paths = listGenerationSecretPaths(rootDir);
-  /** @type {StorageError | null} */
-  let lastCorrupt = null;
-  for (const entry of paths) {
-    try {
-      const map = readSecretsMapFromFile(entry.path, kek);
-      return { gen: entry.gen, map: { ...map } };
-    } catch (error) {
-      if (error instanceof StorageError && error.code === "corrupt_secret_store") {
-        lastCorrupt = error;
-        continue;
-      }
+  if (paths.length === 0) {
+    return { gen: 0, map: {} };
+  }
+  const highest = paths[0];
+  try {
+    const map = readSecretsMapFromFile(highest.path, kek);
+    return { gen: highest.gen, map: { ...map } };
+  } catch (error) {
+    if (error instanceof StorageError && error.code === "corrupt_secret_store") {
       throw error;
     }
+    throw corruptGenerationError(highest.path, "Could not load storage secret file", error);
   }
-  if (paths.length > 0 && lastCorrupt) {
-    throw lastCorrupt;
-  }
-  return { gen: 0, map: {} };
 }
 
 /**
@@ -162,7 +185,26 @@ function migrateLegacySecretsFileIfNeeded(rootDir, kek, assertHeld) {
   writeTempSecretsFile(tmpPath, payload);
   assertHeld();
   const nextPath = path.join(rootDir, nextName);
-  fs.linkSync(tmpPath, nextPath);
+  rejectSymlinkPath(nextPath);
+  try {
+    fs.linkSync(tmpPath, nextPath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      readSecretsMapFromFile(nextPath, kek);
+      try {
+        fs.unlinkSync(legacyPath);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    throw error;
+  }
   fsyncDirectory(rootDir);
   try {
     fs.unlinkSync(tmpPath);
@@ -206,8 +248,9 @@ export function commitSecretsMapCas(rootDir, kek, mutate, assertHeld) {
       throw error;
     }
 
-    const { gen, map } = loadLatestSecretsMap(rootDir, kek);
+    const { gen, map } = loadLatestSecretsMap(rootDir, kek, assertHeld);
     const nextGen = gen + 1;
+    formatGenerationSecretsFileName(nextGen);
     const nextMap = mutate({ ...map });
     const payload = encodeSecretsPayload(nextMap, kek);
     const nextName = formatGenerationSecretsFileName(nextGen);
@@ -250,6 +293,16 @@ export function commitSecretsMapCas(rootDir, kek, mutate, assertHeld) {
         // ignore
       }
       if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+        if (fs.existsSync(nextPath)) {
+          try {
+            readSecretsMapFromFile(nextPath, kek);
+          } catch (readError) {
+            if (readError instanceof StorageError && readError.code === "corrupt_secret_store") {
+              throw readError;
+            }
+            throw corruptGenerationError(nextPath, "Could not read existing generation file", readError);
+          }
+        }
         continue;
       }
       throw error;

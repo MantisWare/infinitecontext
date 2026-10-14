@@ -19,8 +19,8 @@ The **KEK** (`storage-secrets.kek`, mode **0600**) sits **beside** the ciphertex
 
 **Correctness** comes from a filesystem **compare-and-swap**, not from the lock alone. The heartbeat lock reduces contention; it is not the commit fence.
 
-- **Read:** highest generation that decrypts and validates.
-- **Write (under lock):** read generation `N`, apply change, write + fsync a temp file, then **`fs.linkSync(temp, storage-secrets.<N+1>.enc)`**. `EEXIST` means another writer committed first → re-read and retry while the lock is still held. Lost lock → **`store_retry`** (caller may retry).
+- **Write (under lock):** read generation `N`, apply change, write + fsync a temp file, then **`fs.linkSync(temp, storage-secrets.<N+1>.enc)`**. `EEXIST` means another writer committed first → re-read and retry while the lock is still held. Lost lock → **`store_retry`** (caller may retry). If the **link succeeded** but a later step (directory fsync, temp unlink, or your process) errors, generation **N+1 may already be on disk** — callers must **retry idempotently** (re-read and apply the same logical change).
+- **Read:** only the **highest-numbered** generation file is used. If that file is corrupt or fails validation, operations fail with **`corrupt_secret_store`** naming the path — **no silent fallback** to older generations.
 - After a successful link: fsync the directory, unlink the temp, prune generations **older than N−2**.
 - Requires **hard-link** support (local ext4/APFS/NTFS). Network or copy-on-write filesystems without link may fail with **`not_supported`**.
 

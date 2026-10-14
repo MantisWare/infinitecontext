@@ -1,6 +1,7 @@
 import { infinitecontextHome } from "../client-config.mjs";
 import { StorageError } from "./errors.mjs";
 import { createEncryptedFileSecretBackend, fileBackendHasPersistedStore } from "./secret-store-file.mjs";
+import { assertHardLinkCommitSupported } from "./secret-store-file-link.mjs";
 import {
   assertKeyringBackendReady,
   createKeyringSecretBackend,
@@ -49,6 +50,7 @@ export async function resolveSecretStoreBackend(options = {}) {
     assertMarkerMatchesRequestedMode(marked, mode);
     assertMarkedBackendAvailableOnPlatform(marked);
     if (marked === "file") {
+      assertHardLinkCommitSupported(rootDir);
       return createEncryptedFileSecretBackend({ rootDir });
     }
     await assertKeyringBackendReady({
@@ -59,6 +61,7 @@ export async function resolveSecretStoreBackend(options = {}) {
   }
 
   if (mode === "file") {
+    assertHardLinkCommitSupported(rootDir);
     const backend = createEncryptedFileSecretBackend({ rootDir });
     writeBackendMarker(rootDir, "file");
     return backend;
@@ -81,6 +84,7 @@ export async function resolveSecretStoreBackend(options = {}) {
  */
 async function resolveAutoSecretStoreBackend(rootDir) {
   if (fileBackendHasPersistedStore(rootDir)) {
+    assertHardLinkCommitSupported(rootDir);
     return createEncryptedFileSecretBackend({ rootDir });
   }
 
@@ -88,6 +92,7 @@ async function resolveAutoSecretStoreBackend(rootDir) {
     return createKeyringSecretBackend();
   }
 
+  assertHardLinkCommitSupported(rootDir);
   return createEncryptedFileSecretBackend({ rootDir });
 }
 

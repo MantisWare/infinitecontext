@@ -110,6 +110,26 @@ describe("SecretStore encrypted file backend", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it("fails get/set/delete when the newest generation file is corrupt (no fallback)", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-corrupt-newest-"));
+    const store = new SecretStore({ mode: "file", rootDir });
+    await store.set("good", new Uint8Array([1, 2]));
+    await store.set("also-good", new Uint8Array([3, 4]));
+    const gens = listGenerationSecretPaths(rootDir);
+    assert.ok(gens.length >= 2);
+    const newestPath = gens[0].path;
+    fs.writeFileSync(newestPath, "{ not valid secrets json }\n");
+    const expectCorrupt = (error) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "corrupt_secret_store" &&
+      error.message.includes(newestPath);
+    await assert.rejects(() => store.get("good"), expectCorrupt);
+    await assert.rejects(() => store.set("x", new Uint8Array([9])), expectCorrupt);
+    await assert.rejects(() => store.delete("also-good"), expectCorrupt);
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
   it("maps decrypt failures to corrupt_secret_store", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-corrupt-"));
     const store = new SecretStore({ mode: "file", rootDir });
