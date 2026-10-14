@@ -85,4 +85,56 @@ describe("replica tombstone + batch convergence", () => {
     assert.deepEqual(oneBatch.messages, threeBatch.messages);
     assert.deepEqual(Object.keys(oneBatch.contexts).sort(), Object.keys(threeBatch.contexts).sort());
   });
+
+  it("delete tombstone blocks later update with deterministic conflict", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const localA = createInMemoryObjectStoreLocalState();
+    const writer = transport(adapter, DEVICE_A, localA);
+    const ctx = "ctx_tombstone";
+    const msg = generateClientNodeId();
+    await writer.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        context_id: ctx,
+        payload: { context_id: ctx, metadata: {} },
+      },
+    ]);
+    await writer.pushSyncMutations([
+      {
+        client_id: msg,
+        op: "message_append",
+        context_id: ctx,
+        payload: {
+          messages: [{ id: msg, role: "user", content: { body: "v1" }, metadata: { ic_client_node_id: msg } }],
+        },
+      },
+    ]);
+    const base = snapshotVectorCursor(localA.load().vectorCursor);
+    await writer.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "message_delete",
+        context_id: ctx,
+        base_sequence: 1,
+        base_vector: base,
+        payload: { ids: [msg] },
+      },
+    ]);
+    await writer.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "message_update",
+        context_id: ctx,
+        payload: {
+          messages: [{ id: msg, role: "user", content: { body: "late" }, metadata: { ic_client_node_id: msg } }],
+        },
+      },
+    ]);
+    const changes = await pullInBatches(transport(adapter, DEVICE_B, createInMemoryObjectStoreLocalState()), 2);
+    const replica = replicaFromChanges(changes);
+    assert.equal(replica.messages[msg]?.tombstone, true);
+    assert.ok(replica.sync_conflicts.some((c) => c.kind === "tombstone_blocked_update"));
+  });
 });
