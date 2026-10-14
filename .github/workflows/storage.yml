@@ -32,6 +32,7 @@ jobs:
           node --check apps/js-sdk/lib/storage/filesystem-object-file.mjs
           node --check apps/js-sdk/lib/storage/filesystem-generations.mjs
           node --check apps/js-sdk/lib/storage/local-object-store.mjs
+          node --check apps/js-sdk/lib/storage/layout.mjs
           node --check apps/js-sdk/lib/storage/storage-object-move.mjs
           node --check apps/js-sdk/lib/storage/contract-suite.mjs
           node --check apps/js-sdk/lib/storage/encrypt-storage-object.mjs

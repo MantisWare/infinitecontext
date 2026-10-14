@@ -22,6 +22,27 @@ export {
   resolveLocalObjectStoreRootDir,
 } from "./local-object-store.mjs";
 export {
+  IC_LAYOUT_DIR,
+  IC_VAULT_JSON_VERSION,
+  buildLayoutLogSegmentAad,
+  buildVaultJsonWithWrappedDek,
+  decodeVaultJson,
+  deriveDevH,
+  deriveNamingKey,
+  deviceEncRelativePath,
+  decryptLogSegment,
+  encryptLogSegment,
+  encodeVaultJson,
+  layoutRootPath,
+  layoutSegmentEnvelopeDigest,
+  lockRelativePath,
+  logSegmentRelativePath,
+  manifestEncRelativePath,
+  snapEncRelativePath,
+  vaultJsonRelativePath,
+  verifyLogSegmentChain,
+} from "./layout.mjs";
+export {
   decryptVaultStorageObjectPlaintext,
   moveStorageObjectWithDek,
 } from "./storage-object-move.mjs";
