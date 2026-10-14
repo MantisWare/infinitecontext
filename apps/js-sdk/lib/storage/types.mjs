@@ -1,5 +1,5 @@
 /**
- * @typedef {'get' | 'head' | 'put' | 'list' | 'delete' | 'conditionalCreate' | 'conditionalReplace' | 'atomicRename' | 'strongListAfterWrite' | 'serverSideTimestamps'} StorageCapability
+ * @typedef {'get' | 'head' | 'put' | 'list' | 'delete' | 'conditionalCreate' | 'conditionalReplace' | 'strongListAfterWrite' | 'serverSideTimestamps'} StorageCapability
  */
 
 /**
@@ -47,15 +47,17 @@
  */
 
 /**
- * @typedef {Object} StorageListResult
- * @property {StorageObjectInfo[]} objects
- * @property {string} [nextCursor]
+ * @typedef {Object} StorageCorruptEntry
+ * @property {string} key
+ * @property {number} [gen]
+ * @property {string} message
  */
 
 /**
- * @typedef {Object} StorageRenameOptions
- * @property {string} [ifMatch]
- * @property {AbortSignal} [signal]
+ * @typedef {Object} StorageListResult
+ * @property {StorageObjectInfo[]} objects
+ * @property {StorageCorruptEntry[]} [corrupt]
+ * @property {string} [nextCursor]
  */
 
 /**
@@ -71,7 +73,6 @@
  * @property {(key: string, body: Uint8Array, options?: StoragePutOptions) => Promise<StorageObjectInfo>} put
  * @property {(prefix: string, options?: StorageListOptions) => Promise<StorageListResult>} list
  * @property {(key: string, options?: StorageDeleteOptions) => Promise<void>} delete
- * @property {(fromKey: string, toKey: string, options?: StorageRenameOptions) => Promise<StorageObjectInfo>} [rename]
  */
 
 export const STORAGE_CAPABILITIES = Object.freeze({
@@ -82,7 +83,6 @@ export const STORAGE_CAPABILITIES = Object.freeze({
   delete: "delete",
   conditionalCreate: "conditionalCreate",
   conditionalReplace: "conditionalReplace",
-  atomicRename: "atomicRename",
   strongListAfterWrite: "strongListAfterWrite",
   serverSideTimestamps: "serverSideTimestamps",
 });

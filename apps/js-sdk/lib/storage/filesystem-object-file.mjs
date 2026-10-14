@@ -11,6 +11,11 @@ export const FS_TEMP_PREFIX = ".ic-fs-tmp.";
 export const FS_GEN_SUFFIX = ".icgen";
 export const FS_TEMP_SWEEP_MAX_AGE_MS = 60 * 60 * 1000;
 
+/** @param {string} name */
+export function isFilesystemTempArtifact(name) {
+  return name.startsWith(FS_TEMP_PREFIX) || name.includes(`${FS_GEN_SUFFIX}.tmp.`);
+}
+
 /**
  * @typedef {Object} StoredObjectHeader
  * @property {string} etag
@@ -145,14 +150,16 @@ export function assertRealpathUnderRoot(targetPath, rootDir) {
 /**
  * @param {string} tempPath
  * @param {Uint8Array} payload
+ * @param {string} rootDir
  */
-export function writeExclusiveTempFile(tempPath, payload) {
+export function writeExclusiveTempFile(tempPath, payload, rootDir) {
   fs.mkdirSync(path.dirname(tempPath), { recursive: true, mode: 0o700 });
   let fd;
   try {
     fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     fs.writeSync(fd, payload, 0, payload.length);
     fs.fsyncSync(fd);
+    assertRealpathUnderRoot(tempPath, rootDir);
   } catch (error) {
     throw mapFsError(error, tempPath);
   } finally {
@@ -200,7 +207,7 @@ function sweepTempsInDir(dir) {
       sweepTempsInDir(full);
       continue;
     }
-    if (!entry.isFile() || !entry.name.startsWith(FS_TEMP_PREFIX)) {
+    if (!entry.isFile() || !isFilesystemTempArtifact(entry.name)) {
       continue;
     }
     try {

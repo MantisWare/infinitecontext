@@ -18,7 +18,7 @@ Each logical key has a directory under `{rootDir}/objects/<key-as-dirs>/` contai
 2. **JSON header** `{ etag, revision, size, modifiedAt, tombstone? }` — **etag must match** a hash of the body on read  
 3. **Ciphertext body**
 
-**Commit:** write temp → `fsync` → **`link(temp, gen N+1)`** → `fsync` directory → prune gens **older than N−2**. **`EEXIST`** → re-read and re-check conditions. **Deletes** append a **tombstone** generation. **Renames** tombstone the source and create the destination in separate CAS steps (both under the store lock).
+**Commit:** write temp → `fsync` → **`link(temp, gen N+1)`** → `fsync` directory → prune gens **older than N−2**. **`EEXIST`** → re-read and re-check conditions. **Deletes** append a **tombstone** generation. **Moves/renames** are not an adapter operation. Use the client helper `moveStorageObjectWithDek` (decrypt with DEK, re-encrypt for the destination AAD, `put` with `ifNoneMatch:*`, then `delete` with `ifMatch`).
 
 Readers use the **highest generation only**. A corrupt newest generation is **`corrupt_storage`** (no silent fallback). Repair: remove the bad generation file (future: `removeCorruptGeneration(key, gen)` on the adapter instance).
 
@@ -38,6 +38,6 @@ For **one machine** or a **desktop-synced folder** with **last-writer-wins** cav
 
 ## API notes
 
-- **`list(prefix)`:** a trailing slash matters — `list('a/')` matches `a/x` but **not** `ab/x`.  
-- **`list`** throws **`corrupt_storage`** when a listed object fails validation (does not skip silently).  
+- **`list(prefix)`:** segment-based prefix. A trailing **`/`** requires a path separator after the prefix (`list('a/')` matches `a/x` but **not** `ab/x`).  
+- **`list`** returns a **`corrupt`** array for keys whose newest generation fails validation (the listing continues). Use **`removeCorruptGeneration(key, gen)`** (under lock, only if that generation is invalid).  
 - Stale **`.ic-fs-tmp.*`** files older than **1 hour** are swept on **`init`**.

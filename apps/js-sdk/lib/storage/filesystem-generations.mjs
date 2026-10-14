@@ -9,6 +9,7 @@ import {
   encodeObjectFile,
   fsyncDirectory,
   FS_GEN_SUFFIX,
+  FS_TEMP_PREFIX,
   readObjectFileNoFollow,
   writeExclusiveTempFile,
 } from "./filesystem-object-file.mjs";
@@ -65,6 +66,7 @@ export function objectKeyDirectory(rootDir, key) {
   return {
     canonical,
     keyDir: cursor,
+    objectsRoot,
   };
 }
 
@@ -106,9 +108,10 @@ export function listGenerationPathsForKeyDir(keyDir) {
 /**
  * @param {string} rootDir
  * @param {string} key
+ * @param {boolean} [retriedAfterRelist]
  * @returns {{ gen: number, header: import("./filesystem-object-file.mjs").StoredObjectHeader, body: Uint8Array } | null}
  */
-export function loadLatestObjectGeneration(rootDir, key) {
+export function loadLatestObjectGeneration(rootDir, key, retriedAfterRelist = false) {
   const { canonical, keyDir } = objectKeyDirectory(rootDir, key);
   const paths = listGenerationPathsForKeyDir(keyDir);
   if (paths.length === 0) {
@@ -118,10 +121,20 @@ export function loadLatestObjectGeneration(rootDir, key) {
   try {
     const decoded = readObjectFileNoFollow(highest.path, canonical, rootDir);
     if (!decoded) {
+      if (!retriedAfterRelist) {
+        return loadLatestObjectGeneration(rootDir, key, true);
+      }
       throw new StorageError(`Storage object generation missing at ${highest.path}`, "not_found");
     }
     return { gen: highest.gen, header: decoded.header, body: decoded.body };
   } catch (error) {
+    if (
+      !retriedAfterRelist &&
+      error instanceof StorageError &&
+      (error.code === "not_found" || error.code === "corrupt_storage")
+    ) {
+      return loadLatestObjectGeneration(rootDir, key, true);
+    }
     if (error instanceof StorageError && error.code === "corrupt_storage") {
       throw error;
     }
@@ -167,10 +180,10 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
     const nextName = formatObjectGenerationFileName(nextGen);
     const tmpPath = path.join(
       keyDir,
-      `.${nextName}.tmp.${process.pid}.${Date.now()}.${attempt}`,
+      `${FS_TEMP_PREFIX}${nextName}.tmp.${process.pid}.${Date.now()}.${attempt}`,
     );
     rejectSymlinkPath(tmpPath);
-    writeExclusiveTempFile(tmpPath, payload);
+    writeExclusiveTempFile(tmpPath, payload, rootDir);
 
     try {
       assertHeld();
@@ -224,23 +237,59 @@ export function commitObjectGenerationCas(rootDir, assertHeld, key, buildNext) {
     } catch {
       // ignore
     }
-    pruneOldGenerations(keyDir, nextGen);
+    pruneOldGenerations(rootDir, keyDir, nextGen);
     return { gen: nextGen, header: built.header, body: built.body };
   }
   throw new StorageError("Storage object CAS commit exceeded retry limit", "store_retry");
 }
 
-/** @param {string} keyDir @param {number} committedGen */
-function pruneOldGenerations(keyDir, committedGen) {
+/**
+ * @param {string} rootDir
+ * @param {string} keyDir
+ * @param {number} committedGen
+ */
+function pruneOldGenerations(rootDir, keyDir, committedGen) {
   const keepFrom = committedGen - 2;
+  let removedAny = false;
   for (const row of listGenerationPathsForKeyDir(keyDir)) {
-    if (row.gen < keepFrom) {
-      try {
-        fs.unlinkSync(row.path);
-      } catch {
-        // ignore
-      }
+    if (row.gen >= keepFrom) {
+      continue;
     }
+    try {
+      fs.unlinkSync(row.path);
+      removedAny = true;
+    } catch {
+      // ignore
+    }
+  }
+  if (removedAny) {
+    removeEmptyKeyDirectories(rootDir, keyDir);
+  }
+}
+
+/**
+ * @param {string} rootDir
+ * @param {string} keyDir
+ */
+function removeEmptyKeyDirectories(rootDir, keyDir) {
+  const objectsRoot = path.join(path.resolve(rootDir), OBJECTS_SUBDIR);
+  let cursor = keyDir;
+  while (cursor.startsWith(objectsRoot) && cursor !== objectsRoot) {
+    let entries;
+    try {
+      entries = fs.readdirSync(cursor);
+    } catch {
+      break;
+    }
+    if (entries.length > 0) {
+      break;
+    }
+    try {
+      fs.rmdirSync(cursor);
+    } catch {
+      break;
+    }
+    cursor = path.dirname(cursor);
   }
 }
 
@@ -280,19 +329,33 @@ export function listAllObjectKeys(rootDir) {
 }
 
 /**
- * Remove corrupt generations for a key (manual repair helper).
  * @param {string} rootDir
  * @param {string} key
  * @param {number} gen
  */
-export function removeObjectGenerationForRepair(rootDir, key, gen) {
-  const { keyDir } = objectKeyDirectory(rootDir, key);
+export function removeCorruptObjectGenerationIfInvalid(rootDir, key, gen) {
+  const { canonical, keyDir } = objectKeyDirectory(rootDir, key);
   const filePath = path.join(keyDir, formatObjectGenerationFileName(gen));
   try {
-    fs.unlinkSync(filePath);
+    readObjectFileNoFollow(filePath, canonical, rootDir);
+    throw new StorageError(
+      `Storage object generation ${gen} at ${filePath} is valid; refusing removal`,
+      "invalid_argument",
+    );
   } catch (error) {
-    throw mapFsError(error, filePath);
+    if (error instanceof StorageError && error.code === "invalid_argument") {
+      throw error;
+    }
+    if (!(error instanceof StorageError && error.code === "corrupt_storage")) {
+      throw error;
+    }
   }
+  try {
+    fs.unlinkSync(filePath);
+  } catch (unlinkError) {
+    throw mapFsError(unlinkError, filePath);
+  }
+  removeEmptyKeyDirectories(rootDir, keyDir);
 }
 
 /**

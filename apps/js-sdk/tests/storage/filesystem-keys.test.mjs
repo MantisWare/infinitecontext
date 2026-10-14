@@ -25,6 +25,7 @@ describe("filesystem storage key grammar", () => {
 
   it("rejects windows reserved device names", () => {
     assert.throws(() => assertCanonicalStorageObjectKey("com1/file.enc"), StorageError);
+    assert.throws(() => assertCanonicalStorageObjectKey("aux.enc"), StorageError);
   });
 
   it("list prefix trailing slash boundary", () => {

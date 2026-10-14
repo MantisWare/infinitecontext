@@ -73,23 +73,4 @@ describe("Filesystem object generation CAS stall before link", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it("rename survives stall", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fs-stall-rename-"));
-    const seed = createFilesystemStorageAdapter({ rootDir });
-    await seed.init();
-    await seed.put("stall/object.enc", sampleEncryptedObjectBytesForKey("stall/object.enc"), {
-      ifNoneMatch: "*",
-    });
-    await seed.close();
-
-    const res = await runWorker([WORKER, rootDir, "rename", String(STALL_MS)]);
-    assert.match(res.out, /STALL_OK rename/);
-    assert.equal(res.code, 0);
-    const reader = createFilesystemStorageAdapter({ rootDir });
-    await reader.init();
-    assert.equal(await reader.get("stall/object.enc"), null);
-    assert.ok(await reader.get("stall/renamed.enc"));
-    console.log("IC_FS_STALL_RENAME: exit=0 renamed_present=true");
-    fs.rmSync(rootDir, { recursive: true, force: true });
-  });
 });

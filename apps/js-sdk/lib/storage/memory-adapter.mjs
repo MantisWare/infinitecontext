@@ -4,7 +4,6 @@ import {
   assertStorageCiphertext,
   scanStorageObjectForLeaks,
   storageObjectDigest,
-  rebindStorageObjectForKey,
   verifyStorageObjectForKey,
 } from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
@@ -69,7 +68,6 @@ export function createMemoryStorageAdapter(options = {}) {
       STORAGE_CAPABILITIES.delete,
       STORAGE_CAPABILITIES.conditionalCreate,
       STORAGE_CAPABILITIES.conditionalReplace,
-      STORAGE_CAPABILITIES.atomicRename,
       STORAGE_CAPABILITIES.strongListAfterWrite,
     ]),
 
@@ -187,34 +185,6 @@ export function createMemoryStorageAdapter(options = {}) {
       objects.delete(normalized);
     },
 
-    async rename(fromKey, toKey, renameOptions = {}) {
-      assertNotAborted(renameOptions.signal);
-      const from = readEntry(fromKey);
-      const to = readEntry(toKey);
-      if (!from.entry) {
-        throw new PreconditionFailedError("rename source missing");
-      }
-      if (to.entry) {
-        throw new PreconditionFailedError("rename destination already exists");
-      }
-      if (renameOptions.ifMatch !== undefined && from.entry.etag !== renameOptions.ifMatch) {
-        throw new PreconditionFailedError("ifMatch precondition failed");
-      }
-      const rebound = rebindStorageObjectForKey(from.entry.body.slice(), to.normalized);
-      objects.set(to.normalized, {
-        ...from.entry,
-        body: rebound,
-        etag: computeEtag(to.normalized, rebound, from.entry.revision),
-      });
-      objects.delete(from.normalized);
-      return {
-        key: to.normalized,
-        etag: from.entry.etag,
-        revision: String(from.entry.revision),
-        size: from.entry.body.length,
-        modifiedAt: from.entry.modifiedAt,
-      };
-    },
   };
 
   if (options.exposeInternalsForTests) {

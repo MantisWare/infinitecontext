@@ -72,7 +72,7 @@ export function assertCanonicalStorageObjectKey(key) {
     if (!SEGMENT_RE.test(segment)) {
       throw new StorageError("Storage object key segment has invalid characters", "invalid_argument");
     }
-    if (WINDOWS_RESERVED.has(segment.toLowerCase())) {
+    if (isWindowsReservedSegment(segment)) {
       throw new StorageError("Storage object key segment is a reserved device name", "invalid_argument");
     }
     if (FS_RESERVED_BASENAMES.has(segment)) {
@@ -80,6 +80,12 @@ export function assertCanonicalStorageObjectKey(key) {
     }
   }
   return key;
+}
+
+/** @param {string} segment */
+function isWindowsReservedSegment(segment) {
+  const base = segment.includes(".") ? segment.split(".")[0] : segment;
+  return Boolean(base && WINDOWS_RESERVED.has(base.toLowerCase()));
 }
 
 /**

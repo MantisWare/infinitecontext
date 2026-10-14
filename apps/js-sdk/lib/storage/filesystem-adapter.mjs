@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   assertStorageCiphertext,
   scanStorageObjectForLeaks,
-  rebindStorageObjectForKey,
   verifyStorageObjectForKey,
 } from "./ciphertext.mjs";
 import { PreconditionFailedError, StorageError } from "./errors.mjs";
@@ -17,8 +16,10 @@ import {
   buildTombstoneHeader,
   commitObjectGenerationCas,
   listAllObjectKeys,
+  listGenerationPathsForKeyDir,
   loadLatestObjectGeneration,
-  removeObjectGenerationForRepair,
+  objectKeyDirectory,
+  removeCorruptObjectGenerationIfInvalid,
 } from "./filesystem-generations.mjs";
 import { sweepStaleFilesystemTempFiles } from "./filesystem-object-file.mjs";
 import { mapFsError, rejectSymlinkInStoreRoot } from "./filesystem-paths.mjs";
@@ -83,7 +84,6 @@ export function createFilesystemStorageAdapter(options) {
       STORAGE_CAPABILITIES.delete,
       STORAGE_CAPABILITIES.conditionalCreate,
       STORAGE_CAPABILITIES.conditionalReplace,
-      STORAGE_CAPABILITIES.atomicRename,
       STORAGE_CAPABILITIES.strongListAfterWrite,
     ]),
 
@@ -171,31 +171,36 @@ export function createFilesystemStorageAdapter(options) {
         const nextCursor = keys.length > limit ? page.at(-1) : undefined;
         /** @type {import("./types.mjs").StorageObjectInfo[]} */
         const objects = [];
+        /** @type {import("./types.mjs").StorageCorruptEntry[]} */
+        const corrupt = [];
         for (const key of page) {
-          let live;
           try {
-            live = readLiveObject(rootDir, key);
+            const live = readLiveObject(rootDir, key);
+            if (!live) {
+              continue;
+            }
+            objects.push({
+              key,
+              etag: live.header.etag,
+              revision: String(live.header.revision),
+              size: live.body.length,
+              modifiedAt: live.header.modifiedAt,
+            });
           } catch (error) {
             if (error instanceof StorageError && error.code === "corrupt_storage") {
-              throw new StorageError(
-                `Corrupt storage object at key ${key} (${error.message})`,
-                "corrupt_storage",
-              );
+              const { keyDir } = objectKeyDirectory(rootDir, key);
+              const gen = listGenerationPathsForKeyDir(keyDir)[0]?.gen;
+              corrupt.push({
+                key,
+                gen,
+                message: error.message,
+              });
+              continue;
             }
             throw error;
           }
-          if (!live) {
-            continue;
-          }
-          objects.push({
-            key,
-            etag: live.header.etag,
-            revision: String(live.header.revision),
-            size: live.body.length,
-            modifiedAt: live.header.modifiedAt,
-          });
         }
-        return { objects, nextCursor };
+        return corrupt.length > 0 ? { objects, corrupt, nextCursor } : { objects, nextCursor };
       } catch (error) {
         throw error instanceof StorageError ? error : mapFsError(error, rootDir);
       }
@@ -227,60 +232,15 @@ export function createFilesystemStorageAdapter(options) {
       });
     },
 
-    async rename(fromKey, toKey, renameOptions = {}) {
-      assertNotAborted(renameOptions.signal);
-      const fromCanonical = assertCanonicalStorageObjectKey(fromKey);
-      const toCanonical = assertCanonicalStorageObjectKey(toKey);
-      return withObjectsStoreLock(rootDir, async (assertHeld) => {
-        const src = loadLatestObjectGeneration(rootDir, fromCanonical);
-        if (!src || src.header.tombstone) {
-          throw new PreconditionFailedError("rename source missing");
-        }
-        if (renameOptions.ifMatch !== undefined && src.header.etag !== renameOptions.ifMatch) {
-          throw new PreconditionFailedError("ifMatch precondition failed");
-        }
-        const dstLive = readLiveObject(rootDir, toCanonical);
-        if (dstLive) {
-          throw new PreconditionFailedError("rename destination already exists");
-        }
-
-        commitObjectGenerationCas(rootDir, assertHeld, fromCanonical, (state) => {
-          const live = state.header && !state.header.tombstone;
-          if (!live || state.header.etag !== src.header.etag) {
-            throw new PreconditionFailedError("ifMatch precondition failed");
-          }
-          const revision = (state.header?.revision ?? 0) + 1;
-          return buildTombstoneHeader(revision);
-        });
-
-        const rebound = rebindStorageObjectForKey(src.body.slice(), toCanonical);
-        const committed = commitObjectGenerationCas(rootDir, assertHeld, toCanonical, (state) => {
-          if (state.header && !state.header.tombstone) {
-            throw new PreconditionFailedError("rename destination already exists");
-          }
-          checkPutPreconditions(state.header && !state.header.tombstone ? state.header.etag : null, {
-            ifNoneMatch: "*",
-          });
-          const revision = (state.header?.revision ?? 0) + 1;
-          return buildLiveObjectHeader(toCanonical, rebound, revision);
-        });
-
-        return {
-          key: toCanonical,
-          etag: committed.header.etag,
-          revision: String(committed.header.revision),
-          size: committed.body.length,
-          modifiedAt: committed.header.modifiedAt,
-        };
-      });
-    },
   };
 
   if (options.exposeInternalsForTests) {
     adapter.exposeInternalsForTests = () => collectBackingSnapshot(rootDir);
   }
-  adapter.removeCorruptGeneration = (key, gen) => {
-    removeObjectGenerationForRepair(rootDir, key, gen);
+  adapter.removeCorruptGeneration = async (key, gen) => {
+    return withObjectsStoreLock(rootDir, async () => {
+      removeCorruptObjectGenerationIfInvalid(rootDir, key, gen);
+    });
   };
 
   return adapter;

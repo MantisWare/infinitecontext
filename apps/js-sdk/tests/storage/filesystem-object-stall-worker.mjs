@@ -31,10 +31,6 @@ try {
     const head = await adapter.head(key);
     await adapter.delete(key, { ifMatch: head?.etag });
     console.log("STALL_OK delete");
-  } else if (operation === "rename") {
-    const head = await adapter.head(key);
-    await adapter.rename(key, "stall/renamed.enc", { ifMatch: head?.etag });
-    console.log("STALL_OK rename");
   } else {
     throw new Error(`unknown operation ${operation}`);
   }

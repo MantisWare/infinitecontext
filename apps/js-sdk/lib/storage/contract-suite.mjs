@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   assertStorageCiphertext,
   buildStorageObjectBytes,
-  rebindStorageObjectForKey,
   scanStorageObjectForLeaks,
 } from "./ciphertext.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
@@ -148,6 +147,8 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       assertBackingIsCiphertextOnly();
     });
 
+    // List prefix semantics: `prefix` is segment-based. A trailing `/` requires a path
+    // separator after the prefix (`list('a/')` matches `a/x` but not `ab/x`).
     it("list prefix with trailing slash does not match sibling keys", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
@@ -163,24 +164,6 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
         listed.objects.some((row) => row.key === "ab/x.enc"),
         false,
       );
-    });
-
-    it("atomic rename moves object when destination is free", async () => {
-      useHarness(await createHarness());
-      requireInspectBacking();
-      await adapter.init();
-      if (!adapter.capabilities.has(STORAGE_CAPABILITIES.atomicRename)) {
-        return;
-      }
-      const fromKey = "rename/from.enc";
-      const toKey = "rename/to.enc";
-      const body = sampleEncryptedObjectBytesForKey(fromKey);
-      const created = await adapter.put(fromKey, body, { ifNoneMatch: "*" });
-      const renamed = await adapter.rename(fromKey, toKey, { ifMatch: created.etag });
-      assert.equal(renamed.key, toKey);
-      assert.equal(await adapter.get(fromKey), null);
-      const got = await adapter.get(toKey);
-      assert.deepEqual(got?.body, rebindStorageObjectForKey(body, toKey));
     });
 
     it("lists root prefix and paginates with cursor", async () => {
