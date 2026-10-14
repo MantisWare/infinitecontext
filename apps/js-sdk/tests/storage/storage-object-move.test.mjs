@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import { randomBytes } from "../../lib/ic-crypto.mjs";
+import { PreconditionFailedError } from "../../lib/storage/errors.mjs";
 import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-adapter.mjs";
 import {
   decryptVaultStorageObjectPlaintext,
@@ -113,6 +114,7 @@ describe("moveStorageObjectWithDek", () => {
       () => moveStorageObjectWithDek(adapter, dek, fromKey, toKey),
       (error) => {
         assert.equal(error.code, "partial_move");
+        assert.equal(error.sourceOutcome, "rewritten");
         assert.ok(typeof error.destinationEtag === "string" && error.destinationEtag.length > 0);
         return true;
       },
@@ -121,6 +123,50 @@ describe("moveStorageObjectWithDek", () => {
     const dest = await inner.get(toKey);
     assert.ok(dest);
     assert.ok(await inner.get(fromKey));
+
+    await inner.close();
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("partial_move reports deleted when source disappears before cleanup", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-storage-partial-deleted-"));
+    const dek = randomBytes(32);
+    dek[0] = 4;
+    const inner = createFilesystemStorageAdapter({ rootDir });
+    await inner.init();
+
+    const fromKey = "move/partial/gone.enc";
+    const toKey = "move/partial/dest.enc";
+    const body = copyVerifiedStoragePutBodyForAdapter(
+      encryptVaultPlaintextForStoragePut(dek, fromKey, { v: 1 }),
+    );
+    await inner.put(fromKey, body, { ifNoneMatch: "*" });
+
+    /** @type {import("../../lib/storage/types.mjs").StorageAdapter} */
+    const adapter = {
+      init: () => inner.init(),
+      close: () => inner.close(),
+      get: (key, opts) => inner.get(key, opts),
+      head: (key, opts) => inner.head(key, opts),
+      put: (key, putBody, opts) => inner.put(key, putBody, opts),
+      list: (prefix, opts) => inner.list(prefix, opts),
+      delete: async (key, opts) => {
+        if (key === fromKey) {
+          await inner.delete(key);
+          throw new PreconditionFailedError("ifMatch precondition failed");
+        }
+        return inner.delete(key, opts);
+      },
+    };
+
+    await assert.rejects(
+      () => moveStorageObjectWithDek(adapter, dek, fromKey, toKey),
+      (error) => {
+        assert.equal(error.code, "partial_move");
+        assert.equal(error.sourceOutcome, "deleted");
+        return true;
+      },
+    );
 
     await inner.close();
     fs.rmSync(rootDir, { recursive: true, force: true });

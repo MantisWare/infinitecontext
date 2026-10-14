@@ -20,6 +20,7 @@ import {
   loadLatestObjectGeneration,
   objectKeyDirectory,
   removeCorruptObjectGenerationIfInvalid,
+  sweepStaleTombstoneOnlyKeys,
 } from "./filesystem-generations.mjs";
 import { sweepStaleFilesystemTempFiles } from "./filesystem-object-file.mjs";
 import { mapFsError, rejectSymlinkInStoreRoot } from "./filesystem-paths.mjs";
@@ -93,6 +94,7 @@ export function createFilesystemStorageAdapter(options) {
         assertHardLinkCommitSupported(rootDir);
         rejectSymlinkInStoreRoot(rootDir);
         sweepStaleFilesystemTempFiles(rootDir);
+        sweepStaleTombstoneOnlyKeys(rootDir);
       } catch (error) {
         throw error instanceof StorageError ? error : mapFsError(error, rootDir);
       }

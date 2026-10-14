@@ -18,9 +18,15 @@ Each logical key has a directory under `{rootDir}/objects/<key-as-dirs>/` contai
 2. **JSON header** `{ etag, revision, size, modifiedAt, tombstone? }` — **etag must match** a hash of the body on read  
 3. **Ciphertext body**
 
-**Commit:** write temp → `fsync` → **`link(temp, gen N+1)`** → `fsync` directory → prune gens **older than N−2**. **`EEXIST`** → re-read and re-check conditions. **Deletes** append a **tombstone** generation. **Moves/renames** are not an adapter operation. Use the client helper `moveStorageObjectWithDek` (decrypt with DEK, re-encrypt for the destination AAD, `put` with `ifNoneMatch:*`, then `delete` with `ifMatch`).
+**Commit:** write temp → `fsync` → **`link(temp, gen N+1)`** → `fsync` directory → prune generations below the retention window (keep the latest **two** live commits; on tombstone commits drop all prior generations). **`EEXIST`** → re-read and re-check conditions. **Deletes** append a **tombstone** generation. **Moves/renames** are not an adapter operation.
 
-Readers use the **highest generation only**. A corrupt newest generation is **`corrupt_storage`** (no silent fallback). Repair: remove the bad generation file (future: `removeCorruptGeneration(key, gen)` on the adapter instance).
+### Client-side move (`moveStorageObjectWithDek`)
+
+Decrypt with the vault DEK, **preserve the source `enc.kid` and AAD `seq`**, re-encrypt for the destination key’s AAD, then `put` with `ifNoneMatch:*` and `delete` with `ifMatch` on the source etag. Explicit `kid` / `seq` / `dekVersion` options must match the source envelope and the DEK.
+
+If the source `delete` fails its `ifMatch` check after the destination put succeeds, the helper throws **`partial_move`** with **`destinationEtag`** and **`sourceOutcome`**: **`rewritten`** (source still exists with a new generation) or **`deleted`** (source gone, e.g. concurrent delete).
+
+Readers use the **highest generation only**. A corrupt newest generation is **`corrupt_storage`** (no silent fallback). Repair: call **`removeCorruptGeneration(key, gen)`** on the adapter instance (under lock; only when that generation fails validation).
 
 ## Concurrency
 
@@ -39,5 +45,6 @@ For **one machine** or a **desktop-synced folder** with **last-writer-wins** cav
 ## API notes
 
 - **`list(prefix)`:** segment-based prefix. A trailing **`/`** requires a path separator after the prefix (`list('a/')` matches `a/x` but **not** `ab/x`).  
-- **`list`** returns a **`corrupt`** array for keys whose newest generation fails validation (the listing continues). Use **`removeCorruptGeneration(key, gen)`** (under lock, only if that generation is invalid).  
-- Stale **`.ic-fs-tmp.*`** files older than **1 hour** are swept on **`init`**.
+- **`list`** returns a **`corrupt`** array for keys whose newest generation fails validation (the listing continues).  
+- Stale **`.ic-fs-tmp.*`** / **`.icgen.tmp.*`** files older than **1 hour** are swept on **`init`**.  
+- **Tombstone-only** keys (deleted, never recreated) whose tombstone generation file is older than **7 days** (by **`mtime`**) are removed on **`init`** (empty key directories pruned).

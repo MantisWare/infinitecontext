@@ -20,6 +20,19 @@ const MAX_GENERATION = 999_999_999_999;
 const MAX_CAS_ATTEMPTS = 64;
 const OBJECTS_SUBDIR = "objects";
 
+/** Default age before tombstone-only keys (never recreated) are swept on init. */
+export const TOMBSTONE_SWEEP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @type {number} */
+let tombstoneSweepMaxAgeMs = Number(
+  process.env.IC_FS_OBJECT_TEST_TOMBSTONE_SWEEP_MAX_AGE_MS || TOMBSTONE_SWEEP_MAX_AGE_MS,
+);
+
+/** @param {number} ms */
+export function setFilesystemTombstoneSweepMaxAgeMsForTests(ms) {
+  tombstoneSweepMaxAgeMs = ms;
+}
+
 /** @type {number} */
 let testStallBeforeLinkMs = Number(process.env.IC_FS_OBJECT_TEST_STALL_BEFORE_LINK_MS || 0);
 
@@ -316,6 +329,37 @@ function removeEmptyKeyDirectories(rootDir, keyDir) {
       break;
     }
     cursor = path.dirname(cursor);
+  }
+}
+
+/**
+ * Remove keys whose newest generation is a tombstone older than the retention age.
+ * @param {string} rootDir
+ */
+export function sweepStaleTombstoneOnlyKeys(rootDir) {
+  const now = Date.now();
+  for (const key of listAllObjectKeys(rootDir)) {
+    const latest = loadLatestObjectGeneration(rootDir, key);
+    if (!latest?.header.tombstone) {
+      continue;
+    }
+    const { keyDir } = objectKeyDirectory(rootDir, key);
+    const tombPath = path.join(keyDir, formatObjectGenerationFileName(latest.gen));
+    let ageMs;
+    try {
+      ageMs = fs.statSync(tombPath).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (now - ageMs < tombstoneSweepMaxAgeMs) {
+      continue;
+    }
+    try {
+      fs.unlinkSync(tombPath);
+    } catch {
+      continue;
+    }
+    removeEmptyKeyDirectories(rootDir, keyDir);
   }
 }
 
