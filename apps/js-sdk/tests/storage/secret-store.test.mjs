@@ -22,7 +22,6 @@ import {
 } from "../../lib/storage/secret-store-file-generations.mjs";
 import { storageSecretFilePaths } from "../../lib/storage/secret-store-file.mjs";
 import {
-  assertHardLinkCommitSupported,
   isHardLinkCommitSupported,
   resetHardLinkProbeCacheForTests,
 } from "../../lib/storage/secret-store-file-link.mjs";
