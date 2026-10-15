@@ -11,7 +11,8 @@ import {
 } from "../lib/sync-object-store-bootstrap.mjs";
 import { getDefaultSyncTransport, setDefaultSyncTransport } from "../lib/sync-transport.mjs";
 import { hostedSyncTransport } from "../lib/hosted-sync-transport.mjs";
-import { normalizeVectorSyncCursor } from "../lib/sync-cursor.mjs";
+import { createInMemoryObjectStoreLocalState } from "../lib/object-store-local-sync-state.mjs";
+import { ObjectStoreSyncTransport } from "../lib/storage/object-store-sync-transport.mjs";
 
 const TEST_DEK = new Uint8Array(32).fill(11);
 
@@ -62,7 +63,13 @@ describe("sync-object-store-bootstrap", () => {
     ]);
     assert.equal(pushed.applied.length, 1);
 
-    const pulled = await transport.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    const reader = new ObjectStoreSyncTransport(store.adapter, {
+      dek: TEST_DEK,
+      deviceUuid: "66666666-6666-4666-8666-666666666666",
+      layoutPrefix: "accounts/local",
+      localState: createInMemoryObjectStoreLocalState(),
+    });
+    const pulled = await reader.pullSyncChanges({ limit: 50 });
     assert.equal(pulled.changes.length, 1);
     assert.equal(pulled.changes[0].op, "context_create");
 

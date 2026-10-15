@@ -371,10 +371,13 @@ export function resolveDeleteBaseSequence({ explicitBaseSequence, localCursor } 
   if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
     return explicitBaseSequence;
   }
-  const local = localCursor ?? getSyncCursor();
+  if (localCursor === undefined) return null;
+  const local = localCursor;
   if (typeof local === "number" && local > 0) return local;
   if (local && typeof local === "object" && local.kind === "vector") {
-    return normalizeVectorSyncCursor(local);
+    const normalized = normalizeVectorSyncCursor(local);
+    if (Object.keys(normalized.v ?? {}).length === 0) return null;
+    return normalized;
   }
   return null;
 }
