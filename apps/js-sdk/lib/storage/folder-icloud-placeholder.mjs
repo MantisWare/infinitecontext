@@ -11,6 +11,26 @@ const execFileAsync = promisify(execFile);
 /**
  * @param {string} targetPath absolute path
  */
+/**
+ * @param {string} keyDir object generation directory
+ */
+export function findEvictedPlaceholderFileInKeyDir(keyDir) {
+  try {
+    for (const name of fs.readdirSync(keyDir)) {
+      if (name.startsWith(".") && name.endsWith(".icloud")) {
+        return path.join(keyDir, name);
+      }
+      const full = path.join(keyDir, name);
+      if (isEvictedICloudPlaceholderPath(full)) {
+        return icloudPlaceholderSiblingPath(full);
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function isEvictedICloudPlaceholderPath(targetPath) {
   const placeholder = icloudPlaceholderSiblingPath(targetPath);
   try {

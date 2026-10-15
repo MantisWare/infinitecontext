@@ -1,26 +1,112 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { StorageError } from "./errors.mjs";
 
-/** Substrings that indicate a desktop-sync folder (use storage.backend=folder). */
-const SYNCED_ROOT_MARKERS = [
-  `${path.sep}Mobile Documents${path.sep}com~apple~CloudDocs`,
-  `${path.sep}CloudDocs${path.sep}`,
-  `${path.sep}Dropbox${path.sep}`,
-  `${path.sep}Google Drive${path.sep}`,
-  `${path.sep}OneDrive${path.sep}`,
-  `${path.sep}Nextcloud${path.sep}`,
-  `${path.sep}ownCloud${path.sep}`,
-];
+/**
+ * @param {string} rootDir
+ * @returns {string}
+ */
+export function resolveSyncedRootRealpath(rootDir) {
+  const resolved = path.resolve(String(rootDir ?? ""));
+  try {
+    return fs.realpathSync.native?.(resolved) ?? fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 /**
- * @param {string} rootDir absolute resolved path
+ * @param {string} normalized absolute path
+ * @param {string} homeReal realpath of $HOME
+ */
+function isUnderHomeSyncAnchor(normalized, homeReal) {
+  const lower = normalized.toLowerCase();
+  const homeLower = homeReal.toLowerCase();
+  if (!lower.startsWith(homeLower + path.sep) && lower !== homeLower) {
+    return false;
+  }
+  const rel = path.relative(homeReal, normalized);
+  const parts = rel.split(path.sep).filter(Boolean);
+  if (!parts.length) return false;
+  const first = parts[0].toLowerCase();
+  if (first === "library") {
+    const second = (parts[1] ?? "").toLowerCase();
+    if (second === "mobile documents") return true;
+    if (second === "cloudstorage") return true;
+  }
+  if (first.startsWith("dropbox")) return true;
+  if (first === "dropbox (personal)" || first.startsWith("dropbox (")) return true;
+  if (first.startsWith("onedrive")) return true;
+  if (first.startsWith("google drive")) return true;
+  return false;
+}
+
+/**
+ * @param {string} normalized absolute path
+ */
+function isCloudStorageProviderRoot(normalized) {
+  const lower = normalized.toLowerCase();
+  const cloudStorage = `${path.sep}library${path.sep}cloudstorage${path.sep}`;
+  const idx = lower.indexOf(cloudStorage);
+  if (idx < 0) return false;
+  const tail = normalized.slice(idx + cloudStorage.length);
+  const provider = tail.split(path.sep)[0] ?? "";
+  const p = provider.toLowerCase();
+  return (
+    p.startsWith("onedrive-") ||
+    p.startsWith("googledrive-") ||
+    p.startsWith("google drive-") ||
+    p.startsWith("dropbox")
+  );
+}
+
+/**
+ * @param {string} normalized absolute path
+ */
+function hasDropboxRootMarker(normalized) {
+  try {
+    return fs.existsSync(path.join(normalized, ".dropbox"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} normalized absolute path
+ */
+function isGoogleDriveVolume(normalized) {
+  const lower = normalized.toLowerCase();
+  return lower.startsWith(`${path.sep}volumes${path.sep}googledrive`);
+}
+
+/**
+ * @param {string} rootDir absolute resolved realpath
  */
 export function isKnownSyncedFolderRoot(rootDir) {
-  const normalized = path.resolve(rootDir);
-  const lower = normalized.toLowerCase();
-  for (const marker of SYNCED_ROOT_MARKERS) {
-    if (lower.includes(marker.toLowerCase())) return true;
+  const normalized = resolveSyncedRootRealpath(rootDir);
+  let homeReal;
+  try {
+    homeReal = resolveSyncedRootRealpath(os.homedir());
+  } catch {
+    homeReal = path.resolve(os.homedir());
+  }
+
+  if (hasDropboxRootMarker(normalized)) {
+    return true;
+  }
+  if (isGoogleDriveVolume(normalized)) {
+    return true;
+  }
+  if (isCloudStorageProviderRoot(normalized)) {
+    return true;
+  }
+  if (isUnderHomeSyncAnchor(normalized, homeReal)) {
+    return true;
+  }
+  if (normalized === homeReal) {
+    return false;
   }
   return false;
 }
@@ -31,7 +117,7 @@ export function isKnownSyncedFolderRoot(rootDir) {
 export function assertLocalObjectStoreRootNotSynced(rootDir) {
   if (isKnownSyncedFolderRoot(rootDir)) {
     throw new StorageError(
-      "This path looks like a desktop-sync folder (iCloud/Dropbox/Google Drive/OneDrive/Nextcloud). " +
+      "This path looks like a desktop-sync folder (iCloud/Dropbox/Google Drive/OneDrive/CloudStorage). " +
         "Use storage.backend=folder with storage.folder.path instead of backend=local.",
       "invalid_argument",
     );

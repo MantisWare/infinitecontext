@@ -24,3 +24,8 @@ export function usesSharedStorageManifest(adapter) {
 export function usesFolderMergedDeviceManifest(adapter) {
   return !usesSharedStorageManifest(adapter);
 }
+
+/** Folder / eventual-sync backends never read or write snap/ objects. */
+export function storageAdapterIgnoresSnapshotObjects(adapter) {
+  return !storageAdapterHasCrossDeviceCas(adapter);
+}

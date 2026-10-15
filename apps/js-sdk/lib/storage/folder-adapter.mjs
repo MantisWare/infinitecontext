@@ -8,9 +8,10 @@ import { keyMatchesListPrefix, normalizeListPrefix } from "./filesystem-keys.mjs
 import { canonicalizeConflictStorageKey } from "./folder-conflict-copies.mjs";
 import {
   ensureMaterializedLocalFile,
-  icloudPlaceholderSiblingPath,
+  findEvictedPlaceholderFileInKeyDir,
   isEvictedICloudPlaceholderPath,
 } from "./folder-icloud-placeholder.mjs";
+import { storageAdapterIgnoresSnapshotObjects } from "./storage-adapter-policy.mjs";
 import {
   physicalKeyDirsForCanonicalKey,
   scanCanonicalKeysFromObjectsTree,
@@ -63,9 +64,22 @@ async function materializePhysicalKeyDir(rootDir, row, placeholderTimeoutMs) {
       throw error;
     }
   }
+  const evicted = findEvictedPlaceholderFileInKeyDir(row.keyDir);
+  if (evicted) {
+    throw new StorageError(
+      `Evicted iCloud placeholder for storage object file ${evicted}`,
+      "evicted_placeholder",
+    );
+  }
   if (!fs.existsSync(row.keyDir)) return;
   for (const name of fs.readdirSync(row.keyDir)) {
     const full = path.join(row.keyDir, name);
+    if (name.startsWith(".") && name.endsWith(".icloud")) {
+      throw new StorageError(
+        `Evicted iCloud placeholder for storage object file ${full}`,
+        "evicted_placeholder",
+      );
+    }
     try {
       await ensureMaterializedLocalFile(full, {
         timeoutMs: placeholderTimeoutMs,
@@ -111,6 +125,9 @@ export function createFolderStorageAdapter(options) {
    */
   async function listConflictGetCandidates(key, opts = {}) {
     const canonical = canonicalizeConflictStorageKey(key);
+    if (storageAdapterIgnoresSnapshotObjects(adapter) && canonical.includes("/snap/")) {
+      return [];
+    }
     const dirs = physicalKeyDirsForCanonicalKey(rootDir, canonical);
     /** @type {import("./types.mjs").StorageGetResult[]} */
     const found = [];
@@ -212,6 +229,7 @@ export function createFolderStorageAdapter(options) {
       const limit = options.limit ?? 1000;
       let keys = [...scanCanonicalKeysFromObjectsTree(objectsRoot, listPrefix.core)]
         .filter((key) => keyMatchesListPrefix(key, listPrefix))
+        .filter((key) => !(storageAdapterIgnoresSnapshotObjects(adapter) && key.includes("/snap/")))
         .sort();
       if (options.cursor) {
         const cursor = String(options.cursor);
@@ -224,14 +242,8 @@ export function createFolderStorageAdapter(options) {
       for (const key of pageKeys) {
         const canonical = canonicalizeConflictStorageKey(key);
         for (const row of physicalKeyDirsForCanonicalKey(rootDir, canonical)) {
-          if (isEvictedICloudPlaceholderPath(row.keyDir)) {
-            throw new StorageError(
-              `Evicted iCloud placeholder for storage object ${canonical}`,
-              "evicted_placeholder",
-            );
-          }
-          const placeholder = icloudPlaceholderSiblingPath(row.keyDir);
-          if (fs.existsSync(placeholder)) {
+          const evicted = findEvictedPlaceholderFileInKeyDir(row.keyDir);
+          if (evicted) {
             throw new StorageError(
               `Evicted iCloud placeholder for storage object ${canonical}`,
               "evicted_placeholder",

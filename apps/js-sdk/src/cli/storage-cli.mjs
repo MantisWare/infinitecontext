@@ -35,12 +35,63 @@ export async function runStorageCli(subcommand, args) {
     console.log(`Usage: infinitecontext storage <command>
 
 Commands:
+  doctor --repair [--dry-run]         Quarantine forked snap/ + conflict copies after log verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 
 Environment:
   Same as sync (local object store requires vault unlock)
 `);
     return;
+  }
+
+  if (cmd === "doctor") {
+    const action = String(args[0] ?? "help").toLowerCase();
+    if (action === "--repair" || action === "repair") {
+      const dryRun = args.includes("--dry-run");
+      return run(async () => {
+        const config = readConfigFile();
+        if (isHostedStorageBackend(config)) {
+          throw new Error("storage doctor --repair requires local object store sync");
+        }
+        await configureObjectStoreSyncTransportIfNeeded({ mode: "cli", baseUrl });
+        const unlocked = await getUnlockedDek({ baseUrl });
+        if (!unlocked?.dek) throw new Error("Vault unlock required");
+        const storage = config.storage;
+        const backend =
+          storage && typeof storage === "object" && !Array.isArray(storage)
+            ? String(/** @type {Record<string, unknown>} */ (storage).backend ?? "")
+            : "";
+        if (backend !== "folder") {
+          throw new Error("storage doctor --repair requires storage.backend=folder");
+        }
+        const { createFolderObjectStore } = await import("../../lib/storage/folder-object-store.mjs");
+        const deviceUuid =
+          storage && typeof storage === "object" && !Array.isArray(storage)
+            ? String(/** @type {Record<string, unknown>} */ (storage).deviceUuid ?? "")
+            : "";
+        const store = await createFolderObjectStore({
+          dek: unlocked.dek,
+          deviceUuid: deviceUuid || undefined,
+          config,
+          sync: { mode: "cli", persist: true },
+          layoutPrefix: "accounts/local",
+        });
+        const { repairFolderObjectStoreVault } = await import("../../lib/storage/folder-storage-repair.mjs");
+        const { deriveDevH } = await import("../../lib/storage/layout.mjs");
+        const ctx = {
+          adapter: store.adapter,
+          dek: unlocked.dek,
+          layoutPrefix: "accounts/local",
+          selfDevH: deriveDevH(unlocked.dek, deviceUuid),
+          deviceUuid,
+          localState: store.localState,
+        };
+        const result = await repairFolderObjectStoreVault(ctx, { dryRun });
+        console.log(JSON.stringify(result, null, 2));
+        await store.close();
+      });
+    }
+    throw new Error("Usage: infinitecontext storage doctor --repair [--dry-run]");
   }
 
   if (cmd === "devices") {

@@ -1,6 +1,6 @@
 # Local default object store (Phase 4.5 PR 5)
 
-Phase 4.5 PR 5 wires the **filesystem `StorageAdapter`** (PR 4) to the **sealed sync transport** (PR 1) as the default **on-disk ciphertext object store** for dev, tests, and synced-folder backends (iCloud/Dropbox/Google Drive desktop paths).
+Phase 4.5 PR 5 wires the **filesystem `StorageAdapter`** (PR 4) to the **sealed sync transport** (PR 1) as the default **on-disk ciphertext object store** for dev and tests on a **non-synced** path (`~/.infinitecontext/object-store/` or an explicit root). Desktop-synced directories (iCloud, Dropbox, OneDrive, Google Drive under `~/Library/CloudStorage`, etc.) must use **`storage.backend=folder`**, not `local`.
 
 For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `folder` and `storage.folder.path` to the synced folder (see `createFolderObjectStore` / `createFolderStorageAdapter`). Do **not** point `backend=local` at synced paths — local refuses known iCloud/Dropbox/Google Drive/OneDrive/Nextcloud roots and directs you to `folder`. The folder backend wraps the same filesystem object store with **honest capabilities** (local create-only, no **`crossDeviceCas`**), **file-level conflict-copy ingestion** (including duplicate `.icgen` and high-water files), and **iCloud placeholder** handling (`evicted_placeholder`).
 

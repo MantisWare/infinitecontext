@@ -87,6 +87,10 @@ export function wrapStorageSnapshotPlain(snap) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function listSnapshotEpochs(ctx) {
+  const { storageAdapterIgnoresSnapshotObjects } = await import("./storage-adapter-policy.mjs");
+  if (storageAdapterIgnoresSnapshotObjects(ctx.adapter)) {
+    return [];
+  }
   const prefix = `${layoutRootPath(ctx.layoutPrefix)}/snap/`;
   /** @type {number[]} */
   const epochs = [];
@@ -336,9 +340,15 @@ async function assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, s
 }
 
 export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
+  const { storageAdapterIgnoresSnapshotObjects } = await import("./storage-adapter-policy.mjs");
+  if (storageAdapterIgnoresSnapshotObjects(ctx.adapter)) {
+    return null;
+  }
   const epochs = await listSnapshotEpochs(ctx);
   if (!epochs.length) return null;
   const sorted = [...epochs].sort((a, b) => b - a);
+  /** @type {string | null} */
+  let lastError = null;
   for (const epoch of sorted) {
     const snap = await loadStorageSnapshot(ctx, epoch);
     if (!snap) continue;
@@ -347,9 +357,12 @@ export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
       assertSnapshotCoversManifestKnowledge(manifest, snap, { localTrustedHeads: state.trustedHeads });
       await assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, snap);
       return { epoch, snap };
-    } catch {
-      /* ignore forked / conflict snapshot copies; replay full log when intact */
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
     }
+  }
+  if (lastError) {
+    throw new Error(`No verified snapshot satisfies manifest compaction floor (${lastError})`);
   }
   return null;
 }

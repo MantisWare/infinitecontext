@@ -21,6 +21,10 @@ export function computeSnapshotObjectDigest(body) {
  * @param {number} epoch
  */
 export async function loadSnapshotBodyDigest(ctx, epoch) {
+  const { storageAdapterIgnoresSnapshotObjects } = await import("./storage-adapter-policy.mjs");
+  if (storageAdapterIgnoresSnapshotObjects(ctx.adapter)) {
+    return null;
+  }
   const { snapEncRelativePath } = await import("./layout.mjs");
   const key = snapEncRelativePath(ctx.layoutPrefix, epoch);
   const row = await ctx.adapter.get(key);

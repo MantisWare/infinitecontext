@@ -2,7 +2,8 @@ import { deviceEncRelativePath } from "./layout.mjs";
 import { readLayoutObjectPlaintext, sealLayoutObjectPlaintext } from "./storage-cas-rmw.mjs";
 import { StorageError } from "./errors.mjs";
 import {
-  parseDeviceManifestContribution,
+  mergeMaxDeviceContributions,
+  parseDeviceSidecarPlain,
   wrapDeviceManifestContribution,
 } from "./storage-manifest-folder.mjs";
 import { physicalKeyDirsForCanonicalKey } from "./folder-on-disk-scan.mjs";
@@ -10,7 +11,7 @@ import { loadLatestObjectGenerationAtDir } from "./filesystem-generations.mjs";
 
 /**
  * When sync conflict copies disagree on the owning device's manifest file, rewrite from
- * verified local state when it dominates both copies.
+ * verified local state when it dominates both copies (max-merge fields first).
  *
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
@@ -34,11 +35,17 @@ export async function repairOwnDeviceManifestFileIfAuthoritative(ctx) {
   /** @type {import('./storage-manifest-folder.mjs').DeviceManifestContribution[]} */
   const parsedRows = [];
   for (const row of physicalKeyDirsForCanonicalKey(rootDir, key)) {
-    const latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+    let latest;
+    try {
+      latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "corrupt_storage") continue;
+      throw error;
+    }
     if (!latest?.body) continue;
     try {
       const plain = readLayoutObjectPlaintext(ctx.dek, key, latest.body);
-      const parsed = parseDeviceManifestContribution(plain);
+      const parsed = parseDeviceSidecarPlain(plain, ctx.dek);
       if (parsed) parsedRows.push(parsed);
     } catch {
       throw new StorageError(
@@ -51,37 +58,45 @@ export async function repairOwnDeviceManifestFileIfAuthoritative(ctx) {
     return;
   }
 
-  /** @type {import('./storage-manifest-folder.mjs').DeviceManifestContribution | null} */
-  let repairFrom = null;
+  let merged;
+  try {
+    merged = mergeMaxDeviceContributions(parsedRows);
+  } catch (error) {
+    if (!(error instanceof StorageError && error.code === "storage_fork")) {
+      throw error;
+    }
+    merged = null;
+  }
+
   for (const row of parsedRows) {
     const head = row.trusted_head;
-    if (!head || head.seq < 0) continue;
-    if (head.seq > localHead.seq) {
-      throw new StorageError(
-        `Device manifest fork for ${ownerDevH}; local trusted head lags conflict copies. Run \`infinitecontext storage doctor --repair\`.`,
-        "storage_fork",
-      );
-    }
-    if (head.seq === localHead.seq && head.digest !== localHead.digest) {
-      throw new StorageError(
-        `Device manifest fork for ${ownerDevH} at seq ${head.seq}. Run \`infinitecontext storage doctor --repair\`.`,
-        "storage_fork",
-      );
-    }
-    if (!repairFrom || row.record_generation > repairFrom.record_generation) {
-      repairFrom = row;
+    if (head && head.seq >= 0) {
+      if (head.seq > localHead.seq) {
+        throw new StorageError(
+          `Device manifest fork for ${ownerDevH}; local trusted head lags conflict copies. Run \`infinitecontext storage doctor --repair\`.`,
+          "storage_fork",
+        );
+      }
+      if (head.seq === localHead.seq && head.digest !== localHead.digest) {
+        throw new StorageError(
+          `Device manifest fork for ${ownerDevH} at seq ${head.seq}. Run \`infinitecontext storage doctor --repair\`.`,
+          "storage_fork",
+        );
+      }
     }
   }
-  if (!repairFrom) {
-    return;
-  }
-  if (repairFrom.trusted_head?.seq !== localHead.seq || repairFrom.trusted_head?.digest !== localHead.digest) {
-    repairFrom = {
-      ...repairFrom,
-      trusted_head: { seq: localHead.seq, digest: localHead.digest },
-      record_generation: repairFrom.record_generation + 1,
-    };
-  }
+
+  const base = merged ?? parsedRows[0];
+  const repairFrom = {
+    ...base,
+    trusted_head: { seq: localHead.seq, digest: localHead.digest },
+    last_seq: Math.max(base.last_seq ?? -1, localHead.seq),
+    acknowledged_seq: Math.max(base.acknowledged_seq ?? -1, localHead.seq),
+    record_generation: (base.record_generation ?? 0) + 1,
+    latest_snapshot_epoch: -1,
+    compacted_through: base.compacted_through,
+    snapshot_digest: undefined,
+  };
   const body = sealLayoutObjectPlaintext(ctx.dek, key, wrapDeviceManifestContribution(repairFrom));
   await inner.put(key, body);
 }

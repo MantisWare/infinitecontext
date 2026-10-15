@@ -1,4 +1,5 @@
-import { deviceEncRelativePath, devHForObjectKey } from "./layout.mjs";
+import { deriveDevH, deviceEncRelativePath, devHForObjectKey, layoutRootPath } from "./layout.mjs";
+import { parseDeviceSyncAckPlain } from "./storage-device-sync-ack.mjs";
 import { maxVectorSyncCursor, normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import {
   createEmptyStorageManifest,
@@ -8,7 +9,6 @@ import {
   wrapStorageManifestPlain,
 } from "./storage-manifest.mjs";
 import { readLayoutObjectPlaintext, sealLayoutObjectPlaintext } from "./storage-cas-rmw.mjs";
-import { layoutRootPath } from "./layout.mjs";
 import { StorageError } from "./errors.mjs";
 
 export const DEVICE_MANIFEST_CONTRIBUTION_FIELD = "ic_layout_device_manifest_v2";
@@ -32,6 +32,35 @@ export const DEVICE_MANIFEST_CONTRIBUTION_FIELD = "ic_layout_device_manifest_v2"
 /** @param {DeviceManifestContribution} row */
 export function wrapDeviceManifestContribution(row) {
   return { [DEVICE_MANIFEST_CONTRIBUTION_FIELD]: row };
+}
+
+/** @param {import('./storage-device-sync-ack.mjs').DeviceSyncAckRecord} ack @param {string} devH */
+export function contributionFromLegacyDeviceSyncAck(ack, devH) {
+  const seq = Number.isFinite(ack.acknowledged_seq) && ack.acknowledged_seq >= 0 ? ack.acknowledged_seq : -1;
+  return {
+    devH: devH.toUpperCase(),
+    record_generation: 0,
+    sync_participant: true,
+    last_seq: seq,
+    acknowledged_seq: seq,
+    acknowledged_cursor: ack.acknowledged_cursor,
+    last_seen_at: ack.updated_at || new Date().toISOString(),
+    latest_snapshot_epoch: -1,
+    compacted_through: normalizeVectorSyncCursor(0),
+    removed_devices: [],
+  };
+}
+
+/** @param {unknown} raw @param {Uint8Array} dek */
+export function parseDeviceSidecarPlain(raw, dek) {
+  const v2 = parseDeviceManifestContribution(raw);
+  if (v2) return v2;
+  if (!raw || typeof raw !== "object") return null;
+  const obj = /** @type {Record<string, unknown>} */ (raw);
+  const ack = parseDeviceSyncAckPlain(raw);
+  if (!ack) return null;
+  const devH = deriveDevH(dek, ack.dev);
+  return contributionFromLegacyDeviceSyncAck(ack, devH);
 }
 
 /** @param {unknown} raw */
@@ -192,7 +221,7 @@ export async function loadAllDeviceManifestContributions(adapter, dek, layoutPre
       for (const body of bodies) {
         try {
           const plain = readLayoutObjectPlaintext(dek, row.key, body);
-          const parsed = parseDeviceManifestContribution(plain);
+          const parsed = parseDeviceSidecarPlain(plain, dek);
           if (parsed) parsedRows.push(parsed);
         } catch (error) {
           throw error instanceof StorageError
@@ -251,7 +280,33 @@ async function loadDeviceContributionBodies(adapter, dek, objectKey) {
  * @param {Uint8Array} dek
  * @param {string} layoutPrefix
  */
+export async function migrateLegacyFolderDeviceSidecars(adapter, dek, layoutPrefix) {
+  const prefix = `${layoutRootPath(layoutPrefix)}/devices/`;
+  let cursor;
+  for (;;) {
+    const page = await adapter.list(prefix, { limit: 200, cursor });
+    for (const row of page.objects) {
+      const got = await adapter.get(row.key);
+      if (!got?.body) continue;
+      let plain;
+      try {
+        plain = readLayoutObjectPlaintext(dek, row.key, got.body);
+      } catch {
+        continue;
+      }
+      if (parseDeviceManifestContribution(plain)) continue;
+      const migrated = parseDeviceSidecarPlain(plain, dek);
+      if (!migrated) continue;
+      const body = sealLayoutObjectPlaintext(dek, row.key, wrapDeviceManifestContribution(migrated));
+      await adapter.put(row.key, body);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+}
+
 export async function loadFolderMergedManifest(adapter, dek, layoutPrefix) {
+  await migrateLegacyFolderDeviceSidecars(adapter, dek, layoutPrefix);
   const contributions = await loadAllDeviceManifestContributions(adapter, dek, layoutPrefix);
   if (!contributions.length) return createEmptyStorageManifest();
   const manifest = mergeDeviceManifestContributions(contributions);

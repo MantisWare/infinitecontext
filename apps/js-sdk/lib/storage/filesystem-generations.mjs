@@ -19,6 +19,7 @@ import {
   listNonStaleConflictAwareGenerationPaths,
   readConflictAwareGenerationHighWater,
 } from "./folder-conflict-files.mjs";
+import { scanCanonicalKeysFromObjectsTree } from "./folder-on-disk-scan.mjs";
 
 const GEN_PAD = 12;
 const MAX_GENERATION = 999_999_999_999;
@@ -496,7 +497,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
     try {
       latest = loadLatestObjectGeneration(rootDir, key);
     } catch (error) {
-      if (error instanceof StorageError && error.code === "corrupt_storage") {
+      if (
+        error instanceof StorageError &&
+        (error.code === "corrupt_storage" || error.code === "storage_fork" || error.code === "invalid_argument")
+      ) {
         continue;
       }
       throw error;
@@ -527,7 +531,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
     try {
       recheck = loadLatestObjectGeneration(rootDir, key);
     } catch (error) {
-      if (error instanceof StorageError && error.code === "corrupt_storage") {
+      if (
+        error instanceof StorageError &&
+        (error.code === "corrupt_storage" || error.code === "storage_fork" || error.code === "invalid_argument")
+      ) {
         continue;
       }
       throw error;
@@ -566,36 +573,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
 /** @param {string} rootDir */
 export function listAllObjectKeys(rootDir) {
   const objectsRoot = path.join(path.resolve(rootDir), OBJECTS_SUBDIR);
-  /** @type {string[]} */
-  const keys = [];
   if (!fs.existsSync(objectsRoot)) {
-    return keys;
+    return [];
   }
-  /** @param {string} dir @param {string[]} segments */
-  const walk = (dir, segments) => {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    const hasGen = entries.some(
-      (entry) => entry.isFile() && parseGenerationFromObjectFileName(entry.name) !== null,
-    );
-    if (hasGen && segments.length > 0) {
-      keys.push(segments.join("/"));
-    }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        walk(path.join(dir, entry.name), [...segments, entry.name]);
-      }
-    }
-  };
-  walk(objectsRoot, []);
-  return keys;
+  return [...scanCanonicalKeysFromObjectsTree(objectsRoot)];
 }
 
 /**

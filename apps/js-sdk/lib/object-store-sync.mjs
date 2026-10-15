@@ -44,7 +44,7 @@ import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
 } from "./storage/encrypt-storage-object.mjs";
-import { PreconditionFailedError } from "./storage/errors.mjs";
+import { PreconditionFailedError, StorageError } from "./storage/errors.mjs";
 import {
   canonicalDevH,
   decryptLogSegment,
@@ -181,7 +181,22 @@ async function readLayoutSegmentEnvelope(ctx, key) {
       /* try next conflict copy */
     }
   }
-  if (!envelopes.length) return null;
+  if (!envelopes.length) {
+    if (rows.length > 0) {
+      throw new StorageError(`Undecryptable or foreign-key conflict copy for ${key}`, "corrupt_storage");
+    }
+    if (typeof conflictAware === "function") {
+      const dirs = /** @type {{ rootDir?: string }} */ (ctx.adapter).rootDir;
+      if (dirs) {
+        const { physicalKeyDirsForCanonicalKey } = await import("./storage/folder-on-disk-scan.mjs");
+        const physical = physicalKeyDirsForCanonicalKey(dirs, key);
+        if (physical.length > 1) {
+          throw new StorageError(`Conflicting sync copies for log segment ${key}`, "corrupt_storage");
+        }
+      }
+    }
+    return null;
+  }
   const { layoutSegmentEnvelopeDigest } = await import("./storage/layout.mjs");
   const digest = layoutSegmentEnvelopeDigest(envelopes[0]);
   for (let i = 1; i < envelopes.length; i += 1) {
@@ -1052,6 +1067,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
       },
       ctx.localState.load(),
     );
+    await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, ctx.localState.load());
   }
 
   return {
