@@ -2,6 +2,7 @@ import { manifestEncRelativePath } from "./layout.mjs";
 import { maxVectorSyncCursor, normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { storageReadModifyWrite, readLayoutObjectPlaintext } from "./storage-cas-rmw.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
+import { usesFolderMergedDeviceManifest } from "./storage-adapter-policy.mjs";
 
 export const MANIFEST_FORMAT = 1;
 const MANIFEST_PLAIN_FIELD = "ic_layout_manifest_v1";
@@ -97,13 +98,18 @@ export function wrapStorageManifestPlain(manifest) {
  * @param {string} layoutPrefix
  */
 export async function loadStorageManifest(adapter, dek, layoutPrefix) {
+  if (usesFolderMergedDeviceManifest(adapter)) {
+    const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    return loadFolderMergedManifest(adapter, dek, layoutPrefix);
+  }
   const key = manifestEncRelativePath(layoutPrefix);
   const row = await adapter.get(key);
   if (!row?.body) return createEmptyStorageManifest();
   const plain = readLayoutObjectPlaintext(dek, key, row.body);
   const manifest = parseStorageManifestPlain(plain);
   sanitizeManifestDeviceAcks(manifest);
-  return manifest;
+  const { applyVerifiedCompactionFloorToManifest } = await import("./compaction-floor-tuple.mjs");
+  return applyVerifiedCompactionFloorToManifest(adapter, dek, layoutPrefix, manifest);
 }
 
 /** @param {StorageManifest} manifest */
@@ -148,13 +154,23 @@ export function mergeTrustedHeadsMonotonic(prev, next) {
  */
 export async function loadStorageManifestForSync(adapter, dek, layoutPrefix, state) {
   const manifest = await loadStorageManifest(adapter, dek, layoutPrefix);
-  const highWater = state.manifestGenerationHighWater ?? 0;
+  const { manifestGenerationHighWaterForBinding, recordManifestGenerationHighWaterForBinding } =
+    await import("../object-store-sync-binding.mjs");
+  const bindingKey = state.storageBindingKey;
+  const highWater = bindingKey
+    ? manifestGenerationHighWaterForBinding(state, bindingKey)
+    : state.manifestGenerationHighWater ?? 0;
   if (manifest.manifest_generation < highWater) {
     throw new PreconditionFailedError(
       `Manifest generation ${manifest.manifest_generation} is below local high-water ${highWater}`,
     );
   }
-  state.manifestGenerationHighWater = Math.max(highWater, manifest.manifest_generation);
+  const next = Math.max(highWater, manifest.manifest_generation);
+  if (bindingKey) {
+    recordManifestGenerationHighWaterForBinding(state, bindingKey, next);
+  } else {
+    state.manifestGenerationHighWater = next;
+  }
   const { refreshVerifiedSnapshotGenerationBinding } = await import("../object-store-snapshot-floor.mjs");
   refreshVerifiedSnapshotGenerationBinding(state, manifest);
   return manifest;
@@ -192,6 +208,10 @@ export function assertManifestMonotonic(prev, next) {
 }
 
 export async function updateStorageManifest(ctx, mutate) {
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { updateFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    return updateFolderMergedManifest(ctx, mutate);
+  }
   const key = manifestEncRelativePath(ctx.layoutPrefix);
   return storageReadModifyWrite({
     adapter: ctx.adapter,

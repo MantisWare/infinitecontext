@@ -44,7 +44,7 @@ import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
 } from "./storage/encrypt-storage-object.mjs";
-import { PreconditionFailedError } from "./storage/errors.mjs";
+import { PreconditionFailedError, StorageError } from "./storage/errors.mjs";
 import {
   canonicalDevH,
   decryptLogSegment,
@@ -97,6 +97,32 @@ async function persistLocalState(ctx, state, options = {}) {
  * @param {ObjectStoreSyncContext} ctx
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+async function assertFolderManifestTrustedHeadsVerifiable(ctx, manifest) {
+  for (const [devH, head] of Object.entries(manifest.trusted_heads ?? {})) {
+    if (!head || head.seq < 0) continue;
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      devH,
+      undefined,
+      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+      head.seq,
+    );
+    const env = await readEnvelopeAtSeq(ctx, devH, head.seq);
+    if (!env) {
+      throw new ObjectStoreLogRollbackError(
+        `Remote log for ${devH} missing owner-written head at seq ${head.seq}`,
+      );
+    }
+    if (layoutSegmentEnvelopeDigest(env) !== head.digest) {
+      throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${head.seq}`);
+    }
+  }
+}
+
 async function verifyFullTrustedChains(ctx, state, manifest) {
   await maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest);
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
@@ -158,10 +184,53 @@ function parseLogSegmentKey(key) {
  * @param {string} key
  */
 async function readLayoutSegmentEnvelope(ctx, key) {
-  const row = await ctx.adapter.get(key);
-  if (!row?.body) return null;
-  const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
-  return plain[LAYOUT_SEGMENT_PLAIN_FIELD] ?? null;
+  /** @type {import('./storage/types.mjs').StorageGetResult[]} */
+  let rows = [];
+  const conflictAware = /** @type {{ listConflictGetCandidates?: (k: string) => Promise<import('./storage/types.mjs').StorageGetResult[]> }} */ (
+    ctx.adapter
+  ).listConflictGetCandidates;
+  if (typeof conflictAware === "function") {
+    rows = await conflictAware.call(ctx.adapter, key);
+  } else {
+    const row = await ctx.adapter.get(key);
+    if (row) rows = [row];
+  }
+  /** @type {import('./ic-crypto.mjs').AeadEnvelope[]} */
+  const envelopes = [];
+  for (const row of rows) {
+    if (!row?.body) continue;
+    try {
+      const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
+      const envelope = plain[LAYOUT_SEGMENT_PLAIN_FIELD] ?? null;
+      if (envelope) envelopes.push(envelope);
+    } catch {
+      /* try next conflict copy */
+    }
+  }
+  if (!envelopes.length) {
+    if (rows.length > 0) {
+      throw new StorageError(`Undecryptable or foreign-key conflict copy for ${key}`, "corrupt_storage");
+    }
+    if (typeof conflictAware === "function") {
+      const dirs = /** @type {{ rootDir?: string }} */ (ctx.adapter).rootDir;
+      if (dirs) {
+        const { physicalKeyDirsForCanonicalKey } = await import("./storage/folder-on-disk-scan.mjs");
+        const physical = physicalKeyDirsForCanonicalKey(dirs, key);
+        if (physical.length > 1) {
+          throw new StorageError(`Conflicting sync copies for log segment ${key}`, "corrupt_storage");
+        }
+      }
+    }
+    return null;
+  }
+  const { layoutSegmentEnvelopeDigest } = await import("./storage/layout.mjs");
+  const digest = layoutSegmentEnvelopeDigest(envelopes[0]);
+  for (let i = 1; i < envelopes.length; i += 1) {
+    if (layoutSegmentEnvelopeDigest(envelopes[i]) !== digest) {
+      throw new ObjectStoreLogForkError(`Conflicting sync copies for log segment ${key}`);
+    }
+  }
+  return envelopes[0];
 }
 
 /**
@@ -627,7 +696,22 @@ function resolvePullVectorCursor(state, since) {
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
   let state = ctx.localState.load();
+  const { usesFolderMergedDeviceManifest } = await import("./storage/storage-adapter-policy.mjs");
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { repairOwnDeviceManifestFileIfAuthoritative } = await import(
+      "./storage/storage-manifest-folder-repair.mjs"
+    );
+    await repairOwnDeviceManifestFileIfAuthoritative(ctx);
+  }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { assertFolderObjectFileCopiesClean, assertFolderCopyFolderDirsClean } = await import(
+      "./storage/folder-object-conflict-preflight.mjs"
+    );
+    await assertFolderObjectFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderCopyFolderDirsClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderManifestTrustedHeadsVerifiable(ctx, manifest);
+  }
   assertDeviceNotRemoved(ctx, manifest);
   state = ctx.localState.load();
   const pendingDelivery = Boolean(state.pendingBootstrapReplica && state.bootstrapReplicaPendingAck);
@@ -784,6 +868,14 @@ function resolveSelfNextSeq(state, selfDevH) {
 export async function objectStorePushSyncMutations(ctx, mutations) {
   const batch = Array.isArray(mutations) ? mutations : [];
   let state = ctx.localState.load();
+  const { usesFolderMergedDeviceManifest } = await import("./storage/storage-adapter-policy.mjs");
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { assertFolderObjectFileCopiesClean, assertFolderCopyFolderDirsClean } = await import(
+      "./storage/folder-object-conflict-preflight.mjs"
+    );
+    await assertFolderObjectFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderCopyFolderDirsClean(ctx.adapter, ctx.layoutPrefix);
+  }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   assertDeviceNotRemoved(ctx, manifest);
   await registerManifestSyncParticipant(
@@ -1017,6 +1109,7 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
       },
       ctx.localState.load(),
     );
+    await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, ctx.localState.load());
   }
 
   return {

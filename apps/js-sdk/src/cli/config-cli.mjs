@@ -107,6 +107,18 @@ function cmdPath() {
   console.log(defaultConfigPath());
 }
 
+async function checkStorageBackendPolicy() {
+  const { readConfigFile } = await import("../../lib/client-config.mjs");
+  const { resolveStorageBackendId } = await import("../../lib/sync-storage-backend.mjs");
+  const backend = resolveStorageBackendId(readConfigFile());
+  console.log(`○ storage.backend=${backend || "hosted"}`);
+  if (backend === "folder") {
+    console.log(
+      "○ folder sync: per-device manifest merge (no shared manifest LWW); log segment GC disabled",
+    );
+  }
+}
+
 async function checkLocalSyncReplicaFiles() {
   const home = infinitecontextHome();
   const { hydrateSyncReplica, wrapReplicaJsonParseError } = await import("../../lib/sync-replica-state.mjs");
@@ -164,6 +176,7 @@ async function cmdDoctor() {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
+    await checkStorageBackendPolicy();
     await checkLocalSyncReplicaFiles();
     return;
   }
@@ -175,6 +188,7 @@ async function cmdDoctor() {
   } catch (error) {
     console.error(`✗ Cannot reach server: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
+    await checkStorageBackendPolicy();
     await checkLocalSyncReplicaFiles();
     return;
   }
@@ -215,6 +229,7 @@ async function cmdDoctor() {
     process.exitCode = 1;
   }
 
+  await checkStorageBackendPolicy();
   await checkLocalSyncReplicaFiles();
 }
 

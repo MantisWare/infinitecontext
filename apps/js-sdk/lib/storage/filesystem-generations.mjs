@@ -15,6 +15,11 @@ import {
   writeExclusiveTempFile,
 } from "./filesystem-object-file.mjs";
 import { mapFsError, rejectSymlinkPath } from "./filesystem-paths.mjs";
+import {
+  listNonStaleConflictAwareGenerationPaths,
+  readConflictAwareGenerationHighWater,
+} from "./folder-conflict-files.mjs";
+import { scanCanonicalKeysFromObjectsTree } from "./folder-on-disk-scan.mjs";
 
 const GEN_PAD = 12;
 const MAX_GENERATION = 999_999_999_999;
@@ -219,10 +224,48 @@ export function listGenerationPathsForKeyDir(keyDir) {
  * @param {boolean} [retriedAfterRelist]
  * @returns {{ gen: number, header: import("./filesystem-object-file.mjs").StoredObjectHeader, body: Uint8Array } | null}
  */
+/**
+ * @param {string} rootDir
+ * @param {string} keyDir absolute object directory (may use conflict-copy segment names on disk)
+ * @param {string} canonicalKeyForAad canonical API key used for ciphertext AAD verification
+ */
+export function loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, retriedAfterRelist = false) {
+  const highWater = readConflictAwareGenerationHighWater(keyDir);
+  const paths = listNonStaleConflictAwareGenerationPaths(
+    keyDir,
+    canonicalKeyForAad,
+    rootDir,
+    highWater,
+  );
+  if (paths.length === 0) {
+    return null;
+  }
+  const highest = paths[0];
+  try {
+    const decoded = readObjectFileNoFollow(highest.path, canonicalKeyForAad, rootDir);
+    if (!decoded) {
+      if (!retriedAfterRelist) {
+        return loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, true);
+      }
+      throw new StorageError(`Storage object generation missing at ${highest.path}`, "not_found");
+    }
+    return { gen: highest.gen, header: decoded.header, body: decoded.body };
+  } catch (error) {
+    if (
+      !retriedAfterRelist &&
+      error instanceof StorageError &&
+      (error.code === "not_found" || error.code === "corrupt_storage")
+    ) {
+      return loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, true);
+    }
+    throw error;
+  }
+}
+
 export function loadLatestObjectGeneration(rootDir, key, retriedAfterRelist = false) {
   const { canonical, keyDir } = objectKeyDirectory(rootDir, key);
-  const highWater = readGenerationHighWater(keyDir);
-  const paths = listNonStaleGenerationPaths(keyDir, highWater);
+  const highWater = readConflictAwareGenerationHighWater(keyDir);
+  const paths = listNonStaleConflictAwareGenerationPaths(keyDir, canonical, rootDir, highWater);
   if (paths.length === 0) {
     return null;
   }
@@ -454,7 +497,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
     try {
       latest = loadLatestObjectGeneration(rootDir, key);
     } catch (error) {
-      if (error instanceof StorageError && error.code === "corrupt_storage") {
+      if (
+        error instanceof StorageError &&
+        (error.code === "corrupt_storage" || error.code === "storage_fork" || error.code === "invalid_argument")
+      ) {
         continue;
       }
       throw error;
@@ -485,7 +531,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
     try {
       recheck = loadLatestObjectGeneration(rootDir, key);
     } catch (error) {
-      if (error instanceof StorageError && error.code === "corrupt_storage") {
+      if (
+        error instanceof StorageError &&
+        (error.code === "corrupt_storage" || error.code === "storage_fork" || error.code === "invalid_argument")
+      ) {
         continue;
       }
       throw error;
@@ -524,36 +573,10 @@ export function sweepStaleTombstoneOnlyKeys(rootDir, assertHeld = () => {}) {
 /** @param {string} rootDir */
 export function listAllObjectKeys(rootDir) {
   const objectsRoot = path.join(path.resolve(rootDir), OBJECTS_SUBDIR);
-  /** @type {string[]} */
-  const keys = [];
   if (!fs.existsSync(objectsRoot)) {
-    return keys;
+    return [];
   }
-  /** @param {string} dir @param {string[]} segments */
-  const walk = (dir, segments) => {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    const hasGen = entries.some(
-      (entry) => entry.isFile() && parseGenerationFromObjectFileName(entry.name) !== null,
-    );
-    if (hasGen && segments.length > 0) {
-      keys.push(segments.join("/"));
-    }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        walk(path.join(dir, entry.name), [...segments, entry.name]);
-      }
-    }
-  };
-  walk(objectsRoot, []);
-  return keys;
+  return [...scanCanonicalKeysFromObjectsTree(objectsRoot)];
 }
 
 /**

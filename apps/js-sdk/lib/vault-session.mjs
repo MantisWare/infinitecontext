@@ -16,6 +16,7 @@ import {
   clearVaultKeychainCache,
   defaultVaultTtlMs,
   loadCachedDek,
+  assertVaultUnlockPersisted,
   storeUnlockedDek,
   vaultAccountKey,
 } from "./vault-keychain.mjs";
@@ -24,7 +25,22 @@ import { fetchCryptoState, patchCryptoWraps, uploadCryptoInit } from "./vault-ap
 export const DATA_LOSS_WARNING =
   "If you lose BOTH your vault passphrase and your recovery key, your encrypted context data is permanently unrecoverable. InfiniteContext cannot reset or restore it.";
 
+/** @type {((opts: { baseUrl: string }) => Promise<{ me: { id: string, email?: string }, crypto: Record<string, unknown>, accountKey: string, baseUrl: string }>) | null} */
+let testVaultContextProvider = null;
+
+/** @param {typeof testVaultContextProvider} provider */
+export function setTestVaultContextProvider(provider) {
+  testVaultContextProvider = provider;
+}
+
+export function clearTestVaultContextProvider() {
+  testVaultContextProvider = null;
+}
+
 export async function getVaultContext({ baseUrl }) {
+  if (testVaultContextProvider) {
+    return testVaultContextProvider({ baseUrl });
+  }
   const me = await import("./vault-api.mjs").then((m) => m.fetchMe({ baseUrl }));
   const crypto = await fetchCryptoState({ baseUrl });
   const accountKey = vaultAccountKey({ userPublicId: me.id, email: me.email });
@@ -39,6 +55,7 @@ export async function unlockVaultWithPassphrase({ baseUrl, passphrase, accountKe
   const kek = await deriveVaultKek(passphrase, new Uint8Array(salt));
   const dek = unwrapDek(new Uint8Array(wrapped), kek);
   await storeUnlockedDek(accountKey, dek, { ttlMs: defaultVaultTtlMs() });
+  await assertVaultUnlockPersisted(accountKey);
   return dek;
 }
 
@@ -48,6 +65,7 @@ export async function unlockVaultWithRecoveryKey({ baseUrl, recoveryKey, account
   const kek = recoveryKeyToKek(decodeRecoveryKey(recoveryKey));
   const dek = unwrapDek(new Uint8Array(wrapped), kek);
   await storeUnlockedDek(accountKey, dek, { ttlMs: defaultVaultTtlMs() });
+  await assertVaultUnlockPersisted(accountKey);
   return dek;
 }
 

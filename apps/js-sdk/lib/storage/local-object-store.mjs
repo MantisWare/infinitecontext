@@ -5,6 +5,7 @@ import { infinitecontextHome } from "../client-config.mjs";
 import { createProductionObjectStoreLocalState } from "../object-store-sync-runtime.mjs";
 import { StorageError } from "./errors.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
+import { assertLocalObjectStoreRootNotSynced } from "./sync-root-guard.mjs";
 import { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -61,7 +62,7 @@ function expandHome(filePath) {
 /**
  * @param {string} rootPath
  */
-function resolveConfiguredStoreRoot(rootPath) {
+export function resolveConfiguredStoreRoot(rootPath) {
   const trimmed = String(rootPath ?? "").trim();
   if (!trimmed) {
     throw new StorageError("Local object store root must not be empty", "invalid_argument");
@@ -79,6 +80,7 @@ function resolveConfiguredStoreRoot(rootPath) {
   }
   const resolved = path.resolve(trimmed);
   assertAbsoluteStoreRoot(resolved);
+  assertLocalObjectStoreRootNotSynced(resolved);
   return resolved;
 }
 
@@ -100,7 +102,9 @@ export function resolveLocalObjectStoreRootDir(opts = {}) {
       return resolveConfiguredStoreRoot(rootDir.trim());
     }
   }
-  return defaultLocalObjectStoreRootDir();
+  const root = defaultLocalObjectStoreRootDir();
+  assertLocalObjectStoreRootNotSynced(root);
+  return root;
 }
 
 /**
@@ -140,6 +144,10 @@ export async function createLocalObjectStore(options = {}) {
           env: options.env,
         })
       : null);
+  if (localState) {
+    const { maybeRebindPersistedObjectStoreState } = await import("../object-store-sync-state-rebind.mjs");
+    await maybeRebindPersistedObjectStoreState(localState, options.config ?? {}, options.env);
+  }
   const transport = new ObjectStoreSyncTransport(
     adapter,
     options.dek && options.deviceUuid && localState

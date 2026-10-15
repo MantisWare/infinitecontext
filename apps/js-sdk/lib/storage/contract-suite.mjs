@@ -51,11 +51,28 @@ export function sampleEncryptedObjectBytesVariant(objectKey, tagByte) {
  * @property {() => StorageBackingSnapshot} inspectBacking
  */
 
+/** @type {import("./types.mjs").StorageCapability[]} */
+const DEFAULT_CONTRACT_CAPABILITIES = [
+  STORAGE_CAPABILITIES.get,
+  STORAGE_CAPABILITIES.head,
+  STORAGE_CAPABILITIES.put,
+  STORAGE_CAPABILITIES.list,
+  STORAGE_CAPABILITIES.delete,
+  STORAGE_CAPABILITIES.conditionalCreate,
+  STORAGE_CAPABILITIES.conditionalReplace,
+  STORAGE_CAPABILITIES.strongListAfterWrite,
+];
+
 /**
  * @param {() => StorageAdapterTestHarness | Promise<StorageAdapterTestHarness>} createHarness
  * @param {{ describe: Function, it: Function }} test
+ * @param {{ requiredCapabilities?: import("./types.mjs").StorageCapability[], skipConditionalReplaceTests?: boolean, skipConditionalDeleteIfMatchTests?: boolean }} [suiteOptions]
  */
-export function runStorageAdapterContractSuite(createHarness, { describe, it }) {
+export function runStorageAdapterContractSuite(createHarness, { describe, it }, suiteOptions = {}) {
+  const requiredCapabilities = suiteOptions.requiredCapabilities ?? DEFAULT_CONTRACT_CAPABILITIES;
+  const skipConditionalReplaceTests = suiteOptions.skipConditionalReplaceTests ?? false;
+  const skipConditionalDeleteIfMatchTests = suiteOptions.skipConditionalDeleteIfMatchTests ?? false;
+
   describe("StorageAdapter contract", () => {
     /** @type {StorageAdapter} */
     let adapter;
@@ -100,16 +117,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
     it("exposes required capabilities", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
-      for (const cap of [
-        STORAGE_CAPABILITIES.get,
-        STORAGE_CAPABILITIES.head,
-        STORAGE_CAPABILITIES.put,
-        STORAGE_CAPABILITIES.list,
-        STORAGE_CAPABILITIES.delete,
-        STORAGE_CAPABILITIES.conditionalCreate,
-        STORAGE_CAPABILITIES.conditionalReplace,
-        STORAGE_CAPABILITIES.strongListAfterWrite,
-      ]) {
+      for (const cap of requiredCapabilities) {
         assert.ok(adapter.capabilities.has(cap), `missing capability ${cap}`);
       }
       assert.equal(typeof adapter.init, "function");
@@ -183,7 +191,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       assertBackingIsCiphertextOnly();
     });
 
-    it("enforces ifNoneMatch create-only and ifMatch updates", async () => {
+    (skipConditionalReplaceTests ? it.skip : it)("enforces ifNoneMatch create-only and ifMatch updates", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
       await adapter.init();
@@ -209,7 +217,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       assertBackingIsCiphertextOnly();
     });
 
-    it("rejects stale ifMatch across distinct objects", async () => {
+    (skipConditionalReplaceTests ? it.skip : it)("rejects stale ifMatch across distinct objects", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
       await adapter.init();
@@ -224,7 +232,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       );
     });
 
-    it("two-writer CAS: only one ifMatch succeeds", async () => {
+    (skipConditionalReplaceTests ? it.skip : it)("two-writer CAS: only one ifMatch succeeds", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
       await adapter.init();
@@ -249,7 +257,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       assertBackingIsCiphertextOnly();
     });
 
-    it("delete(ifMatch) fails when object missing", async () => {
+    (skipConditionalDeleteIfMatchTests ? it.skip : it)("delete(ifMatch) fails when object missing", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
       await adapter.init();
@@ -259,7 +267,7 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }) 
       );
     });
 
-    it("delete(ifMatch) fails on etag mismatch", async () => {
+    (skipConditionalReplaceTests ? it.skip : it)("delete(ifMatch) fails on etag mismatch", async () => {
       useHarness(await createHarness());
       requireInspectBacking();
       await adapter.init();

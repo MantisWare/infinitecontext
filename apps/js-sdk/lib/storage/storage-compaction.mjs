@@ -87,6 +87,10 @@ export function wrapStorageSnapshotPlain(snap) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function listSnapshotEpochs(ctx) {
+  const { storageAdapterIgnoresSnapshotObjects } = await import("./storage-adapter-policy.mjs");
+  if (storageAdapterIgnoresSnapshotObjects(ctx.adapter)) {
+    return [];
+  }
   const prefix = `${layoutRootPath(ctx.layoutPrefix)}/snap/`;
   /** @type {number[]} */
   const epochs = [];
@@ -336,6 +340,10 @@ async function assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, s
 }
 
 export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
+  const { storageAdapterIgnoresSnapshotObjects } = await import("./storage-adapter-policy.mjs");
+  if (storageAdapterIgnoresSnapshotObjects(ctx.adapter)) {
+    return null;
+  }
   const epochs = await listSnapshotEpochs(ctx);
   if (!epochs.length) return null;
   const sorted = [...epochs].sort((a, b) => b - a);
@@ -386,6 +394,10 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function adoptVerifiedOrphanSnapshots(ctx) {
+  const { isObjectStoreCompactionEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreCompactionEnabled(ctx.adapter)) {
+    return loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+  }
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   const epochs = await listSnapshotEpochs(ctx);
   /** @type {StorageSnapshotRecord | null} */
@@ -427,6 +439,10 @@ export async function adoptVerifiedOrphanSnapshots(ctx) {
  * @param {number} [options.settleMs]
  */
 export async function compactObjectStoreReplica(ctx, state, replica, options = {}) {
+  const { isObjectStoreCompactionEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreCompactionEnabled(ctx.adapter)) {
+    return { skipped: true, reason: "compaction_disabled" };
+  }
   await adoptVerifiedOrphanSnapshots(ctx);
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   if (!isCompactionCaughtUpWithManifest(manifest, state)) {
@@ -569,6 +585,10 @@ export async function gcSafeSeqFloorForDevH(ctx, manifest, devH) {
 }
 
 export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
+  const { isObjectStoreLogGcEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreLogGcEnabled(ctx.adapter)) {
+    return { deleted: 0, keys: [], gcDisabled: true };
+  }
   const m = manifest ?? (await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix));
   const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
   let cursor = undefined;
