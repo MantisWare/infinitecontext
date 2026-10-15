@@ -226,13 +226,12 @@ export function createS3StorageAdapter(options) {
       assertNotAborted(listOptions.signal);
       const normalized = normalizeListPrefix(listPrefix);
       const limit = listOptions.limit ?? 1000;
+      const logicalCore = normalized.core;
       const s3Prefix = prefix
-        ? normalized
-          ? `${prefix}/${normalized}`
+        ? logicalCore
+          ? `${prefix}/${logicalCore}`
           : `${prefix}/`
-        : normalized
-          ? normalized
-          : "";
+        : logicalCore || "";
       /** @type {import("./types.mjs").StorageObjectInfo[]} */
       const objects = [];
       let startAfter = listOptions.cursor ? toObjectKey(String(listOptions.cursor)) : undefined;
