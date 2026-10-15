@@ -16,6 +16,13 @@ import {
  * @property {number} changeOrdinal monotonic hosted-shaped sequence for emitted changes
  * @property {{ wall_ms: number, counter: number }} localHlc hybrid logical clock for local stamps
  * @property {string} [logListCursor] pagination cursor for discovering remote log prefixes
+ * @property {number} [appliedSnapshotEpoch] snapshot epoch hydrated on this device (-1 = none)
+ * @property {Record<string, unknown>} [pendingBootstrapReplica] sanitized replica pending pull delivery
+ * @property {boolean} [bootstrapReplicaPendingAck] bootstrap delivered to client but manifest ack deferred
+ * @property {import('./sync-cursor.mjs').VectorSyncCursor} [snapshotCompactedThrough] floor covered by applied snapshot
+ * @property {number} [manifestGenerationHighWater] last trusted manifest generation seen locally
+ * @property {number} [verifiedManifestGeneration] manifest generation bound to appliedSnapshotEpoch + snapshot floor
+ * @property {object} [pendingPullDeliveryApply] deferred cursor/trust until confirmPullDelivery
  */
 
 /** @returns {ObjectStoreLocalSyncState} */
@@ -116,6 +123,14 @@ export class ObjectStoreLogForkError extends Error {
     super(message);
     this.name = "ObjectStoreLogForkError";
     this.code = "log_fork";
+  }
+}
+
+export class ObjectStoreLogMissingError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ObjectStoreLogMissingError";
+    this.code = "log_missing";
   }
 }
 

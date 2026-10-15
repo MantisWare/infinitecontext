@@ -1,5 +1,6 @@
 import { copyVerifiedStoragePutBodyForAdapter } from "./encrypt-storage-object.mjs";
 import {
+  confirmObjectStorePullDeliveryForContext,
   objectStoreFetchSyncConflicts,
   objectStoreFetchSyncStatus,
   objectStorePullSyncChanges,
@@ -87,6 +88,15 @@ export class ObjectStoreSyncTransport {
 
   async pullSyncChanges(options = {}) {
     return objectStorePullSyncChanges(this.#syncContext(), options);
+  }
+
+  async confirmPullDelivery() {
+    await confirmObjectStorePullDeliveryForContext(this.#syncContext());
+  }
+
+  /** @returns {true} */
+  get usesVectorPullCursor() {
+    return true;
   }
 
   async pushSyncMutations(mutations, _options = {}) {

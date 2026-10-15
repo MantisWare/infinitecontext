@@ -18,6 +18,21 @@ function scanForNeedle(value, needle) {
 }
 
 describe("sanitizeSyncReplicaForPersist", () => {
+  it("persisted mutation log is identical across 120 random apply orders", () => {
+    const items = scenarioThreeUpdates();
+    /** @type {string[]} */
+    const shapes = [];
+    for (let t = 0; t < 120; t += 1) {
+      const order = [...items].sort(() => Math.random() - 0.5);
+      const replica = createEmptySyncReplica();
+      for (const item of order) {
+        applySyncChangeToReplica(replica, syncChangeFromMergeable(item), () => {});
+      }
+      shapes.push(JSON.stringify(sanitizeSyncReplicaForPersist(replica)._message_mutations));
+    }
+    assert.equal(new Set(shapes).size, 1);
+  });
+
   it("keeps tombstone_blocked_update loser text on persist", () => {
     const items = scenarioAppendDeleteSlowUpdate();
     const replica = createEmptySyncReplica();

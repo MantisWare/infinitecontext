@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync-replica-apply.mjs";
+import {
+  getRecomputePerfCounterForTests,
+  getRecomputePerfEntryScanStatsForTests,
+  resetRecomputePerfCounterForTests,
+} from "../../lib/object-store-replica-conflicts.mjs";
 import { serializeMutationHlc } from "../../lib/object-store-hlc.mjs";
 import { deriveDevH } from "../../lib/storage/layout.mjs";
 import { msg, TEST_DEK } from "./object-store-replica-scenarios.mjs";
 
 describe("object store replica recompute performance", () => {
-  it("recomputes 2400 sequential edits to one message in under 2s", () => {
+  it("recomputes 2400 sequential edits to one message with bounded recompute work", () => {
     const devA = deriveDevH(TEST_DEK, "11111111-1111-4111-8111-111111111111");
     const ctx = "ctx_perf";
     const msgId = "icn_perf_msg";
@@ -27,7 +32,7 @@ describe("object store replica recompute performance", () => {
       () => {},
     );
 
-    const start = performance.now();
+    resetRecomputePerfCounterForTests();
     for (let i = 1; i <= 2400; i += 1) {
       applySyncChangeToReplica(
         replica,
@@ -45,8 +50,16 @@ describe("object store replica recompute performance", () => {
         () => {},
       );
     }
-    const elapsed = performance.now() - start;
-    assert.ok(elapsed < 2000, `expected < 2000ms, got ${elapsed.toFixed(1)}ms`);
+    assert.equal(getRecomputePerfCounterForTests(), 2400);
+    const scanStats = getRecomputePerfEntryScanStatsForTests();
+    assert.ok(
+      scanStats.maxEntries <= 2401,
+      `recompute scanned too many log entries per call (${scanStats.maxEntries})`,
+    );
+    assert.ok(
+      scanStats.totalScans <= 2400 * 2402,
+      `total recompute entry scans regressed (${scanStats.totalScans})`,
+    );
     assert.equal(replica.sync_conflicts.length, 0);
     assert.equal(replica.messages[msgId].payload.content.body, "u2400");
   });
@@ -72,6 +85,7 @@ describe("object store replica recompute performance", () => {
       () => {},
     );
 
+    resetRecomputePerfCounterForTests();
     let appliedUpdates = 0;
     for (let i = 1; i <= 2400; i += 1) {
       const devH = i % 2 === 0 ? devB : devA;
@@ -92,6 +106,7 @@ describe("object store replica recompute performance", () => {
       appliedUpdates += 1;
     }
     assert.equal(appliedUpdates, 2400);
+    assert.equal(getRecomputePerfCounterForTests(), 2400);
     assert.equal(replica.sync_conflicts.length, 2400);
   });
 });

@@ -156,8 +156,94 @@ function compareLogEntry(a, b) {
  * @param {Record<string, unknown>} replica
  * @param {string} messageId
  */
-export function recomputeReplicaConflictsForMessage(replica, messageId) {
+let recomputePerfCounter = 0;
+let recomputePerfEntryScans = 0;
+let recomputePerfMaxEntries = 0;
+
+export function resetRecomputePerfCounterForTests() {
+  recomputePerfCounter = 0;
+  recomputePerfEntryScans = 0;
+  recomputePerfMaxEntries = 0;
+}
+
+export function getRecomputePerfCounterForTests() {
+  return recomputePerfCounter;
+}
+
+export function getRecomputePerfEntryScanStatsForTests() {
+  return { totalScans: recomputePerfEntryScans, maxEntries: recomputePerfMaxEntries };
+}
+
+/**
+ * Coordinates whose mutation log payload must survive sanitize (order-independent).
+ * @param {Record<string, unknown>} replica
+ * @param {string} messageId
+ */
+export function mutationLogRetainKeySetForMessage(replica, messageId) {
   const entries = /** @type {MessageMutationLogEntry[]} */ (replica._message_mutations?.[messageId] ?? []);
+  /** @type {Set<string>} */
+  const keys = new Set();
+  /** @type {MessageMutationLogEntry[]} */
+  const losers = [];
+  /** @type {MessageMutationLogEntry | null} */
+  let winner = null;
+  let tombstoned = false;
+
+  for (const entry of entries) {
+    const key = mutationLogKey(messageId, entry);
+    if (entry.op === "message_delete") {
+      keys.add(key);
+      if (winner && !tombstoned) {
+        const covered =
+          entry.delete_base_vector &&
+          isMessageSourceCoveredByVectorBase({ devH: winner.devH, seq: winner.seq }, entry.delete_base_vector);
+        if (!covered) losers.push(winner);
+      }
+      winner = null;
+      tombstoned = true;
+      continue;
+    }
+    if (tombstoned) {
+      losers.push(entry);
+      continue;
+    }
+    if (!winner) {
+      winner = entry;
+      continue;
+    }
+    if (
+      entry.update_base_vector &&
+      isMessageSourceCoveredByVectorBase({ devH: winner.devH, seq: winner.seq }, entry.update_base_vector)
+    ) {
+      winner = entry;
+      continue;
+    }
+    if (compareHlc(entry.hlc, winner.hlc) > 0) {
+      losers.push(winner);
+      winner = entry;
+    } else {
+      losers.push(entry);
+    }
+  }
+  if (winner) keys.add(mutationLogKey(messageId, winner));
+  for (const loser of losers) keys.add(mutationLogKey(messageId, loser));
+  for (const row of replica.sync_conflicts ?? []) {
+    if (String(row.client_id ?? "") !== messageId) continue;
+    const right = row.right_payload;
+    if (!right || typeof right !== "object") continue;
+    const devH = String(/** @type {Record<string, unknown>} */ (right).source_dev_h ?? "");
+    const seq = Number(/** @type {Record<string, unknown>} */ (right).source_seq ?? 0);
+    const index = Number(/** @type {Record<string, unknown>} */ (right).source_index ?? 0);
+    if (devH) keys.add(mutationLogKey(messageId, { devH, seq, index }));
+  }
+  return keys;
+}
+
+export function recomputeReplicaConflictsForMessage(replica, messageId) {
+  recomputePerfCounter += 1;
+  const entries = /** @type {MessageMutationLogEntry[]} */ (replica._message_mutations?.[messageId] ?? []);
+  recomputePerfEntryScans += entries.length;
+  recomputePerfMaxEntries = Math.max(recomputePerfMaxEntries, entries.length);
   /** @type {MessageMutationLogEntry[]} */
   const losers = [];
   /** @type {MessageMutationLogEntry | null} */

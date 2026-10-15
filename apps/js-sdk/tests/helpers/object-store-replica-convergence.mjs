@@ -48,7 +48,7 @@ export function fullSnapshot(replica) {
 }
 
 /** @param {import('../../lib/object-store-merge.mjs').MergeableMutation[]} sorted */
-function randomPullBatchPlans(sorted, trials) {
+export function randomPullBatchPlans(sorted, trials) {
   /** @type {import('../../lib/object-store-merge.mjs').MergeableMutation[][][]} */
   const plans = [];
   for (let t = 0; t < trials; t += 1) {

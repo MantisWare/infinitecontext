@@ -5,6 +5,7 @@ import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import {
   createInMemoryObjectStoreLocalState,
   ObjectStoreLogForkError,
+  ObjectStoreLogMissingError,
   ObjectStoreLogRollbackError,
 } from "../../lib/object-store-local-sync-state.mjs";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
@@ -49,7 +50,7 @@ describe("owner-side trusted anchor on push", () => {
         a.pushSyncMutations([
           { client_id: generateClientNodeId(), op: "context_create", payload: { metadata: { n: 2 } } },
         ]),
-      (err) => err instanceof ObjectStoreLogRollbackError,
+      (err) => err instanceof ObjectStoreLogRollbackError || err instanceof ObjectStoreLogMissingError,
     );
   });
 

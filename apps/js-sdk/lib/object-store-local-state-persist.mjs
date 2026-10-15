@@ -65,7 +65,9 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
   if (record.conflicts !== undefined && !Array.isArray(record.conflicts)) {
     throw new ObjectStoreSyncStateError(`Corrupt ${label}: invalid conflicts`, "corrupt_state");
   }
-  return {
+  const appliedSnapshotEpoch = Number(record.appliedSnapshotEpoch ?? base.appliedSnapshotEpoch ?? -1);
+  /** @type {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} */
+  const hydrated = {
     ...base,
     selfNextSeq,
     trustedHeads:
@@ -84,12 +86,43 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
           }
         : base.localHlc,
     logListCursor: typeof record.logListCursor === "string" ? record.logListCursor : base.logListCursor,
+    appliedSnapshotEpoch: Number.isFinite(appliedSnapshotEpoch) ? appliedSnapshotEpoch : -1,
+    bootstrapReplicaPendingAck: Boolean(record.bootstrapReplicaPendingAck),
+    manifestGenerationHighWater: Number(record.manifestGenerationHighWater ?? 0),
+    verifiedManifestGeneration: Number.isFinite(Number(record.verifiedManifestGeneration))
+      ? Number(record.verifiedManifestGeneration)
+      : undefined,
   };
+  if (record.snapshotCompactedThrough !== undefined && record.snapshotCompactedThrough !== null) {
+    hydrated.snapshotCompactedThrough = normalizeVectorSyncCursor(record.snapshotCompactedThrough);
+  }
+  if (Object.prototype.hasOwnProperty.call(record, "pendingBootstrapReplica")) {
+    const pending = record.pendingBootstrapReplica;
+    if (
+      pending &&
+      typeof pending === "object" &&
+      !Array.isArray(pending)
+    ) {
+      hydrated.pendingBootstrapReplica = pending;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(record, "pendingPullDeliveryApply")) {
+    const pendingApply = record.pendingPullDeliveryApply;
+    if (
+      pendingApply &&
+      typeof pendingApply === "object" &&
+      !Array.isArray(pendingApply)
+    ) {
+      hydrated.pendingPullDeliveryApply = pendingApply;
+    }
+  }
+  return hydrated;
 }
 
 /** @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
 export function serializeObjectStoreLocalSyncState(state) {
-  return {
+  /** @type {Record<string, unknown>} */
+  const out = {
     selfNextSeq: state.selfNextSeq,
     trustedHeads: state.trustedHeads,
     vectorCursor: normalizeVectorSyncCursor(state.vectorCursor),
@@ -98,7 +131,23 @@ export function serializeObjectStoreLocalSyncState(state) {
     changeOrdinal: state.changeOrdinal,
     localHlc: state.localHlc,
     logListCursor: state.logListCursor ?? "",
+    appliedSnapshotEpoch: state.appliedSnapshotEpoch ?? -1,
+    bootstrapReplicaPendingAck: Boolean(state.bootstrapReplicaPendingAck),
+    manifestGenerationHighWater: state.manifestGenerationHighWater ?? 0,
   };
+  if (state.verifiedManifestGeneration !== undefined && Number.isFinite(state.verifiedManifestGeneration)) {
+    out.verifiedManifestGeneration = state.verifiedManifestGeneration;
+  }
+  if (state.snapshotCompactedThrough) {
+    out.snapshotCompactedThrough = normalizeVectorSyncCursor(state.snapshotCompactedThrough);
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "pendingBootstrapReplica")) {
+    out.pendingBootstrapReplica = state.pendingBootstrapReplica;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "pendingPullDeliveryApply")) {
+    out.pendingPullDeliveryApply = state.pendingPullDeliveryApply;
+  }
+  return out;
 }
 
 /** @param {object[]} a @param {object[]} b */
@@ -160,6 +209,51 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
     persisted.localHlc = { ...nextHlc };
   }
   if (incoming.logListCursor) persisted.logListCursor = incoming.logListCursor;
+  if (incoming.pendingBootstrapReplica !== undefined) {
+    if (incoming.pendingBootstrapReplica === null) {
+      delete persisted.pendingBootstrapReplica;
+    } else {
+      persisted.pendingBootstrapReplica = incoming.pendingBootstrapReplica;
+    }
+  }
+  if (incoming.bootstrapReplicaPendingAck !== undefined) {
+    persisted.bootstrapReplicaPendingAck = incoming.bootstrapReplicaPendingAck;
+  }
+  if (incoming.snapshotCompactedThrough !== undefined) {
+    persisted.snapshotCompactedThrough = normalizeVectorSyncCursor(incoming.snapshotCompactedThrough);
+  }
+  if (incoming.appliedSnapshotEpoch !== undefined && Number.isFinite(incoming.appliedSnapshotEpoch)) {
+    persisted.appliedSnapshotEpoch = Math.max(
+      persisted.appliedSnapshotEpoch ?? -1,
+      incoming.appliedSnapshotEpoch,
+    );
+  }
+  if (incoming.manifestGenerationHighWater !== undefined) {
+    persisted.manifestGenerationHighWater = Math.max(
+      persisted.manifestGenerationHighWater ?? 0,
+      incoming.manifestGenerationHighWater,
+    );
+  }
+  if (
+    incoming.verifiedManifestGeneration !== undefined &&
+    Number.isFinite(incoming.verifiedManifestGeneration)
+  ) {
+    const prevEpoch = persisted.appliedSnapshotEpoch ?? -1;
+    const nextEpoch = incoming.appliedSnapshotEpoch ?? prevEpoch;
+    if (nextEpoch >= prevEpoch) {
+      persisted.verifiedManifestGeneration = Math.max(
+        persisted.verifiedManifestGeneration ?? -1,
+        incoming.verifiedManifestGeneration,
+      );
+    }
+  }
+  if (incoming.pendingPullDeliveryApply !== undefined) {
+    if (incoming.pendingPullDeliveryApply === null) {
+      delete persisted.pendingPullDeliveryApply;
+    } else {
+      persisted.pendingPullDeliveryApply = incoming.pendingPullDeliveryApply;
+    }
+  }
 }
 
 /**

@@ -41,6 +41,7 @@ Commands:
   sync pull     Pull incremental sync changes
   sync push     Flush local sync outbox
   sync devices  List or revoke registered devices
+  storage       Local object store maintenance (devices remove, …)
   config        Config wizard and settings (show, set, doctor, …)
   login         Sign in with email/password or Google OAuth
   logout        Sign out and clear local session tokens
@@ -528,6 +529,12 @@ async function run() {
     case "vault": {
       const { runVaultCli } = await import("./vault.mjs");
       await runVaultCli(process.argv.slice(3));
+      break;
+    }
+
+    case "storage": {
+      const { runStorageCli } = await import("./storage-cli.mjs");
+      await runStorageCli(subcommand, process.argv.slice(4));
       break;
     }
 

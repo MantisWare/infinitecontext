@@ -14,6 +14,7 @@ import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
 import { isObjectStoreSyncChange } from "./sync-replica-daemon-store.mjs";
 import {
   hydrateSyncReplica,
+  mergeBootstrapReplicaIntoLocal,
   sanitizeSyncReplicaForPersist,
   wrapReplicaJsonParseError,
 } from "./sync-replica-state.mjs";
@@ -23,10 +24,21 @@ export { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
 
-const SYNC_DIR = path.join(os.homedir(), ".infinitecontext");
-const SYNC_STATE_FILE = path.join(SYNC_DIR, "sync-state.json");
-const SYNC_CLI_STATE_FILE = path.join(SYNC_DIR, "sync-cli-state.json");
-const SYNC_REPLICA_FILE = path.join(SYNC_DIR, "sync-replica.json");
+function syncDir() {
+  return path.join(os.homedir(), ".infinitecontext");
+}
+
+function syncStateFile() {
+  return path.join(syncDir(), "sync-state.json");
+}
+
+function syncCliStateFile() {
+  return path.join(syncDir(), "sync-cli-state.json");
+}
+
+function syncReplicaFile() {
+  return path.join(syncDir(), "sync-replica.json");
+}
 
 function readJsonFile(filePath, fallback) {
   try {
@@ -37,11 +49,11 @@ function readJsonFile(filePath, fallback) {
 }
 
 function readSyncReplicaFile() {
-  if (!fs.existsSync(SYNC_REPLICA_FILE)) {
+  if (!fs.existsSync(syncReplicaFile())) {
     return createEmptySyncReplica();
   }
   try {
-    const text = fs.readFileSync(SYNC_REPLICA_FILE, "utf8");
+    const text = fs.readFileSync(syncReplicaFile(), "utf8");
     return hydrateSyncReplica(JSON.parse(text));
   } catch (err) {
     wrapReplicaJsonParseError(err);
@@ -56,15 +68,15 @@ function writeJsonFile(filePath, value) {
 }
 
 function migrateLegacySyncState() {
-  const legacy = readJsonFile(SYNC_STATE_FILE, null);
+  const legacy = readJsonFile(syncStateFile(), null);
   if (!legacy || typeof legacy !== "object") return;
-  const cli = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
+  const cli = readJsonFile(syncCliStateFile(), { cursor: 0 });
   if (legacy.cursor !== undefined && cli.cursor === 0) {
     cli.cursor = Number(legacy.cursor ?? 0);
-    writeJsonFile(SYNC_CLI_STATE_FILE, cli);
+    writeJsonFile(syncCliStateFile(), cli);
   }
   const { cursor: _drop, ...shared } = legacy;
-  writeJsonFile(SYNC_STATE_FILE, {
+  writeJsonFile(syncStateFile(), {
     outbox: Array.isArray(shared.outbox) ? shared.outbox : [],
     parked_failures: Array.isArray(shared.parked_failures) ? shared.parked_failures : [],
   });
@@ -73,7 +85,7 @@ function migrateLegacySyncState() {
 migrateLegacySyncState();
 
 function readSyncState() {
-  const state = readJsonFile(SYNC_STATE_FILE, { outbox: [], parked_failures: [] });
+  const state = readJsonFile(syncStateFile(), { outbox: [], parked_failures: [] });
   return {
     outbox: Array.isArray(state.outbox) ? state.outbox : [],
     parked_failures: Array.isArray(state.parked_failures) ? state.parked_failures : [],
@@ -81,14 +93,14 @@ function readSyncState() {
 }
 
 function writeSyncState(state) {
-  writeJsonFile(SYNC_STATE_FILE, {
+  writeJsonFile(syncStateFile(), {
     outbox: Array.isArray(state.outbox) ? state.outbox : [],
     parked_failures: Array.isArray(state.parked_failures) ? state.parked_failures : [],
   });
 }
 
 function readCliSyncState() {
-  const state = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
+  const state = readJsonFile(syncCliStateFile(), { cursor: 0 });
   const raw = state.cursor;
   if (raw && typeof raw === "object" && raw.kind === "vector") {
     return { cursor: normalizeVectorSyncCursor(raw) };
@@ -99,10 +111,10 @@ function readCliSyncState() {
 function writeCliSyncState(state) {
   const cursor = state.cursor;
   if (cursor && typeof cursor === "object" && cursor.kind === "vector") {
-    writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: normalizeVectorSyncCursor(cursor) });
+    writeJsonFile(syncCliStateFile(), { cursor: normalizeVectorSyncCursor(cursor) });
     return;
   }
-  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(cursor ?? 0) });
+  writeJsonFile(syncCliStateFile(), { cursor: Number(cursor ?? 0) });
 }
 
 export function getSyncCursor() {
@@ -210,13 +222,21 @@ export function readObjectStoreSyncVectorCursor() {
   return normalizeVectorSyncCursor(backend.load().vectorCursor);
 }
 
+/** Persist vector pull cursor for CLI object-store sync (matches readObjectStoreSyncVectorCursor). */
+export async function writeObjectStoreSyncVectorCursor(cursor) {
+  const backend = createCliFileObjectStoreLocalState(defaultObjectStoreSyncStatePath());
+  const state = backend.load();
+  state.vectorCursor = normalizeVectorSyncCursor(cursor);
+  await backend.save(state);
+}
+
 /** Snapshot for message_delete planning (carried on outbox mutations). */
 export function snapshotObjectStoreBaseVector() {
   return snapshotVectorCursor(readObjectStoreSyncVectorCursor());
 }
 
 function writeReplica(replica) {
-  writeJsonFile(SYNC_REPLICA_FILE, sanitizeSyncReplicaForPersist(replica));
+  writeJsonFile(syncReplicaFile(), sanitizeSyncReplicaForPersist(replica));
 }
 
 /** Lightweight on-disk replica for `infinitecontext sync pull` (no daemon.db). */
@@ -239,17 +259,28 @@ export function createCliSyncStore() {
   };
 }
 
+function transportUsesVectorPullCursor(syncTransport) {
+  return Boolean(syncTransport?.usesVectorPullCursor);
+}
+
+
 export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor, transport } = {}) {
   const syncTransport = transport ?? getDefaultSyncTransport();
-  const readCursor = getCursor ?? (() => getSyncCursor());
+  const vectorPull = transportUsesVectorPullCursor(syncTransport);
+  const readCursor =
+    getCursor ??
+    (() => (vectorPull ? readObjectStoreSyncVectorCursor() : getSyncCursor()));
   const writeCursor =
     setCursor ??
-    ((value) => {
+    (async (value) => {
+      if (vectorPull) {
+        await writeObjectStoreSyncVectorCursor(value);
+      }
       writeCliSyncState({ cursor: value });
     });
 
   let since = readCursor() ?? 0;
-  if (typeof since !== "object") {
+  if (!vectorPull && typeof since !== "object") {
     since = Number(since ?? 0);
   }
   let total = 0;
@@ -259,7 +290,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
   /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
   let daemonReplica = null;
   const objectStoreReplicaPull = Boolean(store?.objectStoreReplicaPullEnabled);
-  if (store?.loadSyncReplica && store?.flushSyncReplica) {
+  if (objectStoreReplicaPull && store?.loadSyncReplica && store?.flushSyncReplica) {
     try {
       daemonReplica = store.loadSyncReplica();
     } catch (err) {
@@ -270,15 +301,46 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
     }
   }
   const daemonReplicaMode = daemonReplica !== null;
-  const legacyReplicaMode = !daemonReplicaMode && store?.flushReplica;
-  const cliReplica = legacyReplicaMode ? readReplica() : null;
+  const cliReplicaMode = Boolean(store?.flushReplica || (vectorPull && store?.flushSyncReplica));
+  /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
+  let cliReplica =
+    cliReplicaMode && !daemonReplicaMode
+      ? store?.loadSyncReplica?.() ?? readReplica()
+      : null;
   const persistReplica = () => {
     if (daemonReplica && daemonReplicaMode) store.flushSyncReplica(daemonReplica);
-    else if (cliReplica && legacyReplicaMode) store.flushReplica(cliReplica);
+    else if (cliReplica && cliReplicaMode) {
+      if (store?.flushSyncReplica) store.flushSyncReplica(cliReplica);
+      else store.flushReplica(cliReplica);
+    }
+  };
+
+  const applyBootstrapReplica = (bootstrapPlain) => {
+    if (daemonReplicaMode && store?.flushSyncReplica) {
+      daemonReplica = mergeBootstrapReplicaIntoLocal(daemonReplica, bootstrapPlain);
+      store.flushSyncReplica(daemonReplica);
+      return;
+    }
+    if (cliReplicaMode) {
+      cliReplica = mergeBootstrapReplicaIntoLocal(cliReplica, bootstrapPlain);
+      persistReplica();
+    }
   };
 
   while (hasMore) {
-    lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
+    /** @type {{ since?: unknown, limit: number, baseUrl?: string }} */
+    const pullOptions = { limit: 500, baseUrl };
+    if (vectorPull) {
+      if (since && typeof since === "object" && since.kind === "vector") {
+        pullOptions.since = since;
+      }
+    } else {
+      pullOptions.since = since;
+    }
+    lastPage = await syncTransport.pullSyncChanges(pullOptions);
+    if (lastPage?.bootstrap_replica) {
+      applyBootstrapReplica(lastPage.bootstrap_replica);
+    }
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange || daemonReplica || cliReplica) {
         if (daemonReplica && objectStoreReplicaPull && isObjectStoreSyncChange(change)) {
@@ -289,18 +351,23 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
           store.applySyncChange(change);
         }
       }
-      if (typeof since === "number") {
+      if (!vectorPull && typeof since === "number") {
         since = change.sequence;
       }
       total += 1;
     }
-    if (daemonReplica || cliReplica) persistReplica();
-    if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
+    persistReplica();
+    if (typeof syncTransport.confirmPullDelivery === "function") {
+      await syncTransport.confirmPullDelivery();
+    }
+    if (vectorPull) {
+      since = readObjectStoreSyncVectorCursor();
+    } else if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
       since = lastPage.next_since;
     }
-    writeCursor(since);
+    await writeCursor(since);
     hasMore = Boolean(lastPage.has_more);
-    if ((lastPage.changes ?? []).length === 0) break;
+    if (!hasMore) break;
   }
   if (log && total > 0) log("info", "Applied sync pull", { changes: total, cursor: since });
   const conflictCount = pageConflicts(lastPage);
@@ -318,10 +385,13 @@ export function resolveDeleteBaseSequence({ explicitBaseSequence, localCursor } 
   if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
     return explicitBaseSequence;
   }
-  const local = localCursor ?? getSyncCursor();
+  if (localCursor === undefined) return null;
+  const local = localCursor;
   if (typeof local === "number" && local > 0) return local;
   if (local && typeof local === "object" && local.kind === "vector") {
-    return normalizeVectorSyncCursor(local);
+    const normalized = normalizeVectorSyncCursor(local);
+    if (Object.keys(normalized.v ?? {}).length === 0) return null;
+    return normalized;
   }
   return null;
 }

@@ -13,8 +13,10 @@ describe("pullAndApplySync paging", () => {
     const loopStart = src.indexOf("while (hasMore)");
     const loopEnd = src.indexOf("return { applied: total");
     const loop = src.slice(loopStart, loopEnd);
-    assert.match(loop, /if \(daemonReplica \|\| cliReplica\) persistReplica\(\)/);
-    assert.match(loop, /writeCursor\(since\)/);
+    assert.match(loop, /persistReplica\(\)/);
+    assert.match(loop, /await writeCursor\(since\)/);
+    assert.match(loop, /confirmPullDelivery/);
+    assert.match(loop, /if \(!hasMore\) break/);
     assert.doesNotMatch(loop, /fetchSyncStatus/);
   });
 });

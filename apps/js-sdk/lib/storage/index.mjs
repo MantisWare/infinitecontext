@@ -53,6 +53,39 @@ export {
 export { SecretStore, resolveSecretStoreBackend } from "./secret-store.mjs";
 export { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 export {
+  acquireLeaseLock,
+  isLeaseLockHeldBy,
+  isLeaseLockStale,
+  LEASE_CLOCK_SKEW_MARGIN_MS,
+  LEASE_DEFAULT_SETTLE_MS,
+  LEASE_LOCK_TTL_MS,
+  releaseLeaseLock,
+  renewLeaseLock,
+  withLeaseLock,
+} from "./lease-lock.mjs";
+export {
+  readLayoutObjectPlaintext,
+  sealLayoutObjectPlaintext,
+  storageConditionalCreate,
+  storageReadModifyWrite,
+} from "./storage-cas-rmw.mjs";
+export {
+  createEmptyStorageManifest,
+  loadStorageManifest,
+  MANIFEST_FORMAT,
+  parseStorageManifestPlain,
+  updateStorageManifest,
+} from "./storage-manifest.mjs";
+export {
+  bootstrapLocalStateFromLatestSnapshot,
+  compactObjectStoreReplica,
+  gcLogSegmentsCoveredByCompaction,
+  listSnapshotEpochs,
+  loadStorageSnapshot,
+  SNAPSHOT_FORMAT,
+  verifySnapshotTrustedHeads,
+} from "./storage-compaction.mjs";
+export {
   AuthExpiredError,
   NotSupportedError,
   PreconditionFailedError,

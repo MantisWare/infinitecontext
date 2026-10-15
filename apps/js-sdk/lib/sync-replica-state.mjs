@@ -2,7 +2,7 @@ import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
 import { createEmptySyncReplica } from "./sync-replica-apply.mjs";
 import {
   isMessageSourceCoveredByVectorBase,
-  replicaConflictId,
+  mutationLogRetainKeySetForMessage,
 } from "./object-store-replica-conflicts.mjs";
 
 /** @param {unknown} raw */
@@ -99,67 +99,17 @@ export function rebuildMutationLogIndex(replica) {
 }
 
 /**
- * @param {Record<string, unknown>} entry
- * @param {Record<string, unknown> | null | undefined} baseVector
- */
-function entryUncoveredByBaseVector(entry, baseVector) {
-  if (!baseVector) return false;
-  return !isMessageSourceCoveredByVectorBase(
-    { devH: String(entry.devH), seq: Number(entry.seq) },
-    baseVector,
-  );
-}
-
-/** @param {Record<string, unknown>} entry */
-function mutationLogEntryKey(entry) {
-  return `${String(entry.devH)}:${Number(entry.seq)}:${Number(entry.index ?? 0)}`;
-}
-
-/**
  * @param {Record<string, unknown>} replica
  * @param {string} messageId
  * @param {Record<string, unknown>} entry
- * @param {Record<string, unknown>[]} sortedEntries
  */
-function mutationLogEntryRetainsData(replica, messageId, entry, sortedEntries) {
+function mutationLogEntryRetainsData(replica, messageId, entry) {
   const msgState = replica.messages?.[messageId];
   if (msgState && typeof msgState === "object" && msgState.tombstone) {
     return false;
   }
-  const conflictId = replicaConflictId(messageId, String(entry.devH), Number(entry.seq), Number(entry.index ?? 0));
-  const hasConflict = (replica.sync_conflicts ?? []).some((c) => String(c?.id ?? "") === conflictId);
-  if (hasConflict) return true;
-
-  const msg = replica.messages?.[messageId];
-  if (msg && typeof msg === "object" && !msg.tombstone && msg._source) {
-    const src = /** @type {{ devH?: string, seq?: number, index?: number }} */ (msg._source);
-    if (
-      String(src.devH) === String(entry.devH) &&
-      Number(src.seq) === Number(entry.seq) &&
-      Number(src.index ?? 0) === Number(entry.index ?? 0)
-    ) {
-      return true;
-    }
-  }
-
-  const key = mutationLogEntryKey(entry);
-  let entryIdx = -1;
-  for (let i = 0; i < sortedEntries.length; i += 1) {
-    if (mutationLogEntryKey(sortedEntries[i]) === key) {
-      entryIdx = i;
-      break;
-    }
-  }
-  if (entryIdx < 0) return true;
-  for (let i = entryIdx + 1; i < sortedEntries.length; i += 1) {
-    const later = sortedEntries[i];
-    if (!later || typeof later !== "object") continue;
-    const base = later.delete_base_vector ?? later.update_base_vector;
-    if (entryUncoveredByBaseVector(entry, /** @type {Record<string, unknown>} */ (base))) {
-      return true;
-    }
-  }
-  return false;
+  const retainKeys = mutationLogRetainKeySetForMessage(replica, messageId);
+  return retainKeys.has(`${messageId}:${String(entry.devH)}:${Number(entry.seq)}:${Number(entry.index ?? 0)}`);
 }
 
 /**
@@ -186,22 +136,6 @@ function deleteBaseVectorForTombstone(replica, messageId) {
     }
   }
   return null;
-}
-
-/** @param {Record<string, unknown>[]} entries */
-function sortedMutationLogEntries(entries) {
-  return [...entries].sort((a, b) => {
-    const aw = Number(a.hlc?.wall_ms ?? 0);
-    const bw = Number(b.hlc?.wall_ms ?? 0);
-    if (aw !== bw) return aw - bw;
-    const ac = Number(a.hlc?.counter ?? 0);
-    const bc = Number(b.hlc?.counter ?? 0);
-    if (ac !== bc) return ac - bc;
-    const ad = String(a.hlc?.devH ?? a.devH ?? "");
-    const bd = String(b.hlc?.devH ?? b.devH ?? "");
-    if (ad !== bd) return ad.localeCompare(bd);
-    return Number(a.index ?? 0) - Number(b.index ?? 0);
-  });
 }
 
 /** @param {Record<string, unknown>} replica */
@@ -244,17 +178,60 @@ export function sanitizeSyncReplicaForPersist(replica) {
   if (log && typeof log === "object") {
     for (const [messageId, entries] of Object.entries(log)) {
       if (!Array.isArray(entries)) continue;
-      const sorted = sortedMutationLogEntries(entries);
       out._message_mutations[messageId] = entries.map((entry) => {
         if (!entry || typeof entry !== "object") return entry;
         const row = { .../** @type {Record<string, unknown>} */ (entry) };
-        if (mutationLogEntryRetainsData(replica, messageId, row, sorted)) return row;
+        if (mutationLogEntryRetainsData(replica, messageId, row)) return row;
         row.data = null;
         return row;
       });
     }
   }
   return out;
+}
+
+/**
+ * Merge a verified snapshot bootstrap into existing local replica state without
+ * dropping rows that exist only on this device.
+ *
+ * @param {ReturnType<typeof createEmptySyncReplica> | null | undefined} local
+ * @param {unknown} bootstrapPlain
+ */
+export function mergeBootstrapReplicaIntoLocal(local, bootstrapPlain) {
+  const bootstrap = hydrateSyncReplica(bootstrapPlain);
+  if (!local) return bootstrap;
+  const hasLocal =
+    Object.keys(local.contexts ?? {}).length > 0 ||
+    Object.keys(local.messages ?? {}).length > 0 ||
+    (local.sync_conflicts ?? []).length > 0 ||
+    Object.keys(local._message_mutations ?? {}).length > 0;
+  if (!hasLocal) return bootstrap;
+  const merged = hydrateSyncReplica(bootstrapPlain);
+  for (const [id, row] of Object.entries(local.contexts ?? {})) {
+    if (merged.contexts[id] === undefined) {
+      merged.contexts[id] = structuredClone(row);
+    }
+  }
+  for (const [id, row] of Object.entries(local.messages ?? {})) {
+    if (merged.messages[id] === undefined) {
+      merged.messages[id] = structuredClone(row);
+    }
+  }
+  for (const row of local.sync_conflicts ?? []) {
+    const id = String(row?.id ?? "");
+    if (!id) continue;
+    if (!merged.sync_conflicts.some((existing) => String(existing?.id ?? "") === id)) {
+      merged.sync_conflicts.push(structuredClone(row));
+    }
+  }
+  for (const [messageId, entries] of Object.entries(local._message_mutations ?? {})) {
+    if (!merged._message_mutations[messageId]) {
+      merged._message_mutations[messageId] = structuredClone(entries);
+    }
+  }
+  rebuildMutationLogIndex(merged);
+  validateMessageMutationLog(merged);
+  return merged;
 }
 
 /** @param {unknown} err */
