@@ -20,11 +20,17 @@ import {
   loadStorageManifestForSync,
   mergeTrustedHeadsMonotonic,
   parseStorageManifestPlain,
+  registerManifestSyncParticipant,
   updateStorageManifest,
   upsertManifestDeviceAck,
   wrapStorageManifestPlain,
 } from "./storage-manifest.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
+import {
+  loadDeviceSyncAck,
+  trustedDeviceAckSeqForLog,
+  writeDeviceSyncAckFromState,
+} from "./storage-device-sync-ack.mjs";
 import { LEASE_DEFAULT_SETTLE_MS } from "./lease-lock.mjs";
 import {
   readLayoutObjectPlaintext,
@@ -170,14 +176,10 @@ export function assertSnapshotCoversManifestKnowledge(manifest, snap, options = 
     ...Object.keys(manifest.trusted_heads ?? {}),
     ...Object.keys(normalizeVectorSyncCursor(manifest.compacted_through).v ?? {}),
     ...Object.keys(options.localTrustedHeads ?? {}),
+    ...(manifest.sync_participants ?? []),
   ]);
   for (const row of manifest.devices) {
-    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[row.devH] ?? -1);
-    if (floor >= 0 || manifest.trusted_heads?.[row.devH]) required.add(row.devH);
-  }
-  for (const devH of manifest.sync_participants ?? []) {
-    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
-    if (floor >= 0 || manifest.trusted_heads?.[devH]) required.add(devH);
+    required.add(row.devH);
   }
   for (const devH of required) {
     const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
@@ -185,6 +187,7 @@ export function assertSnapshotCoversManifestKnowledge(manifest, snap, options = 
     if (!head) {
       throw new Error(`Snapshot omits manifest-known device ${devH}`);
     }
+    if (Number.isFinite(head.seq) && head.seq < 0) continue;
     if (Number.isFinite(floor) && floor >= 0 && head.seq < floor) {
       throw new Error(`Snapshot head for ${devH} is below manifest compacted floor`);
     }
@@ -229,7 +232,7 @@ async function verifyOrphanSnapshotAdoptable(ctx, snap) {
 
 export async function verifySnapshotTrustedHeads(ctx, snap, options = {}) {
   for (const [devH, trusted] of Object.entries(snap.trusted_heads ?? {})) {
-    if (!trusted) continue;
+    if (!trusted || trusted.seq < 0) continue;
     await verifyDeviceLogThroughSeq(
       ctx,
       devH,
@@ -318,11 +321,11 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
   if (!picked) return null;
   const { epoch, snap } = picked;
   for (const [devH, head] of Object.entries(snap.trusted_heads ?? {})) {
-    if (head) commitTrustedHeadAdvance(state, devH, head);
+    if (head && head.seq >= 0) commitTrustedHeadAdvance(state, devH, head);
   }
   const bootCursor = normalizeVectorSyncCursor(snap.compacted_through);
   for (const [devH, head] of Object.entries(snap.trusted_heads ?? {})) {
-    if (head) advanceVectorCursorDevH(bootCursor, devH, head.seq);
+    if (head && head.seq >= 0) advanceVectorCursorDevH(bootCursor, devH, head.seq);
   }
   state.vectorCursor = bootCursor;
   state.snapshotCompactedThrough = normalizeVectorSyncCursor(snap.compacted_through);
@@ -387,6 +390,16 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
   const maxListedEpoch = epochs.length ? Math.max(...epochs) : -1;
   const nextEpoch = Math.max(manifest.latest_snapshot_epoch, maxListedEpoch) + 1;
   const trustedHeads = mergeTrustedHeadsMonotonic(manifest.trusted_heads ?? {}, state.trustedHeads ?? {});
+  for (const row of manifest.devices) {
+    if (!trustedHeads[row.devH]) {
+      trustedHeads[row.devH] = { seq: -1, digest: "" };
+    }
+  }
+  for (const devH of manifest.sync_participants ?? []) {
+    if (!trustedHeads[devH]) {
+      trustedHeads[devH] = { seq: -1, digest: "" };
+    }
+  }
   const compactedThrough = normalizeVectorSyncCursor(state.vectorCursor);
   for (const [devH, head] of Object.entries(trustedHeads)) {
     advanceVectorCursorDevH(compactedThrough, devH, head.seq);
@@ -452,6 +465,9 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
     },
   );
 
+  state.appliedSnapshotEpoch = nextEpoch;
+  state.snapshotCompactedThrough = normalizeVectorSyncCursor(compactedThrough);
+  await ctx.localState.save(state);
   return { epoch: nextEpoch, compacted_through: compactedThrough };
 }
 
@@ -483,34 +499,28 @@ export async function gcSafeSeqFloorForDevH(ctx, manifest, devH) {
     return -1;
   }
   const headSeq = trustedHead.seq;
-  const participants = manifest.sync_participants ?? [];
-  for (const participant of participants) {
-    const row = manifest.devices.find((d) => d.devH === participant);
-    if (!row) return -1;
-  }
-  for (const participant of participants) {
-    if (!manifest.devices.some((row) => row.devH === participant)) return -1;
-  }
+  /** @type {Set<string>} */
+  const participantSet = new Set([
+    ...(manifest.sync_participants ?? []),
+    ...manifest.devices.map((row) => row.devH),
+  ]);
+  if (!participantSet.size) return -1;
   let minAck = Number.POSITIVE_INFINITY;
-  for (const row of manifest.devices) {
-    const deviceHead = manifest.trusted_heads?.[row.devH];
-    if (deviceHead) {
-      const env = await readEnvelopeAtSeq(ctx, row.devH, deviceHead.seq);
+  for (const participant of participantSet) {
+    const row = manifest.devices.find((d) => d.devH === participant);
+    const deviceHead = manifest.trusted_heads?.[participant];
+    if (deviceHead && Number.isFinite(deviceHead.seq) && deviceHead.seq >= 0) {
+      const env = await readEnvelopeAtSeq(ctx, participant, deviceHead.seq);
       if (!env || layoutSegmentEnvelopeDigest(env) !== deviceHead.digest) return -1;
     }
-    let ackForCanon = Number.isFinite(row.acknowledged_seq) ? row.acknowledged_seq : 0;
-    if (row.devH !== canon) {
-      const cross = row.acknowledged_cursor?.v?.[canon];
-      if (cross === undefined) return -1;
-      ackForCanon = Number(cross);
-    }
+    const deviceAck = await loadDeviceSyncAck(ctx, participant);
+    const ackForCanon = trustedDeviceAckSeqForLog(deviceAck, participant, canon, manifest);
     if (!Number.isFinite(ackForCanon) || ackForCanon < 0) return -1;
-    if (ackForCanon > headSeq) ackForCanon = headSeq;
+    if (row && ackForCanon > headSeq) return -1;
     minAck = Math.min(minAck, ackForCanon);
   }
-  if (!manifest.devices.length) return -1;
   if (!Number.isFinite(minAck) || minAck < compactFloor) return -1;
-  const deleteThrough = Math.min(compactFloor, headSeq - 1);
+  const deleteThrough = Math.min(compactFloor, headSeq - 1, minAck);
   if (deleteThrough < 0) return -1;
   return deleteThrough;
 }
@@ -567,7 +577,7 @@ export async function recordManifestAcknowledgement(ctx, state) {
 
 /** Clear bootstrap pending flag after replica was delivered to the client. */
 export function clearPendingBootstrapReplica(state) {
-  delete state.pendingBootstrapReplica;
+  state.pendingBootstrapReplica = null;
   state.bootstrapReplicaPendingAck = false;
 }
 
@@ -581,6 +591,27 @@ export async function confirmObjectStorePullDelivery(ctx) {
     await ctx.localState.save(state);
   }
   await recordManifestAcknowledgement(ctx, state);
+  await registerManifestSyncParticipant(
+    {
+      adapter: ctx.adapter,
+      dek: ctx.dek,
+      layoutPrefix: ctx.layoutPrefix,
+      ownerDevH: ctx.selfDevH,
+      settleMs: 0,
+    },
+    ctx.selfDevH,
+  );
+  const fresh = ctx.localState.load();
+  await writeDeviceSyncAckFromState(
+    {
+      adapter: ctx.adapter,
+      dek: ctx.dek,
+      layoutPrefix: ctx.layoutPrefix,
+      ownerDevH: ctx.selfDevH,
+      deviceUuid: ctx.deviceUuid,
+    },
+    fresh,
+  );
 }
 
 export { createEmptyObjectStoreLocalSyncState };

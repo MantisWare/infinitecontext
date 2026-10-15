@@ -93,12 +93,15 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
   if (record.snapshotCompactedThrough !== undefined && record.snapshotCompactedThrough !== null) {
     hydrated.snapshotCompactedThrough = normalizeVectorSyncCursor(record.snapshotCompactedThrough);
   }
-  if (
-    record.pendingBootstrapReplica &&
-    typeof record.pendingBootstrapReplica === "object" &&
-    !Array.isArray(record.pendingBootstrapReplica)
-  ) {
-    hydrated.pendingBootstrapReplica = record.pendingBootstrapReplica;
+  if (Object.prototype.hasOwnProperty.call(record, "pendingBootstrapReplica")) {
+    const pending = record.pendingBootstrapReplica;
+    if (
+      pending &&
+      typeof pending === "object" &&
+      !Array.isArray(pending)
+    ) {
+      hydrated.pendingBootstrapReplica = pending;
+    }
   }
   return hydrated;
 }
@@ -122,7 +125,7 @@ export function serializeObjectStoreLocalSyncState(state) {
   if (state.snapshotCompactedThrough) {
     out.snapshotCompactedThrough = normalizeVectorSyncCursor(state.snapshotCompactedThrough);
   }
-  if (state.pendingBootstrapReplica) {
+  if (Object.prototype.hasOwnProperty.call(state, "pendingBootstrapReplica")) {
     out.pendingBootstrapReplica = state.pendingBootstrapReplica;
   }
   return out;
@@ -188,7 +191,11 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
   }
   if (incoming.logListCursor) persisted.logListCursor = incoming.logListCursor;
   if (incoming.pendingBootstrapReplica !== undefined) {
-    persisted.pendingBootstrapReplica = incoming.pendingBootstrapReplica;
+    if (incoming.pendingBootstrapReplica === null) {
+      delete persisted.pendingBootstrapReplica;
+    } else {
+      persisted.pendingBootstrapReplica = incoming.pendingBootstrapReplica;
+    }
   }
   if (incoming.bootstrapReplicaPendingAck !== undefined) {
     persisted.bootstrapReplicaPendingAck = incoming.bootstrapReplicaPendingAck;

@@ -12,6 +12,7 @@ const MANIFEST_PLAIN_FIELD = "ic_layout_manifest_v1";
  * @property {number} last_seq highest segment seq written (hint)
  * @property {number} acknowledged_seq highest seq applied by this device
  * @property {import('../sync-cursor.mjs').VectorSyncCursor} [acknowledged_cursor] merge cursor after last pull
+ * @property {string} [last_seen_at] ISO-8601 last push/pull activity
  */
 
 /**
@@ -22,6 +23,7 @@ const MANIFEST_PLAIN_FIELD = "ic_layout_manifest_v1";
  * @property {number} latest_snapshot_epoch
  * @property {number} manifest_generation monotonic anti-replay generation
  * @property {string[]} [sync_participants] devH rows that must ack before GC
+ * @property {string[]} [removed_devices] devH rows explicitly removed (may re-register via bootstrap)
  * @property {Record<string, { seq: number, digest: string }>} [trusted_heads]
  */
 
@@ -34,6 +36,7 @@ export function createEmptyStorageManifest() {
     latest_snapshot_epoch: -1,
     manifest_generation: 0,
     sync_participants: [],
+    removed_devices: [],
     trusted_heads: {},
   };
 }
@@ -52,6 +55,7 @@ export function parseStorageManifestPlain(raw) {
     const devH = String(/** @type {Record<string, unknown>} */ (row).devH ?? "");
     if (!devH) continue;
     const ackCursorRaw = /** @type {Record<string, unknown>} */ (row).acknowledged_cursor;
+    const lastSeen = /** @type {Record<string, unknown>} */ (row).last_seen_at;
     devices.push({
       devH,
       last_seq: Number(/** @type {Record<string, unknown>} */ (row).last_seq ?? -1),
@@ -60,6 +64,7 @@ export function parseStorageManifestPlain(raw) {
         ackCursorRaw !== undefined && ackCursorRaw !== null
           ? normalizeVectorSyncCursor(ackCursorRaw)
           : undefined,
+      last_seen_at: typeof lastSeen === "string" && lastSeen ? lastSeen : undefined,
     });
   }
   return {
@@ -70,6 +75,9 @@ export function parseStorageManifestPlain(raw) {
     manifest_generation: Number(record.manifest_generation ?? 0),
     sync_participants: Array.isArray(record.sync_participants)
       ? record.sync_participants.map((d) => String(d).toUpperCase())
+      : [],
+    removed_devices: Array.isArray(record.removed_devices)
+      ? record.removed_devices.map((d) => String(d).toUpperCase())
       : [],
     trusted_heads:
       record.trusted_heads && typeof record.trusted_heads === "object"
@@ -217,6 +225,10 @@ export async function updateStorageManifest(ctx, mutate) {
  * @param {number} acknowledgedSeq
  * @param {import('../sync-cursor.mjs').VectorSyncCursor} [acknowledgedCursor]
  */
+function touchManifestDeviceSeen(row) {
+  row.last_seen_at = new Date().toISOString();
+}
+
 export function upsertManifestDeviceAck(manifest, devH, acknowledgedSeq, acknowledgedCursor) {
   const canon = devH.toUpperCase();
   const headHint = manifest.trusted_heads?.[canon]?.seq;
@@ -236,6 +248,7 @@ export function upsertManifestDeviceAck(manifest, devH, acknowledgedSeq, acknowl
     row.acknowledged_seq = Math.max(row.acknowledged_seq, cappedSeq);
     row.last_seq = Math.max(row.last_seq, cappedSeq);
   }
+  touchManifestDeviceSeen(row);
   const participants = new Set(manifest.sync_participants ?? []);
   participants.add(canon);
   manifest.sync_participants = [...participants];
@@ -268,11 +281,25 @@ export async function registerManifestSyncParticipant(ctx, devH) {
     const participants = new Set(manifest.sync_participants ?? []);
     participants.add(canon);
     manifest.sync_participants = [...participants];
-    if (!manifest.devices.some((row) => row.devH === canon)) {
-      manifest.devices.push({ devH: canon, last_seq: 0, acknowledged_seq: 0 });
+    manifest.removed_devices = (manifest.removed_devices ?? []).filter((id) => id !== canon);
+    let row = manifest.devices.find((d) => d.devH === canon);
+    if (!row) {
+      row = { devH: canon, last_seq: 0, acknowledged_seq: 0 };
+      manifest.devices.push(row);
     }
+    touchManifestDeviceSeen(row);
     return manifest;
   });
+}
+
+const DEVICE_ACTIVE_WITHIN_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @param {ManifestDeviceRow | undefined} row @param {number} [nowMs] */
+export function isManifestDeviceRecentlyActive(row, nowMs = Date.now()) {
+  if (!row?.last_seen_at) return false;
+  const seen = Date.parse(row.last_seen_at);
+  if (!Number.isFinite(seen)) return false;
+  return nowMs - seen < DEVICE_ACTIVE_WITHIN_MS;
 }
 
 export async function removeManifestDevice(ctx, devH) {
@@ -280,6 +307,9 @@ export async function removeManifestDevice(ctx, devH) {
   return updateStorageManifest(ctx, (manifest) => {
     manifest.devices = manifest.devices.filter((row) => row.devH !== canon);
     manifest.sync_participants = (manifest.sync_participants ?? []).filter((id) => id !== canon);
+    const removed = new Set(manifest.removed_devices ?? []);
+    removed.add(canon);
+    manifest.removed_devices = [...removed];
     return manifest;
   });
 }

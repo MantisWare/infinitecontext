@@ -5,7 +5,11 @@ import { readConfigFile, resolveBaseUrl } from "../../lib/client-config.mjs";
 import { configureObjectStoreSyncTransportIfNeeded } from "../../lib/sync-object-store-bootstrap.mjs";
 import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs";
 import { isHostedStorageBackend } from "../../lib/sync-storage-backend.mjs";
-import { removeManifestDevice } from "../../lib/storage/storage-manifest.mjs";
+import {
+  isManifestDeviceRecentlyActive,
+  loadStorageManifest,
+  removeManifestDevice,
+} from "../../lib/storage/storage-manifest.mjs";
 import { canonicalDevH, deriveDevH } from "../../lib/storage/layout.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
 
@@ -31,7 +35,7 @@ export async function runStorageCli(subcommand, args) {
     console.log(`Usage: infinitecontext storage <command>
 
 Commands:
-  devices remove <devH>   Drop a lagging device from manifest GC participation
+  devices remove <devH> [--force]   Drop a device from manifest GC participation
 
 Environment:
   Same as sync (local object store requires vault unlock)
@@ -43,7 +47,8 @@ Environment:
     const action = String(args[0] ?? "help").toLowerCase();
     if (action === "remove") {
       const devHRaw = args[1];
-      if (!devHRaw) throw new Error("Usage: infinitecontext storage devices remove <devH>");
+      const force = args.includes("--force");
+      if (!devHRaw) throw new Error("Usage: infinitecontext storage devices remove <devH> [--force]");
       return run(async () => {
         const config = readConfigFile();
         if (isHostedStorageBackend(config)) {
@@ -66,6 +71,19 @@ Environment:
         });
         const devH = canonicalDevH(String(devHRaw));
         const selfDevH = deriveDevH(unlocked.dek, deviceUuid);
+        if (devH === selfDevH) {
+          throw new Error("Cannot remove the local device from manifest participation");
+        }
+        const manifestBefore = await loadStorageManifest(store.adapter, unlocked.dek, "accounts/local");
+        const target = manifestBefore.devices.find((row) => row.devH === devH);
+        if (!target) {
+          throw new Error(`Device ${devH} is not registered in the storage manifest`);
+        }
+        if (isManifestDeviceRecentlyActive(target) && !force) {
+          throw new Error(
+            "Device was active within the last 7 days; re-run with --force to remove",
+          );
+        }
         const manifest = await removeManifestDevice(
           {
             adapter: store.adapter,

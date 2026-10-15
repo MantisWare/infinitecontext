@@ -19,6 +19,7 @@ import {
   verifySnapshotTrustedHeads,
   assertSnapshotCoversManifestKnowledge,
 } from "../../lib/storage/storage-compaction.mjs";
+import { writeDeviceSyncAckFromState } from "../../lib/storage/storage-device-sync-ack.mjs";
 import { confirmObjectStorePullDeliveryForContext } from "../../lib/object-store-sync.mjs";
 import { loadStorageManifest } from "../../lib/storage/storage-manifest.mjs";
 import {
@@ -256,6 +257,7 @@ describe("storage compaction + bootstrap", () => {
     for (const row of manifest.devices) {
       row.acknowledged_cursor = { kind: "vector", v: { [writer.selfDevH]: 2 } };
     }
+    await writeDeviceSyncAckFromState(writer, writer.localState.load());
     const gc = await gcLogSegmentsCoveredByCompaction(writer, manifest);
     assert.ok(gc.deleted >= 1);
     const headKey = logSegmentRelativePath(LAYOUT_PREFIX, writer.selfDevH, 2);

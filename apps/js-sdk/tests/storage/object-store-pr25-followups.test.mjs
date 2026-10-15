@@ -28,6 +28,12 @@ import {
   removeManifestDevice,
   updateStorageManifest,
 } from "../../lib/storage/storage-manifest.mjs";
+import { writeDeviceSyncAckFromState } from "../../lib/storage/storage-device-sync-ack.mjs";
+import { logSegmentRelativePath } from "../../lib/storage/layout.mjs";
+import {
+  clearPendingBootstrapReplica,
+  confirmObjectStorePullDelivery,
+} from "../../lib/storage/storage-compaction.mjs";
 import {
   confirmObjectStorePullDeliveryForContext,
   objectStorePullSyncChanges,
@@ -269,6 +275,330 @@ describe("PR #25 follow-ups", () => {
       () => objectStorePullSyncChanges(c, {}),
       (err) => err instanceof PreconditionFailedError,
     );
+  });
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`bootstrap confirm clears pending replica on ${backendLabel} and later pulls apply tail segments`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      const items = sortMergeableMutations(scenarioThreeUpdates());
+      for (const item of items) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: item.mutation.client_id,
+            op: item.mutation.op,
+            context_id: item.mutation.context_id,
+            payload: item.mutation.payload,
+            base_vector: item.mutation.base_vector,
+          },
+        ]);
+      }
+      const replica = createEmptySyncReplica();
+      for (const item of items) {
+        applySyncChangeToReplica(replica, syncChangeFromMergeable(item), () => {});
+      }
+      await compactObjectStoreReplica(writerCtx, writerLocal.load(), replica, { settleMs: 0 });
+      await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
+
+      const readerUuid = "66666666-6666-4666-8666-666666666666";
+      let readerLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-boot-seq-")), "object-store-sync-state.json");
+        readerLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-boot-seq-db-")), "daemon.db");
+        readerLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const readerCtx = ctx(adapter, readerUuid, readerLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      const page1 = await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      assert.ok(page1.bootstrap_replica);
+      assert.equal((page1.changes ?? []).length, 0);
+      await confirmObjectStorePullDelivery(readerCtx);
+      const afterConfirm = readerLocal.load();
+      assert.equal(afterConfirm.bootstrapReplicaPendingAck, false);
+      assert.equal(afterConfirm.pendingBootstrapReplica, undefined);
+
+      await objectStorePushSyncMutations(writerCtx, [
+        {
+          client_id: "tail_after_boot",
+          op: "context_create",
+          context_id: "ctx_tail_after_boot",
+          payload: { context_id: "ctx_tail_after_boot", metadata: {} },
+        },
+      ]);
+
+      resetObjectStorePullVerifyGenerationForTests();
+      const page2 = await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      assert.equal(page2.bootstrap_replica, undefined);
+      assert.ok((page2.changes ?? []).length >= 1);
+      if (readerLocal.close) readerLocal.close();
+    });
+  }
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`prefix deletion detected on pull for ${backendLabel} (in-process and after reload)`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      for (let i = 0; i < 3; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `pfx${i}`,
+            op: "context_create",
+            context_id: `ctx_pfx_${i}`,
+            payload: { context_id: `ctx_pfx_${i}`, metadata: {} },
+          },
+        ]);
+      }
+      let readerLocal;
+      let reloadReader;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-pfx-")), "object-store-sync-state.json");
+        readerLocal = createCliFileObjectStoreLocalState(filePath);
+        reloadReader = () => createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-pfx-db-")), "daemon.db");
+        readerLocal = createDaemonDbObjectStoreLocalState(dbFile);
+        reloadReader = () => createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const readerUuid = "77777777-7777-4777-8777-777777777777";
+      const readerCtx = ctx(adapter, readerUuid, readerLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      await confirmObjectStorePullDeliveryForContext(readerCtx);
+
+      await adapter.delete(logSegmentRelativePath(LAYOUT_PREFIX, writerCtx.selfDevH, 0));
+      await adapter.delete(logSegmentRelativePath(LAYOUT_PREFIX, writerCtx.selfDevH, 1));
+
+      resetObjectStorePullVerifyGenerationForTests();
+      await assert.rejects(
+        () => objectStorePullSyncChanges(readerCtx, { limit: 500 }),
+        /missing segment at seq|log_rollback/i,
+      );
+
+      const reloaded = reloadReader();
+      resetObjectStorePullVerifyGenerationForTests();
+      await assert.rejects(
+        () => objectStorePullSyncChanges(ctx(adapter, readerUuid, reloaded), { limit: 500 }),
+        /missing segment at seq|log_rollback/i,
+      );
+      if (reloaded.close) reloaded.close();
+      if (readerLocal.close) readerLocal.close();
+    });
+  }
+
+  it("prefix deletion detected on owner push without verified snapshot", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const writerUuid = "11111111-1111-4111-8111-111111111111";
+    const writerLocal = createInMemoryObjectStoreLocalState();
+    const writerCtx = ctx(adapter, writerUuid, writerLocal);
+    for (let i = 0; i < 3; i += 1) {
+      await objectStorePushSyncMutations(writerCtx, [
+        {
+          client_id: `opush${i}`,
+          op: "context_create",
+          context_id: `ctx_opush_${i}`,
+          payload: { context_id: `ctx_opush_${i}`, metadata: {} },
+        },
+      ]);
+    }
+    await adapter.delete(logSegmentRelativePath(LAYOUT_PREFIX, writerCtx.selfDevH, 0));
+    await adapter.delete(logSegmentRelativePath(LAYOUT_PREFIX, writerCtx.selfDevH, 1));
+    await assert.rejects(
+      () =>
+        objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: "opush_tail",
+            op: "context_create",
+            context_id: "ctx_opush_tail",
+            payload: { context_id: "ctx_opush_tail", metadata: {} },
+          },
+        ]),
+      /missing segment at seq|log_rollback/i,
+    );
+  });
+
+  it("rejects snapshot missing sync participant without floor", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const writerCtx = ctx(adapter, "11111111-1111-4111-8111-111111111111", createInMemoryObjectStoreLocalState());
+    await objectStorePushSyncMutations(writerCtx, [
+      {
+        client_id: "snap_cov",
+        op: "context_create",
+        context_id: "ctx_snap_cov",
+        payload: { context_id: "ctx_snap_cov", metadata: {} },
+      },
+    ]);
+    const lagDev = deriveDevH(TEST_DEK, "88888888-8888-4888-8888-888888888888");
+    await updateStorageManifest(
+      {
+        adapter,
+        dek: TEST_DEK,
+        layoutPrefix: LAYOUT_PREFIX,
+        ownerDevH: writerCtx.selfDevH,
+        settleMs: 0,
+      },
+      (m) => {
+        m.sync_participants = [...(m.sync_participants ?? []), lagDev];
+        m.devices.push({ devH: lagDev, last_seq: 0, acknowledged_seq: 0 });
+        return m;
+      },
+    );
+    const replica = createEmptySyncReplica();
+    await compactObjectStoreReplica(writerCtx, writerCtx.localState.load(), replica, { settleMs: 0 });
+    const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
+    const { loadStorageSnapshot, assertSnapshotCoversManifestKnowledge } = await import(
+      "../../lib/storage/storage-compaction.mjs"
+    );
+    const loadedSnap = await loadStorageSnapshot(writerCtx, 0);
+    assert.ok(loadedSnap);
+    delete loadedSnap.trusted_heads[lagDev];
+    assert.throws(
+      () => assertSnapshotCoversManifestKnowledge(manifest, loadedSnap),
+      /omits manifest-known device/i,
+    );
+  });
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`forged manifest ack does not GC over lagging device on ${backendLabel}`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      for (let i = 0; i < 3; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `gcf${i}`,
+            op: "context_create",
+            context_id: `ctx_gcf_${i}`,
+            payload: { context_id: `ctx_gcf_${i}`, metadata: { n: i } },
+          },
+        ]);
+      }
+      const replica = createEmptySyncReplica();
+      await compactObjectStoreReplica(writerCtx, writerLocal.load(), replica, { settleMs: 0 });
+      await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
+
+      const lagDev = deriveDevH(TEST_DEK, "99999999-9999-4999-8999-999999999999");
+      await updateStorageManifest(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          ownerDevH: writerCtx.selfDevH,
+          settleMs: 0,
+        },
+        (m) => {
+          m.sync_participants = [...(m.sync_participants ?? []), lagDev];
+          m.devices.push({ devH: lagDev, last_seq: 0, acknowledged_seq: 0 });
+          return m;
+        },
+      );
+
+      await updateStorageManifest(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          ownerDevH: writerCtx.selfDevH,
+          settleMs: 0,
+        },
+        (m) => {
+          for (const row of m.devices) {
+            row.acknowledged_cursor = { kind: "vector", v: { [writerCtx.selfDevH]: 2 } };
+            row.acknowledged_seq = 2;
+          }
+          return m;
+        },
+      );
+      const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
+      const gc = await gcLogSegmentsCoveredByCompaction(writerCtx, manifest);
+      assert.equal(gc.deleted, 0);
+      assert.ok((await adapter.get(logSegmentRelativePath(LAYOUT_PREFIX, writerCtx.selfDevH, 0)))?.body);
+    });
+  }
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`removed device re-bootstraps on ${backendLabel} instead of log_rollback`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      for (let i = 0; i < 4; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `rem${i}`,
+            op: "context_create",
+            context_id: `ctx_rem_${i}`,
+            payload: { context_id: `ctx_rem_${i}`, metadata: {} },
+          },
+        ]);
+      }
+      const replica = createEmptySyncReplica();
+      await compactObjectStoreReplica(writerCtx, writerLocal.load(), replica, { settleMs: 0 });
+      await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
+      await gcLogSegmentsCoveredByCompaction(writerCtx);
+
+      const lagUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      let lagLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-")), "object-store-sync-state.json");
+        lagLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-db-")), "daemon.db");
+        lagLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const lagCtx = ctx(adapter, lagUuid, lagLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(lagCtx, { limit: 500 });
+      await confirmObjectStorePullDeliveryForContext(lagCtx);
+
+      await removeManifestDevice(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          ownerDevH: writerCtx.selfDevH,
+          settleMs: 0,
+        },
+        lagCtx.selfDevH,
+      );
+
+      resetObjectStorePullVerifyGenerationForTests();
+      const page = await objectStorePullSyncChanges(lagCtx, { limit: 500 });
+      assert.ok(page.bootstrap_replica);
+      await confirmObjectStorePullDeliveryForContext(lagCtx);
+      const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
+      assert.ok(manifest.devices.some((row) => row.devH === lagCtx.selfDevH));
+      if (lagLocal.close) lagLocal.close();
+    });
+  }
+
+  it("persist null tombstone clears pending bootstrap on file roundtrip", async () => {
+    const state = createEmptyObjectStoreLocalSyncState();
+    state.pendingBootstrapReplica = sanitizeSyncReplicaForPersist(createEmptySyncReplica());
+    state.bootstrapReplicaPendingAck = true;
+    clearPendingBootstrapReplica(state);
+    const serialized = serializeObjectStoreLocalSyncState(state);
+    assert.equal(serialized.pendingBootstrapReplica, null);
+    const hydrated = hydrateObjectStoreLocalSyncState(serialized);
+    assert.equal(hydrated.pendingBootstrapReplica, undefined);
+    const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-tomb-")), "object-store-sync-state.json");
+    const fileBackend = createCliFileObjectStoreLocalState(filePath);
+    await fileBackend.save(state);
+    const loaded = fileBackend.load();
+    assert.equal(loaded.pendingBootstrapReplica, undefined);
+    assert.equal(loaded.bootstrapReplicaPendingAck, false);
   });
 
   it("detects deleted log prefix when no verified snapshot applies", async () => {

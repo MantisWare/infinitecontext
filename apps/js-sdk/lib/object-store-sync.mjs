@@ -57,6 +57,7 @@ import {
   loadStorageManifestForSync,
   registerManifestSyncParticipant,
 } from "./storage/storage-manifest.mjs";
+import { writeDeviceSyncAckFromState } from "./storage/storage-device-sync-ack.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -86,7 +87,7 @@ async function persistLocalState(ctx, state, options = {}) {
  */
 async function verifyFullTrustedChains(ctx, state) {
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
-    if (!trusted) continue;
+    if (!trusted || trusted.seq < 0) continue;
     await verifyDeviceLogThroughSeq(
       ctx,
       devH,
@@ -292,14 +293,42 @@ function hasVerifiedLocalSnapshot(state) {
   );
 }
 
+/** @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
+function resetLocalTrustForManifestReregister(state) {
+  const highWater = state.manifestGenerationHighWater ?? 0;
+  const empty = createEmptyObjectStoreLocalSyncState();
+  state.trustedHeads = empty.trustedHeads;
+  state.vectorCursor = empty.vectorCursor;
+  state.selfNextSeq = 0;
+  state.ledger = empty.ledger;
+  state.logListCursor = "";
+  state.appliedSnapshotEpoch = -1;
+  state.bootstrapReplicaPendingAck = false;
+  delete state.pendingBootstrapReplica;
+  delete state.snapshotCompactedThrough;
+  state.manifestGenerationHighWater = highWater;
+}
+
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+async function ensureRemovedDeviceCanRebootstrap(ctx, state, manifest) {
+  const self = ctx.selfDevH;
+  if (manifest.devices.some((row) => row.devH === self)) return;
+  const wasRemoved = (manifest.removed_devices ?? []).includes(self);
+  if (!wasRemoved) return;
+  resetLocalTrustForManifestReregister(state);
+  await bootstrapLocalStateFromLatestSnapshot(ctx, state);
+  await persistLocalState(ctx, state);
+}
+
 async function assertTrustedHeadIntegrity(ctx, state, devH, trusted) {
   await assertTrustedAnchorDigest(ctx, devH, trusted);
   if (trusted.seq === 0) return;
   const prevEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq - 1);
   if (!prevEnvelope) {
-    const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
-    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
-    if (Number.isFinite(floor) && floor >= 0 && trusted.seq - 1 <= floor) return;
     if (hasVerifiedLocalSnapshot(state)) {
       const snapFloor = Number(
         normalizeVectorSyncCursor(state.snapshotCompactedThrough).v?.[devH] ?? -1,
@@ -339,7 +368,7 @@ async function verifyOwnerTrustedPrefix(ctx, devH, trusted) {
 /** @param {ObjectStoreSyncContext} ctx @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
 async function assertTrustedAnchorsMatchRemote(ctx, state) {
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
-    if (!trusted) continue;
+    if (!trusted || trusted.seq < 0) continue;
     await assertTrustedHeadIntegrity(ctx, state, devH, trusted);
   }
 }
@@ -573,8 +602,10 @@ function resolvePullVectorCursor(state, since) {
 
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
-  const state = ctx.localState.load();
-  await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  let state = ctx.localState.load();
+  const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  await ensureRemovedDeviceCanRebootstrap(ctx, state, manifest);
+  state = ctx.localState.load();
   const pendingDelivery = Boolean(state.pendingBootstrapReplica && state.bootstrapReplicaPendingAck);
   if (!pendingDelivery) {
     await bootstrapLocalStateFromLatestSnapshot(ctx, state);
@@ -931,6 +962,18 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
 
   state.conflicts = [...state.conflicts, ...conflicts];
   await persistLocalState(ctx, state, { bestEffort: true });
+  if (applied.length > 0) {
+    await writeDeviceSyncAckFromState(
+      {
+        adapter: ctx.adapter,
+        dek: ctx.dek,
+        layoutPrefix: ctx.layoutPrefix,
+        ownerDevH: ctx.selfDevH,
+        deviceUuid: ctx.deviceUuid,
+      },
+      ctx.localState.load(),
+    );
+  }
 
   return {
     head_sequence: headSequenceForStatus(state),
