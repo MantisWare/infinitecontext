@@ -12,6 +12,11 @@ import { storagePathsReferToSameLocationOrUnresolvable } from "./storage-path-co
 import { createFolderStorageAdapter } from "./folder-adapter.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
+import {
+  listConflictAwareGenerationPaths,
+  readConflictAwareGenerationHighWater,
+} from "./folder-conflict-files.mjs";
+import { FS_GEN_HIGH_WATER_BASENAME } from "./filesystem-object-file.mjs";
 import { initFolderStorageRoot } from "./storage-init.mjs";
 import { StorageError } from "./errors.mjs";
 import { deriveDevH } from "./layout.mjs";
@@ -244,6 +249,91 @@ export function migrationDestinationMatchesRecordedFingerprints(destRoot, state)
 }
 
 /**
+ * @param {string[]} copiedRelativePaths
+ * @returns {Set<string>} store-root-relative key dirs (…/manifest.json.enc, …/devices/*.json.enc, …/log/…/*.enc)
+ */
+function migratedGenerationKeyDirRelPaths(copiedRelativePaths) {
+  /** @type {Set<string>} */
+  const dirs = new Set();
+  for (const rel of copiedRelativePaths) {
+    const norm = String(rel).replace(/\\/g, "/");
+    if (!norm.includes(FS_GEN_HIGH_WATER_BASENAME) && !norm.endsWith(".icgen")) {
+      continue;
+    }
+    const slash = norm.lastIndexOf("/");
+    if (slash <= 0) continue;
+    dirs.add(norm.slice(0, slash));
+  }
+  return dirs;
+}
+
+/**
+ * True when every partially copied `.icgen` key dir on the destination matches the source
+ * (no high-water / generation gap that would make merged manifest preflight fail).
+ *
+ * @param {string} sourceRoot
+ * @param {string} destRoot
+ * @param {Record<string, unknown>} state
+ */
+export function migrationCopiedKeyDirsReadyForMergedManifest(sourceRoot, destRoot, state) {
+  const copied = new Set(
+    Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
+  );
+  if (!copied.size) {
+    return false;
+  }
+  for (const dirRel of migratedGenerationKeyDirRelPaths([...copied])) {
+    const srcDir = path.join(sourceRoot, dirRel);
+    const destDir = path.join(destRoot, dirRel);
+    const destHw = readConflictAwareGenerationHighWater(destDir);
+    const srcGens = listConflictAwareGenerationPaths(srcDir);
+    if (destHw > 0) {
+      for (const { gen, path: absPath } of srcGens) {
+        if (gen > destHw) {
+          continue;
+        }
+        const rel = path.relative(sourceRoot, absPath).replace(/\\/g, "/");
+        if (!copied.has(rel) || !fs.existsSync(path.join(destRoot, rel))) {
+          return false;
+        }
+      }
+    } else {
+      for (const { path: absPath } of srcGens) {
+        const rel = path.relative(sourceRoot, absPath).replace(/\\/g, "/");
+        if (!copied.has(rel) || !fs.existsSync(path.join(destRoot, rel))) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * @param {{
+ *   scopeKey: string,
+ *   state: Record<string, unknown>,
+ *   destRoot: string,
+ *   dek: Uint8Array,
+ *   layoutPrefix: string,
+ *   allowRecord?: boolean,
+ * }} params
+ */
+async function tryRecordMigrationDestinationIdentityWhenReady(params) {
+  const sourceRoot = params.state.sourceRoot ? String(params.state.sourceRoot) : "";
+  if (!sourceRoot || params.state.destStoreIdentity) {
+    return;
+  }
+  if (!params.allowRecord) {
+    return;
+  }
+  if (!migrationCopiedKeyDirsReadyForMergedManifest(sourceRoot, params.destRoot, params.state)) {
+    return;
+  }
+  await recordAndAssertMigrationDestinationIdentity(params);
+}
+
+/**
  * @param {{
  *   destRoot: string,
  *   vaultId: string,
@@ -296,6 +386,32 @@ async function recordAndAssertMigrationDestinationIdentity(params) {
     params.destRoot,
     params.state,
   );
+  if ((params.state.copiedRelativePaths?.length ?? 0) > 0 && !oursByFingerprint) {
+    const copiedPaths = new Set(
+      Array.isArray(params.state.copiedRelativePaths) ? params.state.copiedRelativePaths.map(String) : [],
+    );
+    const objects = path.join(params.destRoot, OBJECTS);
+    const relFiles = fs.existsSync(objects)
+      ? listRegularFilesRecursive(objects).map((abs) => path.relative(params.destRoot, abs))
+      : [];
+    const foreignFile = relFiles.some((rel) => !copiedPaths.has(rel));
+    if (foreignFile) {
+      throw new StorageError(
+        "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`",
+        "invalid_argument",
+      );
+    }
+  }
+  const sourceRoot = params.state.sourceRoot ? String(params.state.sourceRoot) : "";
+  const keyDirsReady =
+    sourceRoot &&
+    migrationCopiedKeyDirsReadyForMergedManifest(sourceRoot, params.destRoot, params.state);
+  if (oursByFingerprint && !keyDirsReady) {
+    return;
+  }
+  if (!keyDirsReady && (params.state.copiedRelativePaths?.length ?? 0) > 0) {
+    return;
+  }
   const adapter = createFolderStorageAdapter({
     rootDir: params.destRoot,
     placeholderTimeoutMs: 80,
@@ -379,6 +495,13 @@ async function assertMigrationDestinationPrecheck(params) {
     await adapter.init();
     if (resume && resume.vaultId === params.vaultId) {
       if (resume.destStoreIdentity) {
+        const sourceRoot = resume.sourceRoot ? String(resume.sourceRoot) : "";
+        if (
+          sourceRoot &&
+          !migrationCopiedKeyDirsReadyForMergedManifest(sourceRoot, params.destRoot, resume)
+        ) {
+          return;
+        }
         const manifest = await loadFolderMergedManifest(adapter, params.dek, params.layoutPrefix);
         const identity = computeFolderStoreIdentity(manifest);
         if (resume.destStoreIdentity !== identity) {
@@ -823,6 +946,14 @@ export async function runStorageMigrateLocalToFolder(options) {
     state.copiedRelativePaths = [...copiedSet];
     state.fileFingerprints = fileFingerprints;
     saveStorageMigrateState(scopeKey, state);
+    await tryRecordMigrationDestinationIdentityWhenReady({
+      scopeKey,
+      state,
+      destRoot,
+      dek: options.dek,
+      layoutPrefix: options.layoutPrefix,
+      allowRecord: !state.destStoreIdentity,
+    });
   }
 
   const pending = allSrcFiles.some((abs) => !copiedSet.has(path.relative(sourceRoot, abs)));

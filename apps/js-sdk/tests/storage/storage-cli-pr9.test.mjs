@@ -262,6 +262,70 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       assert.equal(again.phase, "verified");
     });
 
+    it("records destStoreIdentity mid-copy before verified (multi-gen device tree)", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-id-mid-src-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-id-mid-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedMultiGenLocalVault(localRoot);
+      const sk = `${scopeKey}-mid-id`;
+      const partial = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 21,
+      });
+      assert.equal(partial.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state?.destStoreIdentity);
+      assert.match(String(state.destStoreIdentity), /^0:/);
+    });
+
+    it("N4: aborts when destination is swapped mid-copy after destStoreIdentity is recorded", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-src-"));
+      const localRootB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-srcb-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedMultiGenLocalVault(localRoot);
+      await seedLocalVault(localRootB, DEK, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      const sk = `${scopeKey}-swap-after-id`;
+      const first = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 21,
+      });
+      assert.equal(first.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state?.destStoreIdentity);
+
+      await assert.rejects(
+        () =>
+          runStorageMigrateLocalToFolder({
+            scopeKey: sk,
+            dek: DEK,
+            layoutPrefix: PREFIX,
+            sourceRoot: localRoot,
+            destRoot: folderRoot,
+            deviceUuid: DEVICE_A,
+            cliStatePath: syncStatePath,
+            testAfterDestIdentityCheck: () => {
+              copyObjectsTree(localRootB, folderRoot);
+            },
+          }),
+        (err) => err instanceof StorageError && /identity changed/i.test(String(err.message)),
+      );
+      const after = loadStorageMigrateState(sk);
+      assert.equal(after?.copiedRelativePaths?.length, state.copiedRelativePaths?.length);
+    });
+
     it("N4: aborts with 0 files written when destination is swapped mid-copy", async () => {
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-src-"));
       const localRootB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-srcb-"));
@@ -749,6 +813,8 @@ describe("Phase 4.5 storage CLI (#9)", () => {
   describe("storage CLI daemon.db trust wiring (B1)", () => {
     /** @type {string | undefined} */
     let priorDbFileEnv;
+    /** @type {string | undefined} */
+    let priorHomeEnv;
 
     afterEach(() => {
       clearStorageCliDepsForTests();
@@ -757,7 +823,17 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       } else {
         process.env.INFINITECONTEXT_DB_FILE = priorDbFileEnv;
       }
+      if (priorHomeEnv === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = priorHomeEnv;
+      }
     });
+
+    function isolateInfinitecontextHomeForCli() {
+      priorHomeEnv = process.env.HOME;
+      process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-home-"));
+    }
 
     it("real CLI doctor catches folder rollback using daemon.db trust only", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
@@ -787,6 +863,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
 
     it("real CLI migrate --apply-config succeeds after createLocalObjectStore open", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      isolateInfinitecontextHomeForCli();
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-local-"));
       const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-folder-"));
       initFolderStorageRoot(folderRoot);
@@ -830,6 +907,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
 
     it("real CLI doctor does not report heads_unverified when only daemon.db has trusted heads", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      isolateInfinitecontextHomeForCli();
       const daemonDbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-db-")), "daemon.db");
       process.env.INFINITECONTEXT_DB_FILE = daemonDbPath;
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-daemon-ok-"));
@@ -961,6 +1039,34 @@ async function seedLocalVault(localRoot, dek = DEK, deviceUuid = DEVICE_A) {
   );
   await adapter.close();
   return { syncStatePath: path.join(localRoot, "sync-state.json") };
+}
+
+async function seedMultiGenLocalVault(localRoot, pushCount = 8) {
+  const adapter = createFilesystemStorageAdapter({ rootDir: localRoot });
+  await adapter.init();
+  const syncStatePath = path.join(localRoot, "sync-state.json");
+  const localState = createCliFileObjectStoreLocalState(syncStatePath);
+  for (let i = 0; i < pushCount; i += 1) {
+    await objectStorePushSyncMutations(
+      {
+        adapter,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        selfDevH: deriveDevH(DEK, DEVICE_A),
+        deviceUuid: DEVICE_A,
+        localState,
+      },
+      [
+        {
+          client_id: generateClientNodeId(),
+          op: "context_create",
+          payload: { metadata: { tag: `migrate-seed-${i}` } },
+        },
+      ],
+    );
+  }
+  await adapter.close();
+  return { syncStatePath };
 }
 
 /**
