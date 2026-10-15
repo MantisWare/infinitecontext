@@ -15,6 +15,10 @@ import {
   writeExclusiveTempFile,
 } from "./filesystem-object-file.mjs";
 import { mapFsError, rejectSymlinkPath } from "./filesystem-paths.mjs";
+import {
+  listNonStaleConflictAwareGenerationPaths,
+  readConflictAwareGenerationHighWater,
+} from "./folder-conflict-files.mjs";
 
 const GEN_PAD = 12;
 const MAX_GENERATION = 999_999_999_999;
@@ -225,8 +229,13 @@ export function listGenerationPathsForKeyDir(keyDir) {
  * @param {string} canonicalKeyForAad canonical API key used for ciphertext AAD verification
  */
 export function loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, retriedAfterRelist = false) {
-  const highWater = readGenerationHighWater(keyDir);
-  const paths = listNonStaleGenerationPaths(keyDir, highWater);
+  const highWater = readConflictAwareGenerationHighWater(keyDir);
+  const paths = listNonStaleConflictAwareGenerationPaths(
+    keyDir,
+    canonicalKeyForAad,
+    rootDir,
+    highWater,
+  );
   if (paths.length === 0) {
     return null;
   }
@@ -254,8 +263,8 @@ export function loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyFor
 
 export function loadLatestObjectGeneration(rootDir, key, retriedAfterRelist = false) {
   const { canonical, keyDir } = objectKeyDirectory(rootDir, key);
-  const highWater = readGenerationHighWater(keyDir);
-  const paths = listNonStaleGenerationPaths(keyDir, highWater);
+  const highWater = readConflictAwareGenerationHighWater(keyDir);
+  const paths = listNonStaleConflictAwareGenerationPaths(keyDir, canonical, rootDir, highWater);
   if (paths.length === 0) {
     return null;
   }

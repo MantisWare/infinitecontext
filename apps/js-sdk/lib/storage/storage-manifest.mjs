@@ -2,6 +2,7 @@ import { manifestEncRelativePath } from "./layout.mjs";
 import { maxVectorSyncCursor, normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { storageReadModifyWrite, readLayoutObjectPlaintext } from "./storage-cas-rmw.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
+import { usesFolderMergedDeviceManifest } from "./storage-adapter-policy.mjs";
 
 export const MANIFEST_FORMAT = 1;
 const MANIFEST_PLAIN_FIELD = "ic_layout_manifest_v1";
@@ -97,25 +98,11 @@ export function wrapStorageManifestPlain(manifest) {
  * @param {string} layoutPrefix
  */
 export async function loadStorageManifest(adapter, dek, layoutPrefix) {
-  const key = manifestEncRelativePath(layoutPrefix);
-  if (
-    adapter.id === "folder" &&
-    typeof /** @type {{ listConflictGetCandidates?: Function }} */ (adapter).listConflictGetCandidates ===
-      "function"
-  ) {
-    const { folderAdapterGetManifestPlain } = await import("./folder-adapter.mjs");
-    const plain = await folderAdapterGetManifestPlain(
-      /** @type {import("./folder-adapter.mjs").createFolderStorageAdapter extends (...args: any) => infer R ? R : never} */ (
-        adapter
-      ),
-      dek,
-      key,
-    );
-    if (!plain) return createEmptyStorageManifest();
-    const manifest = parseStorageManifestPlain(plain);
-    sanitizeManifestDeviceAcks(manifest);
-    return manifest;
+  if (usesFolderMergedDeviceManifest(adapter)) {
+    const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    return loadFolderMergedManifest(adapter, dek, layoutPrefix);
   }
+  const key = manifestEncRelativePath(layoutPrefix);
   const row = await adapter.get(key);
   if (!row?.body) return createEmptyStorageManifest();
   const plain = readLayoutObjectPlaintext(dek, key, row.body);
@@ -210,6 +197,10 @@ export function assertManifestMonotonic(prev, next) {
 }
 
 export async function updateStorageManifest(ctx, mutate) {
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { updateFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    return updateFolderMergedManifest(ctx, mutate);
+  }
   const key = manifestEncRelativePath(ctx.layoutPrefix);
   return storageReadModifyWrite({
     adapter: ctx.adapter,

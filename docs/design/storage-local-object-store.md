@@ -2,7 +2,13 @@
 
 Phase 4.5 PR 5 wires the **filesystem `StorageAdapter`** (PR 4) to the **sealed sync transport** (PR 1) as the default **on-disk ciphertext object store** for dev, tests, and synced-folder backends (iCloud/Dropbox/Google Drive desktop paths).
 
-For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `folder` and `storage.folder.path` to the synced folder (see `createFolderObjectStore` / `createFolderStorageAdapter`). That backend wraps the same filesystem object store with **honest capabilities** (local create-only, no cross-device CAS), **conflict-copy ingestion**, and **iCloud placeholder** handling; shared objects use **lease locks** or manifest **LWW by `manifest_generation`** instead of remote CAS.
+For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `folder` and `storage.folder.path` to the synced folder (see `createFolderObjectStore` / `createFolderStorageAdapter`). That backend wraps the same filesystem object store with **honest capabilities** (local create-only, no cross-device CAS), **file-level conflict-copy ingestion** (including duplicate `.icgen` and high-water files), and **iCloud placeholder** handling.
+
+**Folder-specific policy:**
+
+- **Log segment GC is disabled** (segments are never deleted). Compaction may still write snapshots for bootstrap; backends without cross-device CAS behave the same.
+- **No shared manifest LWW.** Sync coordination uses **per-device** `devices/<devH>.json.enc` contributions (owner-writable). The effective manifest is a deterministic **union / max** merge across device files. Lease locks are not relied on for correctness on folder.
+- `infinitecontext config doctor` reports folder GC/manifest policy when `storage.backend=folder`.
 
 ## Layout
 

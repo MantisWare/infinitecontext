@@ -19,7 +19,6 @@ export {
   FOLDER_HONEST_CAPABILITIES,
   FOLDER_STORAGE_ADAPTER_ID,
   createFolderStorageAdapter,
-  folderAdapterGetManifestPlain,
 } from "./folder-adapter.mjs";
 export {
   FOLDER_STORAGE_ADAPTER_ID as FOLDER_OBJECT_STORE_BACKEND_ID,

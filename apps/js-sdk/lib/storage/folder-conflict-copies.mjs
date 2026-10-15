@@ -26,6 +26,11 @@ export function conflictSegmentToCanonical(segment) {
     return `${onedrive[1]}${onedrive[2]}`.toLowerCase();
   }
 
+  const noExtDup = /^(.+?) (\d+)$/i.exec(s);
+  if (noExtDup) {
+    return noExtDup[1].toLowerCase();
+  }
+
   return null;
 }
 

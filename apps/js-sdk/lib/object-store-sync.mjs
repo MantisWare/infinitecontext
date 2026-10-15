@@ -169,17 +169,27 @@ async function readLayoutSegmentEnvelope(ctx, key) {
     const row = await ctx.adapter.get(key);
     if (row) rows = [row];
   }
+  /** @type {import('./ic-crypto.mjs').AeadEnvelope[]} */
+  const envelopes = [];
   for (const row of rows) {
     if (!row?.body) continue;
     try {
       const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
       const envelope = plain[LAYOUT_SEGMENT_PLAIN_FIELD] ?? null;
-      if (envelope) return envelope;
+      if (envelope) envelopes.push(envelope);
     } catch {
       /* try next conflict copy */
     }
   }
-  return null;
+  if (!envelopes.length) return null;
+  const { layoutSegmentEnvelopeDigest } = await import("./storage/layout.mjs");
+  const digest = layoutSegmentEnvelopeDigest(envelopes[0]);
+  for (let i = 1; i < envelopes.length; i += 1) {
+    if (layoutSegmentEnvelopeDigest(envelopes[i]) !== digest) {
+      throw new ObjectStoreLogForkError(`Conflicting sync copies for log segment ${key}`);
+    }
+  }
+  return envelopes[0];
 }
 
 /**

@@ -11,8 +11,6 @@ import {
   physicalKeyDirsForCanonicalKey,
   scanCanonicalKeysFromObjectsTree,
 } from "./folder-on-disk-scan.mjs";
-import { parseStorageManifestPlain, wrapStorageManifestPlain } from "./storage-manifest.mjs";
-import { readLayoutObjectPlaintext } from "./storage-cas-rmw.mjs";
 import { STORAGE_CAPABILITIES, storageCapabilitySet } from "./types.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -28,6 +26,21 @@ export const FOLDER_HONEST_CAPABILITIES = storageCapabilitySet([
   STORAGE_CAPABILITIES.delete,
   STORAGE_CAPABILITIES.conditionalCreate,
 ]);
+
+/**
+ * @param {import("./types.mjs").StorageGetResult[]} rows
+ */
+function pickConsistentGetRow(rows) {
+  if (!rows.length) return null;
+  const first = rows[0];
+  const etag = first.etag ?? "";
+  for (let i = 1; i < rows.length; i += 1) {
+    if ((rows[i].etag ?? "") !== etag) {
+      throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
+    }
+  }
+  return first;
+}
 
 /**
  * @param {string} rootDir
@@ -72,11 +85,6 @@ async function materializePhysicalKeyDir(rootDir, row, placeholderTimeoutMs) {
  *   exposeInternalsForTests?: boolean,
  *   placeholderTimeoutMs?: number,
  * }} options
- * @returns {StorageAdapter & {
- *   inner: StorageAdapter,
- *   listConflictGetCandidates: (key: string) => Promise<import("./types.mjs").StorageGetResult[]>,
- *   exposeInternalsForTests?: () => import("./contract-suite.mjs").StorageBackingSnapshot,
- * }}
  */
 export function createFolderStorageAdapter(options) {
   const rootDir = path.resolve(options.rootDir);
@@ -107,7 +115,24 @@ export function createFolderStorageAdapter(options) {
         size: latest.header.size,
       });
     }
-    return found;
+    /** @type {Map<string, import("./types.mjs").StorageGetResult>} */
+    const unique = new Map();
+    for (const row of found) {
+      const tag = row.etag ?? "";
+      if (!unique.has(tag)) unique.set(tag, row);
+      else if (unique.get(tag)?.etag !== row.etag) {
+        throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
+      }
+    }
+    return [...unique.values()];
+  }
+
+  /**
+   * @param {string} key
+   */
+  async function loadContributionBodiesForKey(key) {
+    const rows = await listConflictGetCandidates(key);
+    return rows.map((row) => row.body);
   }
 
   /** @type {StorageAdapter} */
@@ -126,9 +151,7 @@ export function createFolderStorageAdapter(options) {
     },
 
     async get(key, options) {
-      const rows = await listConflictGetCandidates(key);
-      if (!rows.length) return null;
-      return rows[0] ?? null;
+      return pickConsistentGetRow(await listConflictGetCandidates(key));
     },
 
     async head(key, options) {
@@ -151,6 +174,9 @@ export function createFolderStorageAdapter(options) {
         throw new NotSupportedError(
           "Folder backend does not support cross-device conditional delete (use lease locks)",
         );
+      }
+      if (key.includes("/log/")) {
+        throw new NotSupportedError("Folder backend does not delete log segments (GC disabled)");
       }
       return inner.delete(key, options);
     },
@@ -185,33 +211,8 @@ export function createFolderStorageAdapter(options) {
   return Object.assign(adapter, {
     inner,
     listConflictGetCandidates,
+    loadContributionBodiesForKey,
     exposeInternalsForTests: inner.exposeInternalsForTests?.bind(inner),
     removeCorruptGeneration: inner.removeCorruptGeneration?.bind(inner),
   });
-}
-
-/**
- * Manifest LWW across conflict-copy keys (by manifest_generation).
- *
- * @param {ReturnType<typeof createFolderStorageAdapter>} adapter
- * @param {Uint8Array} dek
- * @param {string} objectKey
- */
-export async function folderAdapterGetManifestPlain(adapter, dek, objectKey) {
-  const candidates = await adapter.listConflictGetCandidates(objectKey);
-  if (!candidates.length) return null;
-  /** @type {{ generation: number, plain: unknown } | null} */
-  let best = null;
-  for (const row of candidates) {
-    try {
-      const plain = readLayoutObjectPlaintext(dek, objectKey, row.body);
-      const manifest = parseStorageManifestPlain(plain);
-      if (!best || manifest.manifest_generation > best.generation) {
-        best = { generation: manifest.manifest_generation, plain: wrapStorageManifestPlain(manifest) };
-      }
-    } catch {
-      /* ignore invalid copies */
-    }
-  }
-  return best?.plain ?? null;
 }

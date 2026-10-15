@@ -1,6 +1,8 @@
 import { deriveDevH, devHForObjectKey, deviceEncRelativePath } from "./layout.mjs";
 import { normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { readLayoutObjectPlaintext, storageReadModifyWrite } from "./storage-cas-rmw.mjs";
+import { usesFolderMergedDeviceManifest } from "./storage-adapter-policy.mjs";
+import { upsertManifestDeviceAck } from "./storage-manifest.mjs";
 
 export const DEVICE_SYNC_ACK_PLAIN_FIELD = "ic_layout_device_sync_v1";
 
@@ -56,6 +58,22 @@ export async function writeDeviceSyncAckFromState(ctx, state) {
     acknowledged_cursor: normalizeVectorSyncCursor(state.vectorCursor),
     updated_at: new Date().toISOString(),
   };
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { updateFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    await updateFolderMergedManifest(
+      {
+        adapter: ctx.adapter,
+        dek: ctx.dek,
+        layoutPrefix: ctx.layoutPrefix,
+        ownerDevH,
+      },
+      (manifest) => {
+        upsertManifestDeviceAck(manifest, ownerDevH, record.acknowledged_seq, record.acknowledged_cursor);
+        return manifest;
+      },
+    );
+    return record;
+  }
   const key = deviceEncRelativePath(ctx.layoutPrefix, ownerDevH);
   await storageReadModifyWrite({
     adapter: ctx.adapter,
@@ -82,6 +100,18 @@ export async function writeDeviceSyncAckFromState(ctx, state) {
  */
 export async function loadDeviceSyncAck(ctx, devH) {
   const canon = devH.toUpperCase();
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    const manifest = await loadFolderMergedManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+    const row = manifest.devices.find((d) => d.devH === canon);
+    if (!row) return null;
+    return {
+      dev: canon.toLowerCase(),
+      acknowledged_seq: row.acknowledged_seq,
+      acknowledged_cursor: row.acknowledged_cursor ?? normalizeVectorSyncCursor(0),
+      updated_at: row.last_seen_at ?? "",
+    };
+  }
   const key = deviceEncRelativePath(ctx.layoutPrefix, canon);
   const row = await ctx.adapter.get(key);
   if (!row?.body) return null;

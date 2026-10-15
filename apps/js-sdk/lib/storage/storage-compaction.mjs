@@ -569,6 +569,10 @@ export async function gcSafeSeqFloorForDevH(ctx, manifest, devH) {
 }
 
 export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
+  const { isObjectStoreLogGcEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreLogGcEnabled(ctx.adapter)) {
+    return { deleted: 0, keys: [], gcDisabled: true };
+  }
   const m = manifest ?? (await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix));
   const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
   let cursor = undefined;
