@@ -109,6 +109,7 @@ export function createS3StorageAdapter(options) {
     STORAGE_CAPABILITIES.delete,
   ];
   let capabilityList = [...baseCapabilities];
+  let casProbeActive = false;
 
   /** @param {string} logicalKey */
   const toObjectKey = (logicalKey) => {
@@ -142,7 +143,13 @@ export function createS3StorageAdapter(options) {
           throw createMapped ?? new StorageError("S3 bucket unavailable", "invalid_argument");
         }
       }
-      const casOk = await runCasProbe(adapter);
+      casProbeActive = true;
+      let casOk = false;
+      try {
+        casOk = await runCasProbe(adapter);
+      } finally {
+        casProbeActive = false;
+      }
       capabilityList = casOk
         ? [
             ...baseCapabilities,
@@ -195,7 +202,9 @@ export function createS3StorageAdapter(options) {
 
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
-      assertStoragePutPreconditionsSupported(adapter, putOptions);
+      if (!casProbeActive) {
+        assertStoragePutPreconditionsSupported(adapter, putOptions);
+      }
       const canonical = assertCanonicalStorageObjectKey(key);
       assertStorageCiphertext(body, { objectKey: canonical });
       scanStorageObjectForLeaks(canonical, body);
@@ -288,7 +297,9 @@ export function createS3StorageAdapter(options) {
 
     async delete(key, deleteOptions = {}) {
       assertNotAborted(deleteOptions.signal);
-      assertStorageDeletePreconditionsSupported(adapter, deleteOptions);
+      if (!casProbeActive) {
+        assertStorageDeletePreconditionsSupported(adapter, deleteOptions);
+      }
       const objectKey = toObjectKey(key);
       if (deleteOptions.ifMatch !== undefined) {
         const current = await adapter.head(key, deleteOptions);
