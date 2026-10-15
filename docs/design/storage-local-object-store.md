@@ -2,6 +2,8 @@
 
 Phase 4.5 PR 5 wires the **filesystem `StorageAdapter`** (PR 4) to the **sealed sync transport** (PR 1) as the default **on-disk ciphertext object store** for dev, tests, and synced-folder backends (iCloud/Dropbox/Google Drive desktop paths).
 
+For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `folder` and `storage.folder.path` to the synced folder (see `createFolderObjectStore` / `createFolderStorageAdapter`). That backend wraps the same filesystem object store with **honest capabilities** (local create-only, no cross-device CAS), **conflict-copy ingestion**, and **iCloud placeholder** handling; shared objects use **lease locks** or manifest **LWW by `manifest_generation`** instead of remote CAS.
+
 ## Layout
 
 | Path | Purpose |

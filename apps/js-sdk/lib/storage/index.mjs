@@ -16,6 +16,17 @@ export { encryptVaultPlaintextForStoragePut } from "./encrypt-storage-object.mjs
 export { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 export { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 export {
+  FOLDER_HONEST_CAPABILITIES,
+  FOLDER_STORAGE_ADAPTER_ID,
+  createFolderStorageAdapter,
+  folderAdapterGetManifestPlain,
+} from "./folder-adapter.mjs";
+export {
+  FOLDER_STORAGE_ADAPTER_ID as FOLDER_OBJECT_STORE_BACKEND_ID,
+  createFolderObjectStore,
+  resolveFolderObjectStoreRootDir,
+} from "./folder-object-store.mjs";
+export {
   LOCAL_OBJECT_STORE_BACKEND_ID,
   createLocalObjectStore,
   defaultLocalObjectStoreRootDir,

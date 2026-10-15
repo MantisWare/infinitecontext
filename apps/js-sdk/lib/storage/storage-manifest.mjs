@@ -98,6 +98,24 @@ export function wrapStorageManifestPlain(manifest) {
  */
 export async function loadStorageManifest(adapter, dek, layoutPrefix) {
   const key = manifestEncRelativePath(layoutPrefix);
+  if (
+    adapter.id === "folder" &&
+    typeof /** @type {{ listConflictGetCandidates?: Function }} */ (adapter).listConflictGetCandidates ===
+      "function"
+  ) {
+    const { folderAdapterGetManifestPlain } = await import("./folder-adapter.mjs");
+    const plain = await folderAdapterGetManifestPlain(
+      /** @type {import("./folder-adapter.mjs").createFolderStorageAdapter extends (...args: any) => infer R ? R : never} */ (
+        adapter
+      ),
+      dek,
+      key,
+    );
+    if (!plain) return createEmptyStorageManifest();
+    const manifest = parseStorageManifestPlain(plain);
+    sanitizeManifestDeviceAcks(manifest);
+    return manifest;
+  }
   const row = await adapter.get(key);
   if (!row?.body) return createEmptyStorageManifest();
   const plain = readLayoutObjectPlaintext(dek, key, row.body);

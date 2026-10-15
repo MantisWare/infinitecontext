@@ -219,6 +219,39 @@ export function listGenerationPathsForKeyDir(keyDir) {
  * @param {boolean} [retriedAfterRelist]
  * @returns {{ gen: number, header: import("./filesystem-object-file.mjs").StoredObjectHeader, body: Uint8Array } | null}
  */
+/**
+ * @param {string} rootDir
+ * @param {string} keyDir absolute object directory (may use conflict-copy segment names on disk)
+ * @param {string} canonicalKeyForAad canonical API key used for ciphertext AAD verification
+ */
+export function loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, retriedAfterRelist = false) {
+  const highWater = readGenerationHighWater(keyDir);
+  const paths = listNonStaleGenerationPaths(keyDir, highWater);
+  if (paths.length === 0) {
+    return null;
+  }
+  const highest = paths[0];
+  try {
+    const decoded = readObjectFileNoFollow(highest.path, canonicalKeyForAad, rootDir);
+    if (!decoded) {
+      if (!retriedAfterRelist) {
+        return loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, true);
+      }
+      throw new StorageError(`Storage object generation missing at ${highest.path}`, "not_found");
+    }
+    return { gen: highest.gen, header: decoded.header, body: decoded.body };
+  } catch (error) {
+    if (
+      !retriedAfterRelist &&
+      error instanceof StorageError &&
+      (error.code === "not_found" || error.code === "corrupt_storage")
+    ) {
+      return loadLatestObjectGenerationAtDir(rootDir, keyDir, canonicalKeyForAad, true);
+    }
+    throw error;
+  }
+}
+
 export function loadLatestObjectGeneration(rootDir, key, retriedAfterRelist = false) {
   const { canonical, keyDir } = objectKeyDirectory(rootDir, key);
   const highWater = readGenerationHighWater(keyDir);

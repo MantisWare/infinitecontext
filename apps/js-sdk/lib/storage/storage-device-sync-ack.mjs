@@ -1,4 +1,4 @@
-import { deriveDevH, deviceEncRelativePath } from "./layout.mjs";
+import { deriveDevH, devHForObjectKey, deviceEncRelativePath } from "./layout.mjs";
 import { normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { readLayoutObjectPlaintext, storageReadModifyWrite } from "./storage-cas-rmw.mjs";
 
@@ -62,7 +62,7 @@ export async function writeDeviceSyncAckFromState(ctx, state) {
     dek: ctx.dek,
     objectKey: key,
     layoutPrefix: ctx.layoutPrefix,
-    lockName: `device-sync-${ownerDevH}`,
+    lockName: `device-sync-${devHForObjectKey(ownerDevH)}`,
     ownerDevH,
     settleMs: 0,
     mutate: () => ({

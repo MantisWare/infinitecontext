@@ -112,8 +112,10 @@ export async function storageReadModifyWrite(params) {
       const body = sealLayoutObjectPlaintext(params.dek, params.objectKey, plaintext);
       if (!row) {
         await params.adapter.put(params.objectKey, body, { ifNoneMatch: "*" });
-      } else {
+      } else if (adapterSupportsCas(params.adapter)) {
         await params.adapter.put(params.objectKey, body, { ifMatch: row.etag });
+      } else {
+        await params.adapter.put(params.objectKey, body);
       }
       await verifyLeaseLockAfterWrite({
         adapter: params.adapter,

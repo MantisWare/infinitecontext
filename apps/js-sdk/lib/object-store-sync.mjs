@@ -158,10 +158,28 @@ function parseLogSegmentKey(key) {
  * @param {string} key
  */
 async function readLayoutSegmentEnvelope(ctx, key) {
-  const row = await ctx.adapter.get(key);
-  if (!row?.body) return null;
-  const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
-  return plain[LAYOUT_SEGMENT_PLAIN_FIELD] ?? null;
+  /** @type {import('./storage/types.mjs').StorageGetResult[]} */
+  let rows = [];
+  const conflictAware = /** @type {{ listConflictGetCandidates?: (k: string) => Promise<import('./storage/types.mjs').StorageGetResult[]> }} */ (
+    ctx.adapter
+  ).listConflictGetCandidates;
+  if (typeof conflictAware === "function") {
+    rows = await conflictAware.call(ctx.adapter, key);
+  } else {
+    const row = await ctx.adapter.get(key);
+    if (row) rows = [row];
+  }
+  for (const row of rows) {
+    if (!row?.body) continue;
+    try {
+      const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
+      const envelope = plain[LAYOUT_SEGMENT_PLAIN_FIELD] ?? null;
+      if (envelope) return envelope;
+    } catch {
+      /* try next conflict copy */
+    }
+  }
+  return null;
 }
 
 /**

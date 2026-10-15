@@ -61,7 +61,7 @@ function expandHome(filePath) {
 /**
  * @param {string} rootPath
  */
-function resolveConfiguredStoreRoot(rootPath) {
+export function resolveConfiguredStoreRoot(rootPath) {
   const trimmed = String(rootPath ?? "").trim();
   if (!trimmed) {
     throw new StorageError("Local object store root must not be empty", "invalid_argument");

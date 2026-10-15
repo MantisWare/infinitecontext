@@ -23,6 +23,7 @@ import {
 } from "../../lib/object-store-merge.mjs";
 import { normalizeVectorSyncCursor } from "../../lib/sync-cursor.mjs";
 import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-adapter.mjs";
+import { createFolderStorageAdapter } from "../../lib/storage/folder-adapter.mjs";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 import { ObjectStoreSyncTransport } from "../../lib/storage/object-store-sync-transport.mjs";
 
@@ -161,6 +162,13 @@ registerTransportSuite("memory", async () => {
 registerTransportSuite("filesystem", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-os-sync-"));
   const adapter = createFilesystemStorageAdapter({ rootDir: root, id: "fs-test" });
+  await adapter.init();
+  return adapter;
+});
+
+registerTransportSuite("folder", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-folder-sync-"));
+  const adapter = createFolderStorageAdapter({ rootDir: root, placeholderTimeoutMs: 200 });
   await adapter.init();
   return adapter;
 });
