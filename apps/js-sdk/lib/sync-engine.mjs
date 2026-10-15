@@ -4,17 +4,16 @@ import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
-import { compareHlc, HLC_MAX_SKEW_MS, normalizeMutationHlc } from "./object-store-hlc.mjs";
 import { snapshotVectorCursor } from "./object-store-delete-stale.mjs";
 import {
   createCliFileObjectStoreLocalState,
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
-import {
-  recordMessageMutationLog,
-  recomputeReplicaConflictsForMessage,
-} from "./object-store-replica-conflicts.mjs";
+import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
+import { hydrateSyncReplica, sanitizeSyncReplicaForPersist } from "./sync-replica-state.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
+
+export { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
 
@@ -184,9 +183,7 @@ export async function flushSyncOutbox({ baseUrl, log, transport } = {}) {
 }
 
 function readReplica() {
-  const replica = readJsonFile(SYNC_REPLICA_FILE, { contexts: {}, messages: {} });
-  if (!replica.sync_conflicts) replica.sync_conflicts = [];
-  return replica;
+  return hydrateSyncReplica(readJsonFile(SYNC_REPLICA_FILE, null));
 }
 
 /** Vector cursor from dedicated object-store sync state (not sync-cli-state.json). */
@@ -201,169 +198,27 @@ export function snapshotObjectStoreBaseVector() {
 }
 
 function writeReplica(replica) {
-  writeJsonFile(SYNC_REPLICA_FILE, replica);
+  writeJsonFile(SYNC_REPLICA_FILE, sanitizeSyncReplicaForPersist(replica));
 }
 
 /** Lightweight on-disk replica for `infinitecontext sync pull` (no daemon.db). */
 export function createCliSyncStore() {
   return {
+    loadSyncReplica() {
+      return readReplica();
+    },
+    flushSyncReplica(replica) {
+      writeReplica(replica);
+    },
     applySyncChange(change) {
-      applySyncChangeToReplica(readReplica(), change, () => {});
+      const replica = readReplica();
+      applySyncChangeToReplica(replica, change, () => {});
+      writeReplica(replica);
     },
     flushReplica(replica) {
       writeReplica(replica);
     },
   };
-}
-
-function changeHlcTuple(change) {
-  const devH = change.source_dev_h ? String(change.source_dev_h) : "UNKNOWN";
-  const index = Number(change.source_index ?? 0);
-  return normalizeMutationHlc(change.hlc, devH, index);
-}
-
-/** @param {Record<string, unknown> | undefined} existing @param {import('./object-store-hlc.mjs').HlcTuple} incoming */
-function shouldApplyLww(existing, incoming) {
-  if (!existing || typeof existing !== "object" || !existing._hlc) return true;
-  return compareHlc(/** @type {{ _hlc: import('./object-store-hlc.mjs').HlcTuple }} */ (existing)._hlc, incoming) <= 0;
-}
-
-export function applySyncChangeToReplica(replica, change, persist) {
-  if (!change || typeof change !== "object") return;
-  const op = String(change.op ?? "");
-  const contextId = change.context_id ? String(change.context_id) : "";
-  const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
-  const sequence = Number(change.sequence ?? 0);
-  const hlcTuple = change.hlc ? changeHlcTuple(change) : null;
-  if (hlcTuple && hlcTuple.wall_ms > Date.now() + HLC_MAX_SKEW_MS) {
-    return;
-  }
-
-  if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
-    const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
-    const id = String(payload.context_id ?? contextId ?? "");
-    if (id) {
-      const existing = replica.contexts[id];
-      if (!hlcTuple || shouldApplyLww(existing, hlcTuple)) {
-        replica.contexts[id] = { metadata: meta, sequence, deleted: false, _hlc: hlcTuple ?? undefined };
-      }
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "context_delete") {
-    const id = String(payload.context_id ?? contextId ?? "");
-    if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
-    persist(replica);
-    return;
-  }
-
-  if (op === "contexts_delete_many") {
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    for (const row of results) {
-      if (row?.deleted !== true) continue;
-      const id = String(row?.id ?? row?.context_id ?? "");
-      if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
-    }
-    persist(replica);
-    return;
-  }
-
-  const changeSource = {
-    devH: change.source_dev_h ? String(change.source_dev_h) : "",
-    seq: Number(change.source_seq ?? 0),
-    index: Number(change.source_index ?? 0),
-  };
-
-  if (op === "message_append" || op === "message_update") {
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-      if (!clientNodeId) continue;
-      const key = String(clientNodeId);
-      const existing = replica.messages[key];
-      const ctxId = String(payload.context_id ?? contextId);
-
-      if (!hlcTuple) {
-        replica.messages[key] = {
-          context_id: ctxId,
-          payload: row,
-          sequence,
-          op,
-        };
-        continue;
-      }
-
-      recordMessageMutationLog(replica, key, {
-        context_id: ctxId,
-        op,
-        hlc: hlcTuple,
-        data: row,
-        devH: changeSource.devH,
-        seq: changeSource.seq,
-        index: changeSource.index,
-      });
-
-      if (existing?.tombstone) {
-        recomputeReplicaConflictsForMessage(replica, key);
-        continue;
-      }
-
-      if (existing?._hlc && !shouldApplyLww(existing, hlcTuple)) {
-        recomputeReplicaConflictsForMessage(replica, key);
-        continue;
-      }
-
-      replica.messages[key] = {
-        context_id: ctxId,
-        payload: row,
-        sequence,
-        op,
-        tombstone: false,
-        _hlc: hlcTuple,
-        _source: { ...changeSource },
-      };
-      recomputeReplicaConflictsForMessage(replica, key);
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "message_delete") {
-    const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
-    const deleteBase = change.base_vector ?? payload.base_vector ?? null;
-    for (const id of deletedIds) {
-      if (!id) continue;
-      const key = String(id);
-      const ctxId = String(payload.context_id ?? contextId);
-      if (!hlcTuple) {
-        delete replica.messages[key];
-        continue;
-      }
-      recordMessageMutationLog(replica, key, {
-        context_id: ctxId,
-        op: "message_delete",
-        hlc: hlcTuple,
-        data: null,
-        devH: changeSource.devH,
-        seq: changeSource.seq,
-        index: changeSource.index,
-        delete_base_vector: deleteBase,
-      });
-      replica.messages[key] = {
-        context_id: ctxId,
-        tombstone: true,
-        sequence,
-        deleted_at: change.created_at ?? new Date().toISOString(),
-        _hlc: hlcTuple,
-        _source: { ...changeSource },
-      };
-      recomputeReplicaConflictsForMessage(replica, key);
-    }
-    persist(replica);
-  }
 }
 
 export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor, transport } = {}) {
@@ -383,18 +238,25 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
   let hasMore = true;
   let lastPage = null;
 
-  const replica = store?.flushReplica ? readReplica() : null;
+  const replicaMode = store?.loadSyncReplica && store?.flushSyncReplica;
+  const legacyReplicaMode = !replicaMode && store?.flushReplica;
+  const replica = replicaMode
+    ? store.loadSyncReplica()
+    : legacyReplicaMode
+      ? readReplica()
+      : null;
   const persistReplica = () => {
-    if (replica && store?.flushReplica) store.flushReplica(replica);
+    if (replica && replicaMode) store.flushSyncReplica(replica);
+    else if (replica && legacyReplicaMode) store.flushReplica(replica);
   };
 
   while (hasMore) {
     lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
-      if (store?.applySyncChange) {
+      if (store?.applySyncChange || replica) {
         if (replica) {
           applySyncChangeToReplica(replica, change, () => {});
-        } else {
+        } else if (store?.applySyncChange) {
           store.applySyncChange(change);
         }
       }

@@ -348,9 +348,11 @@ function hostedPayloadFromMutation(item) {
         .filter(Boolean);
     }
   }
-  if (m.op === "message_delete") {
-    const ids = payload.ids;
-    payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
+  if (m.op === "message_delete" || m.op === "message_update") {
+    if (m.op === "message_delete") {
+      const ids = payload.ids;
+      payload.deleted_client_ids = Array.isArray(ids) ? ids.map(String) : ids !== undefined ? [String(ids)] : [];
+    }
     const baseVector = m.base_vector ?? payload.base_vector;
     if (baseVector) payload.base_vector = baseVector;
   }
@@ -616,7 +618,7 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
       source_seq: item.seq,
       source_index: item.index,
     };
-    if (m.op === "message_delete") {
+    if (m.op === "message_delete" || m.op === "message_update") {
       const baseVector = m.base_vector ?? payload.base_vector;
       if (baseVector) change.base_vector = baseVector;
     }
@@ -745,10 +747,17 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   if (accepted.length > 0) {
     const stamped = accepted.map((m) => {
       const hlcTuple = nextLocalMutationHlc(state, ctx.selfDevH);
-      return {
+      /** @type {Record<string, unknown>} */
+      const out = {
         ...m,
         hlc: serializeMutationHlc(hlcTuple),
       };
+      if (m.op === "message_update" && !m.base_vector && !m.payload?.base_vector) {
+        const base_vector = snapshotVectorCursor(state.vectorCursor);
+        out.base_vector = base_vector;
+        out.payload = { ...(m.payload && typeof m.payload === "object" ? m.payload : {}), base_vector };
+      }
+      return out;
     });
     let written = false;
     while (!written) {

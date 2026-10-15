@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -9,6 +10,11 @@ import {
 } from "#sync-cursor";
 
 import { expandHome } from "./utils.mjs";
+
+const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
+const { createDaemonSyncReplicaPersistence, isObjectStoreSyncChange } = await import(
+  `${sdkLib}/sync-replica-daemon-store.mjs`
+);
 
 const DEFAULT_DB_PATH = "~/.infinitecontext/daemon.db";
 
@@ -71,6 +77,12 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       context_id TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       sequence INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_replica_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      replica_json TEXT NOT NULL DEFAULT '{}',
       updated_at INTEGER DEFAULT (unixepoch())
     );
   `);
@@ -139,7 +151,19 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     deleteSyncMessage: db.prepare(`
       DELETE FROM sync_message_nodes WHERE client_node_id = ?
     `),
+    getSyncReplica: db.prepare(`
+      SELECT replica_json FROM sync_replica_state WHERE id = 1 LIMIT 1
+    `),
+    upsertSyncReplica: db.prepare(`
+      INSERT INTO sync_replica_state (id, replica_json, updated_at)
+      VALUES (1, ?, unixepoch())
+      ON CONFLICT(id) DO UPDATE SET
+        replica_json = excluded.replica_json,
+        updated_at = unixepoch()
+    `),
   };
+
+  const replicaPersistence = createDaemonSyncReplicaPersistence(db, stmt);
 
   // manual transaction wrapper (node:sqlite has no .transaction() helper)
   function markEventSeenTxn(eventHash, ttlSeconds) {
@@ -188,6 +212,68 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
 
   migrateDaemonPullCursor();
 
+  function applyHostedSyncChange(change) {
+    if (!change || typeof change !== "object") return;
+    const op = String(change.op ?? "");
+    const contextId = change.context_id ? String(change.context_id) : "";
+    const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
+    const sequence = parseNumber(change.sequence, 0);
+
+    if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
+      const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
+      const id = String(payload.context_id ?? contextId ?? "");
+      if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify(meta));
+      return;
+    }
+
+    if (op === "context_delete") {
+      const id = String(payload.context_id ?? contextId ?? "");
+      if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
+      return;
+    }
+
+    if (op === "contexts_delete_many") {
+      const results = Array.isArray(payload.results) ? payload.results : [];
+      for (const row of results) {
+        if (row?.deleted !== true) continue;
+        const id = String(row?.id ?? row?.context_id ?? "");
+        if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
+      }
+      return;
+    }
+
+    if (op === "message_delete") {
+      const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
+      for (const id of deletedIds) {
+        if (id) stmt.deleteSyncMessage.run(String(id));
+      }
+      return;
+    }
+
+    if (op === "message_append" || op === "message_update") {
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+      for (const row of rows) {
+        if (!row || typeof row !== "object") continue;
+        const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
+        if (!clientNodeId) continue;
+        stmt.upsertSyncMessage.run(
+          String(clientNodeId),
+          String(payload.context_id ?? contextId),
+          JSON.stringify(row),
+          sequence,
+        );
+      }
+      return;
+    }
+
+    if (op === "prune_plaintext_versions") {
+      const id = String(payload.context_id ?? contextId ?? "");
+      if (id) {
+        stmt.upsertSyncContextMeta.run(id, JSON.stringify({ pruned_plaintext: true, ...(payload ?? {}) }));
+      }
+    }
+  }
+
   return {
     dbPath: resolvedPath,
     markEventSeen(eventHash, ttlSeconds) {
@@ -229,61 +315,21 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     setContextCache(cacheKey, contextId) {
       stmt.setContextCache.run(String(cacheKey ?? ""), String(contextId ?? ""));
     },
+    loadSyncReplica() {
+      return replicaPersistence.loadSyncReplica();
+    },
+    flushSyncReplica(replica) {
+      replicaPersistence.flushSyncReplica(replica);
+    },
     applySyncChange(change) {
       if (!change || typeof change !== "object") return;
-      const op = String(change.op ?? "");
-      const contextId = change.context_id ? String(change.context_id) : "";
-      const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
-      const sequence = parseNumber(change.sequence, 0);
-
-      if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
-        const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
-        const id = String(payload.context_id ?? contextId ?? "");
-        if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify(meta));
+      if (isObjectStoreSyncChange(change)) {
+        replicaPersistence.applyObjectStoreSyncChange(change, (hostedChange) => {
+          applyHostedSyncChange(hostedChange);
+        });
         return;
       }
-
-      if (op === "context_delete") {
-        const id = String(payload.context_id ?? contextId ?? "");
-        if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
-        return;
-      }
-
-      if (op === "contexts_delete_many") {
-        const results = Array.isArray(payload.results) ? payload.results : [];
-        for (const row of results) {
-          if (row?.deleted !== true) continue;
-          const id = String(row?.id ?? row?.context_id ?? "");
-          if (id) stmt.upsertSyncContextMeta.run(id, JSON.stringify({ deleted: true }));
-        }
-        return;
-      }
-
-      if (op === "message_delete") {
-        const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
-        for (const id of deletedIds) {
-          if (id) stmt.deleteSyncMessage.run(String(id));
-        }
-        return;
-      }
-
-      if (op === "message_append" || op === "message_update") {
-        const rows = Array.isArray(payload.data) ? payload.data : [];
-        for (const row of rows) {
-          if (!row || typeof row !== "object") continue;
-          const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-          if (!clientNodeId) continue;
-          stmt.upsertSyncMessage.run(String(clientNodeId), String(payload.context_id ?? contextId), JSON.stringify(row), sequence);
-        }
-        return;
-      }
-
-      if (op === "prune_plaintext_versions") {
-        const id = String(payload.context_id ?? contextId ?? "");
-        if (id) {
-          stmt.upsertSyncContextMeta.run(id, JSON.stringify({ pruned_plaintext: true, ...(payload ?? {}) }));
-        }
-      }
+      applyHostedSyncChange(change);
     },
     close() {
       db.close();

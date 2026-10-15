@@ -11,10 +11,10 @@ import { normalizeVectorSyncCursor } from "./sync-cursor.mjs";
  * @property {number} seq
  * @property {number} index
  * @property {import('./sync-cursor.mjs').VectorSyncCursor | Record<string, unknown> | null} [delete_base_vector]
+ * @property {import('./sync-cursor.mjs').VectorSyncCursor | Record<string, unknown> | null} [update_base_vector]
  */
 
 /**
- * Idempotent conflict id: (messageId, loser devH, loser seq, index) — kind is not part of the id.
  * @param {string} messageId
  * @param {string} loserDevH
  * @param {number} loserSeq
@@ -25,6 +25,11 @@ export function replicaConflictId(messageId, loserDevH, loserSeq, loserIndex) {
   const seq = Number.isSafeInteger(loserSeq) ? loserSeq : 0;
   const index = Number.isSafeInteger(loserIndex) ? loserIndex : 0;
   return `${messageId}:${devH}:${seq}:${index}`;
+}
+
+/** @param {string} messageId @param {MessageMutationLogEntry} entry */
+function mutationLogKey(messageId, entry) {
+  return `${messageId}:${entry.devH}:${entry.seq}:${entry.index}`;
 }
 
 /**
@@ -110,22 +115,28 @@ export function isMessageSourceCoveredByVectorBase(source, planBaseVector) {
 }
 
 /**
- * Upsert a loser conflict; row fields derived from loser coords + final replica state.
- * @param {Record<string, unknown>} replica
- * @param {object} input
- */
-/**
  * @param {Record<string, unknown>} replica
  * @param {string} messageId
  * @param {MessageMutationLogEntry} entry
  */
 export function recordMessageMutationLog(replica, messageId, entry) {
   if (!replica._message_mutations) replica._message_mutations = {};
+  /** @type {Record<string, Set<string>>} */
+  const index =
+    replica._mutation_log_ids && typeof replica._mutation_log_ids === "object"
+      ? /** @type {Record<string, Set<string>>} */ (replica._mutation_log_ids)
+      : (replica._mutation_log_ids = {});
+  const key = mutationLogKey(messageId, entry);
+  let bucket = index[messageId];
+  if (!bucket) {
+    bucket = new Set();
+    index[messageId] = bucket;
+  }
+  if (bucket.has(key)) return;
+  bucket.add(key);
   const list = /** @type {MessageMutationLogEntry[]} */ (
     replica._message_mutations[messageId] ?? (replica._message_mutations[messageId] = [])
   );
-  const id = replicaConflictId(messageId, entry.devH, entry.seq, entry.index);
-  if (list.some((m) => replicaConflictId(messageId, m.devH, m.seq, m.index) === id)) return;
   list.push(entry);
 }
 
@@ -135,7 +146,6 @@ function compareLogEntry(a, b) {
 }
 
 /**
- * Rebuild conflict rows for one message from its mutation log + final replica state.
  * @param {Record<string, unknown>} replica
  * @param {string} messageId
  */
@@ -166,6 +176,13 @@ export function recomputeReplicaConflictsForMessage(replica, messageId) {
       continue;
     }
     if (!winner) {
+      winner = entry;
+      continue;
+    }
+    if (
+      entry.update_base_vector &&
+      isMessageSourceCoveredByVectorBase({ devH: winner.devH, seq: winner.seq }, entry.update_base_vector)
+    ) {
       winner = entry;
       continue;
     }
@@ -210,17 +227,21 @@ export function upsertReplicaLoserConflict(replica, input) {
     loserHlcRaw && typeof loserHlcRaw === "object"
       ? serializeMutationHlc(/** @type {import('./object-store-hlc.mjs').HlcTuple} */ (loserHlcRaw))
       : loserHlcRaw;
+  if (!Array.isArray(replica.sync_conflicts)) replica.sync_conflicts = [];
+  const idx = replica.sync_conflicts.findIndex((row) => row.id === id);
+  const priorData =
+    idx >= 0 && replica.sync_conflicts[idx]?.right_payload && typeof replica.sync_conflicts[idx].right_payload === "object"
+      ? replica.sync_conflicts[idx].right_payload.data
+      : null;
   /** @type {Record<string, unknown>} */
   const right_payload = {
     op,
     hlc: loserHlc,
-    data: input.data ?? null,
+    data: input.data ?? priorData ?? null,
     source_dev_h: loserDevH,
     source_seq: loserSeq,
     source_index: loserIndex,
   };
-  if (!Array.isArray(replica.sync_conflicts)) replica.sync_conflicts = [];
-  const idx = replica.sync_conflicts.findIndex((row) => row.id === id);
   /** @type {Record<string, unknown>} */
   const row =
     idx >= 0
