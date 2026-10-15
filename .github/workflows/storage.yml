@@ -44,24 +44,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Ensure MinIO test bucket exists
-        run: |
-          node --input-type=module -e "
-          import { S3Client, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
-          const bucket = process.env.INFINITECONTEXT_S3_TEST_BUCKET;
-          const client = new S3Client({
-            region: process.env.AWS_REGION,
-            endpoint: process.env.AWS_ENDPOINT_URL,
-            forcePathStyle: true,
-          });
-          try {
-            await client.send(new HeadBucketCommand({ Bucket: bucket }));
-          } catch {
-            await client.send(new CreateBucketCommand({ Bucket: bucket }));
-          }
-          client.destroy();
-          "
-
       - name: Syntax check storage modules
         run: |
           node --check apps/js-sdk/lib/storage/ciphertext.mjs
