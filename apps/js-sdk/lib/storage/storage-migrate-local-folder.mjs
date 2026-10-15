@@ -249,6 +249,113 @@ export function migrationDestinationMatchesRecordedFingerprints(destRoot, state)
 }
 
 /**
+ * @param {string} sourceRoot
+ * @param {string} destRoot
+ * @param {Record<string, unknown>} state
+ * @returns {number} count of newly adopted paths
+ */
+export function adoptSourceIdenticalMigrationDestinationFiles(sourceRoot, destRoot, state) {
+  const copiedPaths = new Set(
+    Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
+  );
+  /** @type {Record<string, { size: number, hash: string }>} */
+  const fingerprints =
+    state.fileFingerprints && typeof state.fileFingerprints === "object"
+      ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
+      : {};
+  const objects = path.join(destRoot, OBJECTS);
+  if (!fs.existsSync(objects)) {
+    return 0;
+  }
+  let adopted = 0;
+  for (const abs of listRegularFilesRecursive(objects)) {
+    const rel = path.relative(destRoot, abs).replace(/\\/g, "/");
+    if (copiedPaths.has(rel)) {
+      continue;
+    }
+    const srcPath = path.join(sourceRoot, rel);
+    if (!fs.existsSync(srcPath)) {
+      continue;
+    }
+    const srcFp = fileContentFingerprint(srcPath);
+    const destFp = fileContentFingerprint(abs);
+    if (srcFp.hash !== destFp.hash || srcFp.size !== destFp.size) {
+      continue;
+    }
+    copiedPaths.add(rel);
+    fingerprints[rel] = srcFp;
+    adopted += 1;
+  }
+  if (adopted > 0) {
+    state.copiedRelativePaths = [...copiedPaths];
+    state.fileFingerprints = fingerprints;
+    state.verified = false;
+    state.configApplied = false;
+  }
+  return adopted;
+}
+
+const MIGRATION_DESTINATION_FOREIGN_MESSAGE =
+  "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`";
+
+/**
+ * @param {string} sourceRoot
+ * @param {string} destRoot
+ * @param {Record<string, unknown>} state
+ */
+export function assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, state) {
+  const copiedPaths = new Set(
+    Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
+  );
+  const fingerprints =
+    state.fileFingerprints && typeof state.fileFingerprints === "object"
+      ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
+      : {};
+  const objects = path.join(destRoot, OBJECTS);
+  if (!fs.existsSync(objects)) {
+    return;
+  }
+  const relFiles = listRegularFilesRecursive(objects).map((abs) =>
+    path.relative(destRoot, abs).replace(/\\/g, "/"),
+  );
+  for (const rel of relFiles) {
+    if (copiedPaths.has(rel)) {
+      continue;
+    }
+    const srcPath = path.join(sourceRoot, rel);
+    if (!fs.existsSync(srcPath)) {
+      throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
+    }
+    const srcFp = fileContentFingerprint(srcPath);
+    const destFp = fileContentFingerprint(path.join(destRoot, rel));
+    if (srcFp.hash !== destFp.hash || srcFp.size !== destFp.size) {
+      throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
+    }
+  }
+  adoptSourceIdenticalMigrationDestinationFiles(sourceRoot, destRoot, state);
+  const copiedAfterAdopt = new Set(
+    Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
+  );
+  const fpsAfter =
+    state.fileFingerprints && typeof state.fileFingerprints === "object"
+      ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
+      : {};
+  for (const rel of relFiles) {
+    const destFp = fileContentFingerprint(path.join(destRoot, rel));
+    const recorded = fpsAfter[rel];
+    if (!copiedAfterAdopt.has(rel) || !recorded) {
+      throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
+    }
+    if (recorded.hash !== destFp.hash || recorded.size !== destFp.size) {
+      throw new StorageError(
+        `Migration refuses to overwrite differing bytes at ${path.basename(rel)}. Re-run after source stabilizes, or use \`storage migrate --reset\` to restart cleanly.`,
+        "invalid_argument",
+      );
+    }
+  }
+}
+
+/**
  * @param {string[]} copiedRelativePaths
  * @returns {Set<string>} store-root-relative key dirs (…/manifest.json.enc, …/devices/*.json.enc, …/log/…/*.enc)
  */
@@ -382,27 +489,18 @@ async function recordAndAssertMigrationDestinationIdentity(params) {
     return;
   }
   const recorded = params.state.destStoreIdentity ? String(params.state.destStoreIdentity) : null;
+  const sourceRoot = params.state.sourceRoot ? String(params.state.sourceRoot) : "";
+  if (sourceRoot && objectsTreeHasRegularFiles(params.destRoot)) {
+    const copiedBeforeAssert = params.state.copiedRelativePaths?.length ?? 0;
+    assertMigrationDestinationOursOrThrow(sourceRoot, params.destRoot, params.state);
+    if ((params.state.copiedRelativePaths?.length ?? 0) > copiedBeforeAssert) {
+      saveStorageMigrateState(params.scopeKey, params.state);
+    }
+  }
   const oursByFingerprint = migrationDestinationMatchesRecordedFingerprints(
     params.destRoot,
     params.state,
   );
-  if ((params.state.copiedRelativePaths?.length ?? 0) > 0 && !oursByFingerprint) {
-    const copiedPaths = new Set(
-      Array.isArray(params.state.copiedRelativePaths) ? params.state.copiedRelativePaths.map(String) : [],
-    );
-    const objects = path.join(params.destRoot, OBJECTS);
-    const relFiles = fs.existsSync(objects)
-      ? listRegularFilesRecursive(objects).map((abs) => path.relative(params.destRoot, abs))
-      : [];
-    const foreignFile = relFiles.some((rel) => !copiedPaths.has(rel));
-    if (foreignFile) {
-      throw new StorageError(
-        "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`",
-        "invalid_argument",
-      );
-    }
-  }
-  const sourceRoot = params.state.sourceRoot ? String(params.state.sourceRoot) : "";
   const keyDirsReady =
     sourceRoot &&
     migrationCopiedKeyDirsReadyForMergedManifest(sourceRoot, params.destRoot, params.state);
@@ -479,12 +577,14 @@ async function assertMigrationDestinationPrecheck(params) {
     return;
   }
   const resume = params.resumeState;
-  if (
-    resume &&
-    resume.vaultId === params.vaultId &&
-    migrationDestinationMatchesRecordedFingerprints(params.destRoot, resume)
-  ) {
-    return;
+  if (resume && resume.vaultId === params.vaultId) {
+    const resumeSource = resume.sourceRoot ? String(resume.sourceRoot) : "";
+    if (resumeSource) {
+      adoptSourceIdenticalMigrationDestinationFiles(resumeSource, params.destRoot, resume);
+    }
+    if (migrationDestinationMatchesRecordedFingerprints(params.destRoot, resume)) {
+      return;
+    }
   }
   const adapter = createFolderStorageAdapter({
     rootDir: params.destRoot,
@@ -818,6 +918,13 @@ export function resetStorageMigrate(scopeKey, options = {}) {
  *   applyConfig?: boolean,
  *   afterInitialSnapshot?: () => void,
  *   testAfterDestIdentityCheck?: (ctx: { destRoot: string, state: Record<string, unknown> }) => void | Promise<void>,
+ *   testKillAfterRenameBeforeStateSave?: number,
+ *   testBeforeDestinationWrite?: (ctx: {
+ *     writeNumber: number,
+ *     sourceRoot: string,
+ *     destRoot: string,
+ *     state: Record<string, unknown>,
+ *   }) => void | Promise<void>,
  *   cliStatePath?: string,
  *   daemonDbPath?: string,
  * }} options
@@ -883,7 +990,45 @@ export async function runStorageMigrateLocalToFolder(options) {
   let destWritesThisRun = 0;
   const max = options.maxCopyFiles ?? Number.POSITIVE_INFINITY;
 
+  const syncCopiedStateFromMigrationState = () => {
+    for (const rel of state.copiedRelativePaths ?? []) {
+      copiedSet.add(String(rel));
+    }
+    if (state.fileFingerprints && typeof state.fileFingerprints === "object") {
+      Object.assign(fileFingerprints, state.fileFingerprints);
+    }
+  };
+
+  syncCopiedStateFromMigrationState();
+  const copiedCountAtRunStart = copiedSet.size;
+
+  if (objectsTreeHasRegularFiles(destRoot)) {
+    const copiedBeforeAssert = state.copiedRelativePaths?.length ?? 0;
+    assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, state);
+    if ((state.copiedRelativePaths?.length ?? 0) > copiedBeforeAssert) {
+      saveStorageMigrateState(scopeKey, state);
+      syncCopiedStateFromMigrationState();
+    }
+  }
+
   const assertDestinationStableBeforeDestWrite = async () => {
+    const writeNumber = copiedCountAtRunStart + destWritesThisRun + 1;
+    if (typeof options.testBeforeDestinationWrite === "function") {
+      await options.testBeforeDestinationWrite({
+        writeNumber,
+        sourceRoot,
+        destRoot,
+        state,
+      });
+    }
+    if (objectsTreeHasRegularFiles(destRoot)) {
+      const copiedBeforeAssert = state.copiedRelativePaths?.length ?? 0;
+      assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, state);
+      if ((state.copiedRelativePaths?.length ?? 0) > copiedBeforeAssert) {
+        saveStorageMigrateState(scopeKey, state);
+        syncCopiedStateFromMigrationState();
+      }
+    }
     const isFirstDestWriteThisRun = destWritesThisRun === 0;
     destWritesThisRun += 1;
     if (isFirstDestWriteThisRun && objectsTreeHasRegularFiles(destRoot)) {
@@ -940,9 +1085,17 @@ export async function runStorageMigrateLocalToFolder(options) {
     const fp = migrationCopyFileWithFsync(abs, destPath, {
       recorded: fileFingerprints[relFromSrcRoot] ?? null,
     });
+    copiedThisRun += 1;
+    if (options.testKillAfterRenameBeforeStateSave === copiedThisRun) {
+      return {
+        phase: "copying",
+        copiedCount: copiedSet.size,
+        writtenThisRun: copiedThisRun,
+        pending: allSrcFiles.length - copiedSet.size,
+      };
+    }
     fileFingerprints[relFromSrcRoot] = fp;
     copiedSet.add(relFromSrcRoot);
-    copiedThisRun += 1;
     state.copiedRelativePaths = [...copiedSet];
     state.fileFingerprints = fileFingerprints;
     saveStorageMigrateState(scopeKey, state);
@@ -964,6 +1117,18 @@ export async function runStorageMigrateLocalToFolder(options) {
       writtenThisRun: copiedThisRun,
       pending: allSrcFiles.length - copiedSet.size,
     };
+  }
+
+  if (objectsTreeHasRegularFiles(destRoot)) {
+    assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, state);
+    await recordAndAssertMigrationDestinationIdentity({
+      scopeKey,
+      state,
+      destRoot,
+      dek: options.dek,
+      layoutPrefix: options.layoutPrefix,
+      allowRecord: false,
+    });
   }
 
   const finalizeParams = {

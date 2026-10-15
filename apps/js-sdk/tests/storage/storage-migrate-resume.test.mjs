@@ -157,25 +157,34 @@ describe("storage migrate resume (partial copy)", () => {
     });
   }
 
-  for (const k of [1, 2, 5]) {
-    it(`t2 state@${k}: SIGKILL-style stop after state save then resume`, async () => {
-      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), `ic-resume-state${k}-src-`));
-      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), `ic-resume-state${k}-dst-`));
+  for (const k of [1, 2, 5, 8]) {
+    it(`t2 state@${k}: kill after rename before state save then resume to verified`, async () => {
+      const sk = `${scopeKey}-kill-${k}`;
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), `ic-resume-kill${k}-src-`));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), `ic-resume-kill${k}-dst-`));
       initFolderStorageRoot(folderRoot);
       const { syncStatePath } = await seedMultiGenLocalVault(localRoot);
-      await runStorageMigrateLocalToFolder({
-        scopeKey,
+      try {
+        fs.unlinkSync(storageMigrateStatePath(sk));
+      } catch {
+        /* ignore */
+      }
+      const partial = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
         dek: DEK,
         layoutPrefix: PREFIX,
         sourceRoot: localRoot,
         destRoot: folderRoot,
         deviceUuid: DEVICE_A,
         cliStatePath: syncStatePath,
-        maxCopyFiles: k,
+        testKillAfterRenameBeforeStateSave: k,
       });
-      assert.ok(loadStorageMigrateState(scopeKey)?.copiedRelativePaths?.length);
+      assert.equal(partial.phase, "copying");
+      const stranded = loadStorageMigrateState(sk);
+      assert.ok(stranded);
+      assert.equal(stranded.copiedRelativePaths?.length ?? 0, k - 1);
       const done = await runStorageMigrateLocalToFolder({
-        scopeKey,
+        scopeKey: sk,
         dek: DEK,
         layoutPrefix: PREFIX,
         sourceRoot: localRoot,
@@ -184,6 +193,11 @@ describe("storage migrate resume (partial copy)", () => {
         cliStatePath: syncStatePath,
       });
       assert.equal(done.phase, "verified");
+      try {
+        fs.unlinkSync(storageMigrateStatePath(sk));
+      } catch {
+        /* ignore */
+      }
     });
   }
 
