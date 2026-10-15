@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { describe, it } from "node:test";
 
-import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 
 import { runStorageAdapterContractSuite, sampleEncryptedObjectBytesForKey } from "../../lib/storage/contract-suite.mjs";
 import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
