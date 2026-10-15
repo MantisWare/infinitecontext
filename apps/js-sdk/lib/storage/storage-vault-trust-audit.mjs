@@ -9,14 +9,15 @@ import {
   createDaemonDbObjectStoreLocalState,
   defaultObjectStoreSyncStatePath,
 } from "../object-store-local-state-persist.mjs";
+import { manifestGenerationHighWaterForBinding } from "../object-store-sync-binding.mjs";
 import {
-  manifestGenerationHighWaterForBinding,
+  loadVaultTrustStoreManifest,
   resolveObjectStoreTrustBindingKey,
-} from "../object-store-sync-binding.mjs";
+} from "./storage-vault-trust-manifest.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
 import { mergeTrustedHeadsMonotonic } from "./storage-manifest.mjs";
-import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
-import { logSegmentRelativePath } from "./layout.mjs";
+import { resolveDaemonDbPathsForTrustAudit } from "../object-store-sync-runtime.mjs";
+import { devHForObjectKey, layoutRootPath, logSegmentRelativePath } from "./layout.mjs";
 import { StorageError } from "./errors.mjs";
 import { ObjectStoreLogForkError, ObjectStoreLogRollbackError } from "../object-store-local-sync-state.mjs";
 
@@ -45,7 +46,7 @@ export function mergeAggregatedObjectStoreLocalTrust(a, b) {
 }
 
 /**
- * @param {{ cliStatePath?: string, daemonDbPath?: string }} [options]
+ * @param {{ cliStatePath?: string, daemonDbPath?: string, daemonDbPaths?: string[], env?: NodeJS.ProcessEnv }} [options]
  */
 export function loadAggregatedObjectStoreLocalTrust(options = {}) {
   const cliPath = options.cliStatePath ?? defaultObjectStoreSyncStatePath();
@@ -56,8 +57,12 @@ export function loadAggregatedObjectStoreLocalTrust(options = {}) {
       createCliFileObjectStoreLocalState(cliPath).load(),
     );
   }
-  if (options.daemonDbPath && fs.existsSync(options.daemonDbPath)) {
-    const daemon = createDaemonDbObjectStoreLocalState(options.daemonDbPath);
+  const daemonPaths =
+    options.daemonDbPaths ??
+    (options.daemonDbPath ? [options.daemonDbPath] : resolveDaemonDbPathsForTrustAudit(options.env));
+  for (const daemonDbPath of daemonPaths) {
+    if (!fs.existsSync(daemonDbPath)) continue;
+    const daemon = createDaemonDbObjectStoreLocalState(daemonDbPath);
     try {
       merged = mergeAggregatedObjectStoreLocalTrust(merged, daemon.load());
     } finally {
@@ -95,12 +100,50 @@ export function computeFolderStoreIdentity(manifest) {
 /**
  * @param {{
  *   manifest: import("./storage-manifest.mjs").StorageManifest,
+ *   adapter?: import("./types.mjs").StorageAdapter,
+ *   layoutPrefix?: string,
+ *   devH: string,
+ *   trustedSeq: number,
+ * }} params
+ */
+async function resolveStoreLogHeadSeqForDevH(params) {
+  const row = params.manifest.devices.find((d) => d.devH === params.devH);
+  const hintedSeq = params.manifest.trusted_heads?.[params.devH]?.seq;
+  let storeSeq = Math.max(
+    row?.last_seq ?? -1,
+    Number.isFinite(hintedSeq) ? /** @type {number} */ (hintedSeq) : -1,
+  );
+  if (params.trustedSeq > storeSeq && params.adapter && params.layoutPrefix) {
+    const listPrefix = `${layoutRootPath(params.layoutPrefix)}/log/${devHForObjectKey(params.devH)}/`;
+    let maxSeq = -1;
+    try {
+      const page = await params.adapter.list(listPrefix, { limit: 10_000 });
+      for (const listed of page.objects ?? []) {
+        const key = String(listed.key ?? "");
+        const match = key.match(/\/(\d{12})\.enc$/i);
+        if (match) {
+          maxSeq = Math.max(maxSeq, Number.parseInt(match[1], 10));
+        }
+      }
+    } catch {
+      /* list failures fall back to manifest hints */
+    }
+    storeSeq = Math.max(storeSeq, maxSeq);
+  }
+  return storeSeq;
+}
+
+/**
+ * @param {{
+ *   manifest: import("./storage-manifest.mjs").StorageManifest,
  *   localTrust: import("../object-store-local-sync-state.mjs").ObjectStoreLocalSyncState,
  *   bindingKey: string,
+ *   adapter?: import("./types.mjs").StorageAdapter,
+ *   layoutPrefix?: string,
  * }} params
- * @returns {{ code: string, message: string }[]}
+ * @returns {Promise<{ code: string, message: string }[]>}
  */
-export function collectVaultTrustRollbackIssues(params) {
+export async function collectVaultTrustRollbackIssues(params) {
   /** @type {{ code: string, message: string }[]} */
   const issues = [];
   const highWater = manifestGenerationHighWaterForBinding(params.localTrust, params.bindingKey);
@@ -114,8 +157,13 @@ export function collectVaultTrustRollbackIssues(params) {
   expected = mergeTrustedHeadsMonotonic(expected, params.manifest.trusted_heads ?? {});
   for (const [devH, head] of Object.entries(expected)) {
     if (!head || head.seq < 0) continue;
-    const row = params.manifest.devices.find((d) => d.devH === devH);
-    const storeSeq = row?.last_seq ?? -1;
+    const storeSeq = await resolveStoreLogHeadSeqForDevH({
+      manifest: params.manifest,
+      adapter: params.adapter,
+      layoutPrefix: params.layoutPrefix,
+      devH,
+      trustedSeq: head.seq,
+    });
     if (head.seq > storeSeq) {
       issues.push({
         code: "log_rollback",
@@ -173,8 +221,14 @@ export async function auditVaultStoreTrust(params) {
     });
   const backendId = params.backendId ?? FOLDER_STORAGE_ADAPTER_ID;
   const bindingKey = resolveObjectStoreTrustBindingKey(params.storeRootDir, backendId);
-  const manifest = await loadFolderMergedManifest(params.adapter, params.dek, params.layoutPrefix);
-  const rollbackIssues = collectVaultTrustRollbackIssues({ manifest, localTrust, bindingKey });
+  const manifest = await loadVaultTrustStoreManifest(params.adapter, params.dek, params.layoutPrefix);
+  const rollbackIssues = await collectVaultTrustRollbackIssues({
+    manifest,
+    localTrust,
+    bindingKey,
+    adapter: params.adapter,
+    layoutPrefix: params.layoutPrefix,
+  });
   if (rollbackIssues.length) {
     const first = rollbackIssues[0];
     return {

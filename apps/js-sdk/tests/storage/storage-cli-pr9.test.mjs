@@ -7,6 +7,7 @@ import { describe, it, afterEach } from "node:test";
 import {
   createCliFileObjectStoreLocalState,
   createDaemonDbObjectStoreLocalState,
+  defaultObjectStoreSyncStatePath,
 } from "../../lib/object-store-local-state-persist.mjs";
 import { writeConfigFile, readConfigFile } from "../../lib/client-config.mjs";
 import { LOCAL_OBJECT_STORE_BACKEND_ID } from "../../lib/storage/local-object-store.mjs";
@@ -33,6 +34,8 @@ import {
 } from "../../lib/storage/storage-migrate-local-folder.mjs";
 import { resolveObjectStoreTrustBindingKey } from "../../lib/object-store-sync-binding.mjs";
 import { auditFolderObjectStoreVault } from "../../lib/storage/storage-doctor.mjs";
+import { auditVaultStoreTrust } from "../../lib/storage/storage-vault-trust-audit.mjs";
+import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs";
 import { deriveDevH, logSegmentRelativePath } from "../../lib/storage/layout.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
 import { StorageError } from "../../lib/storage/errors.mjs";
@@ -141,6 +144,50 @@ describe("Phase 4.5 storage CLI (#9)", () => {
           }),
         (err) => err instanceof StorageError && err.code === "invalid_argument",
       );
+    });
+
+    it("R1: local source trust audit uses CAS manifest_generation (not merged zero)", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-r1-src-"));
+      const syncStatePath = path.join(localRoot, "sync-state.json");
+      const store = await createLocalObjectStore({
+        rootDir: localRoot,
+        dek: DEK,
+        deviceUuid: DEVICE_A,
+        layoutPrefix: PREFIX,
+        sync: { mode: "cli", persist: true, cliStatePath: syncStatePath },
+        config: { storage: { backend: "local", rootDir: localRoot, deviceUuid: DEVICE_A } },
+      });
+      await objectStorePushSyncMutations(
+        {
+          adapter: store.adapter,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          selfDevH: deriveDevH(DEK, DEVICE_A),
+          deviceUuid: DEVICE_A,
+          localState: store.localState,
+        },
+        [
+          {
+            client_id: generateClientNodeId(),
+            op: "context_create",
+            payload: { metadata: { tag: "r1-local-open" } },
+          },
+        ],
+      );
+      await store.close();
+      const adapter = createFilesystemStorageAdapter({ rootDir: localRoot, auditReadOnly: true });
+      await adapter.init();
+      const trust = await auditVaultStoreTrust({
+        adapter,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        deviceUuid: DEVICE_A,
+        storeRootDir: localRoot,
+        cliStatePath: syncStatePath,
+        backendId: LOCAL_OBJECT_STORE_BACKEND_ID,
+      });
+      await adapter.close();
+      assert.equal(trust.logVerify.ok, true, trust.logVerify.error ?? "expected ok trust audit");
     });
 
     it("refuses migrate --apply-config when source store is behind local trusted heads (log_rollback)", async () => {
@@ -694,6 +741,49 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       assert.equal(report.logVerify.code, "log_rollback");
     });
 
+    it("real CLI migrate --apply-config succeeds after createLocalObjectStore open", async () => {
+      priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-local-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-folder-"));
+      initFolderStorageRoot(folderRoot);
+      const syncStatePath = defaultObjectStoreSyncStatePath();
+      writeConfigFile({
+        baseUrl: "http://127.0.0.1:9",
+        storage: { backend: "local", rootDir: localRoot, deviceUuid: DEVICE_A },
+      });
+      const store = await createLocalObjectStore({
+        dek: DEK,
+        deviceUuid: DEVICE_A,
+        layoutPrefix: PREFIX,
+        sync: { mode: "cli", persist: true, cliStatePath: syncStatePath },
+        config: readConfigFile(),
+      });
+      await objectStorePushSyncMutations(
+        {
+          adapter: store.adapter,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          selfDevH: deriveDevH(DEK, DEVICE_A),
+          deviceUuid: DEVICE_A,
+          localState: store.localState,
+        },
+        [
+          {
+            client_id: generateClientNodeId(),
+            op: "context_create",
+            payload: { metadata: { tag: "cli-migrate-apply" } },
+          },
+        ],
+      );
+      await store.close();
+      setStorageCliDepsForTests({
+        resolveUnlockedDek: async () => ({ dek: DEK }),
+      });
+      const result = await runStorageMigrateCliJson(["--to", folderRoot, "--apply-config"]);
+      assert.equal(result.phase, "config_applied");
+      assert.equal(result.configApplied, true);
+    });
+
     it("real CLI doctor does not report heads_unverified when only daemon.db has trusted heads", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
       const daemonDbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-db-")), "daemon.db");
@@ -730,6 +820,25 @@ describe("Phase 4.5 storage CLI (#9)", () => {
     });
   });
 });
+
+async function runStorageMigrateCliJson(extraArgs = []) {
+  /** @type {string[]} */
+  const lines = [];
+  const prior = console.log;
+  console.log = (value) => {
+    lines.push(String(value));
+    prior(value);
+  };
+  try {
+    const { runStorageCli } = await import("../../src/cli/storage-cli.mjs");
+    await runStorageCli("migrate", extraArgs);
+    const raw = lines.at(-1);
+    assert.ok(raw, "expected migrate JSON on stdout");
+    return JSON.parse(raw);
+  } finally {
+    console.log = prior;
+  }
+}
 
 async function runStorageDoctorCliJson() {
   /** @type {string[]} */

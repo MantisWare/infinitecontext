@@ -8,6 +8,7 @@ import { LOCAL_OBJECT_STORE_BACKEND_ID } from "./local-object-store.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
 import { resolveFolderObjectStoreRootDir } from "./folder-object-store.mjs";
 import { isFolderObjectStoreBackend } from "../sync-storage-backend.mjs";
+import { storagePathsReferToSameLocationOrUnresolvable } from "./storage-path-compare.mjs";
 import { createFolderStorageAdapter } from "./folder-adapter.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
@@ -260,16 +261,19 @@ async function recordAndAssertMigrationDestinationIdentity(params) {
  * @param {Record<string, unknown>} config
  * @param {string | null} destRoot
  */
-function activeConfigPointsAtMigrationDest(config, destRoot) {
+function activeConfigPointsAtMigrationDest(config, destRoot, env = process.env) {
   if (!destRoot || !isFolderObjectStoreBackend(config)) {
     return false;
   }
   try {
-    return path.resolve(resolveFolderObjectStoreRootDir(config)) === path.resolve(destRoot);
+    const configFolder = resolveFolderObjectStoreRootDir(config, env);
+    return storagePathsReferToSameLocationOrUnresolvable(configFolder, destRoot);
   } catch {
-    return false;
+    return true;
   }
 }
+
+const MIGRATION_DEST_IDENTITY_CHECK_EVERY_N = 8;
 
 async function assertMigrationDestinationPrecheck(params) {
   if (!objectsTreeHasRegularFiles(params.destRoot)) {
@@ -522,7 +526,7 @@ export function saveStorageMigrateState(scopeKey, state) {
 
 /**
  * @param {string} scopeKey
- * @param {{ config?: Record<string, unknown>, layoutPrefix?: string }} [options]
+ * @param {{ config?: Record<string, unknown>, layoutPrefix?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 export function resetStorageMigrate(scopeKey, options = {}) {
   const state = loadStorageMigrateState(scopeKey);
@@ -537,7 +541,7 @@ export function resetStorageMigrate(scopeKey, options = {}) {
       "invalid_argument",
     );
   }
-  if (activeConfigPointsAtMigrationDest(config, destRoot)) {
+  if (activeConfigPointsAtMigrationDest(config, destRoot, options.env ?? process.env)) {
     throw new StorageError(
       "`storage migrate --reset` is refused while `config.json` points `storage.folder.path` at the migration destination",
       "invalid_argument",
@@ -659,7 +663,31 @@ export async function runStorageMigrateLocalToFolder(options) {
   const copiedSet = new Set(state.copiedRelativePaths ?? []);
   const allSrcFiles = listRegularFilesRecursive(srcObjects);
   let copiedThisRun = 0;
+  let destWritesThisRun = 0;
   const max = options.maxCopyFiles ?? Number.POSITIVE_INFINITY;
+
+  const assertDestinationStableBeforeDestWrite = async () => {
+    destWritesThisRun += 1;
+    const checkIdentity =
+      Boolean(state.destStoreIdentity) &&
+      (destWritesThisRun === 1 || destWritesThisRun % MIGRATION_DEST_IDENTITY_CHECK_EVERY_N === 0);
+    if (checkIdentity) {
+      await recordAndAssertMigrationDestinationIdentity({
+        scopeKey,
+        state,
+        destRoot,
+        dek: options.dek,
+        layoutPrefix: options.layoutPrefix,
+        allowRecord: false,
+      });
+    }
+    if (path.resolve(String(state.destRoot)) !== destRoot) {
+      throw new StorageError(
+        "Migration destination path changed since migration started",
+        "invalid_argument",
+      );
+    }
+  };
 
   for (const abs of allSrcFiles) {
     const relFromSrcRoot = path.relative(sourceRoot, abs);
@@ -667,6 +695,7 @@ export async function runStorageMigrateLocalToFolder(options) {
       const current = fileContentFingerprint(abs);
       const recorded = fileFingerprints[relFromSrcRoot];
       if (recorded && (recorded.hash !== current.hash || recorded.size !== current.size)) {
+        await assertDestinationStableBeforeDestWrite();
         const destPath = path.join(destRoot, relFromSrcRoot);
         migrationCopyFileWithFsync(abs, destPath, { recorded });
         fileFingerprints[relFromSrcRoot] = current;
@@ -678,6 +707,7 @@ export async function runStorageMigrateLocalToFolder(options) {
       continue;
     }
     if (copiedThisRun >= max) break;
+    await assertDestinationStableBeforeDestWrite();
     const destPath = path.join(destRoot, relFromSrcRoot);
     const fp = migrationCopyFileWithFsync(abs, destPath, {
       recorded: fileFingerprints[relFromSrcRoot] ?? null,
