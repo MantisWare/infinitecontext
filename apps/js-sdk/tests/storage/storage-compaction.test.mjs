@@ -3,7 +3,10 @@ import { describe, it } from "node:test";
 
 import { createEmptySyncReplica, applySyncChangeToReplica } from "../../lib/sync-replica-apply.mjs";
 import { hydrateSyncReplica } from "../../lib/sync-replica-state.mjs";
-import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
+import {
+  createEmptyObjectStoreLocalSyncState,
+  createInMemoryObjectStoreLocalState,
+} from "../../lib/object-store-local-sync-state.mjs";
 import { deriveDevH } from "../../lib/storage/layout.mjs";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 import { acquireLeaseLock, isLeaseLockStale, releaseLeaseLock, withLeaseLock } from "../../lib/storage/lease-lock.mjs";
@@ -302,12 +305,16 @@ describe("storage compaction + bootstrap", () => {
     let page = await objectStorePullSyncChanges(reader, { limit: 500 });
     if (page.bootstrap_replica) replica = hydrateSyncReplica(page.bootstrap_replica);
     for (const change of page.changes) applySyncChangeToReplica(replica, change, () => {});
+    await confirmObjectStorePullDeliveryForContext(reader);
 
     await compactObjectStoreReplica(writer, writer.localState.load(), replica, { settleMs: 0 });
-    resetObjectStorePullVerifyGenerationForTests();
-    await objectStorePullSyncChanges(reader, { limit: 500 });
     const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
     await gcLogSegmentsCoveredByCompaction(writer, manifest);
+    reader.localState.save(createEmptyObjectStoreLocalSyncState());
+    resetObjectStorePullVerifyGenerationForTests();
+    const readerReboot = await objectStorePullSyncChanges(reader, { limit: 500 });
+    assert.ok(readerReboot.bootstrap_replica);
+    await confirmObjectStorePullDeliveryForContext(reader);
 
     await objectStorePushSyncMutations(writer, [
       {

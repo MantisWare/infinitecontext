@@ -159,13 +159,26 @@ async function assertSnapshotCoversLiveLogHeads(ctx, snap) {
   }
 }
 
-/** @param {import('./storage-manifest.mjs').StorageManifest} manifest @param {StorageSnapshotRecord} snap */
-export function assertSnapshotCoversManifestKnowledge(manifest, snap) {
+/**
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ * @param {StorageSnapshotRecord} snap
+ * @param {{ localTrustedHeads?: Record<string, { seq: number, digest: string }> }} [options]
+ */
+export function assertSnapshotCoversManifestKnowledge(manifest, snap, options = {}) {
   /** @type {Set<string>} */
   const required = new Set([
     ...Object.keys(manifest.trusted_heads ?? {}),
     ...Object.keys(normalizeVectorSyncCursor(manifest.compacted_through).v ?? {}),
+    ...Object.keys(options.localTrustedHeads ?? {}),
   ]);
+  for (const row of manifest.devices) {
+    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[row.devH] ?? -1);
+    if (floor >= 0 || manifest.trusted_heads?.[row.devH]) required.add(row.devH);
+  }
+  for (const devH of manifest.sync_participants ?? []) {
+    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
+    if (floor >= 0 || manifest.trusted_heads?.[devH]) required.add(devH);
+  }
   for (const devH of required) {
     const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
     const head = snap.trusted_heads?.[devH];
@@ -176,6 +189,17 @@ export function assertSnapshotCoversManifestKnowledge(manifest, snap) {
       throw new Error(`Snapshot head for ${devH} is below manifest compacted floor`);
     }
   }
+}
+
+/** @param {import('./storage-manifest.mjs').StorageManifest} manifest @param {import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
+export function isCompactionCaughtUpWithManifest(manifest, state) {
+  for (const [devH, manifestHead] of Object.entries(manifest.trusted_heads ?? {})) {
+    if (!manifestHead) continue;
+    const local = state.trustedHeads?.[devH];
+    if (!local || local.seq < manifestHead.seq) return false;
+    if (local.seq === manifestHead.seq && local.digest !== manifestHead.digest) return false;
+  }
+  return true;
 }
 
 async function verifyOrphanSnapshotAdoptable(ctx, snap) {
@@ -259,18 +283,40 @@ export function resolveBootstrapSnapshotEpoch(manifest, epochs) {
   return epochs[epochs.length - 1];
 }
 
+/**
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ * @param {import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ */
+export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
+  const epochs = await listSnapshotEpochs(ctx);
+  if (!epochs.length) return null;
+  const sorted = [...epochs].sort((a, b) => b - a);
+  /** @type {string | null} */
+  let lastError = null;
+  for (const epoch of sorted) {
+    const snap = await loadStorageSnapshot(ctx, epoch);
+    if (!snap) continue;
+    try {
+      await verifySnapshotTrustedHeads(ctx, snap);
+      assertSnapshotCoversManifestKnowledge(manifest, snap, { localTrustedHeads: state.trustedHeads });
+      return { epoch, snap };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (lastError) {
+    throw new Error(`No verified snapshot satisfies manifest compaction floor (${lastError})`);
+  }
+  return null;
+}
+
 export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
   if (!stateNeedsSnapshotBootstrap(state)) return null;
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
-  const epochs = await listSnapshotEpochs(ctx);
-  const epoch = resolveBootstrapSnapshotEpoch(manifest, epochs);
-  if (epoch === null) return null;
-  const snap = await loadStorageSnapshot(ctx, epoch);
-  if (!snap) {
-    throw new Error(`Snapshot epoch ${epoch} listed but unreadable`);
-  }
-  await verifySnapshotTrustedHeads(ctx, snap);
-  assertSnapshotCoversManifestKnowledge(manifest, snap);
+  const picked = await pickVerifiedBootstrapSnapshot(ctx, manifest, state);
+  if (!picked) return null;
+  const { epoch, snap } = picked;
   for (const [devH, head] of Object.entries(snap.trusted_heads ?? {})) {
     if (head) commitTrustedHeadAdvance(state, devH, head);
   }
@@ -334,20 +380,27 @@ export async function adoptVerifiedOrphanSnapshots(ctx) {
 export async function compactObjectStoreReplica(ctx, state, replica, options = {}) {
   await adoptVerifiedOrphanSnapshots(ctx);
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+  if (!isCompactionCaughtUpWithManifest(manifest, state)) {
+    return { skipped: true, reason: "lagging_compactor" };
+  }
   const epochs = await listSnapshotEpochs(ctx);
   const maxListedEpoch = epochs.length ? Math.max(...epochs) : -1;
   const nextEpoch = Math.max(manifest.latest_snapshot_epoch, maxListedEpoch) + 1;
-  /** @type {Record<string, { seq: number, digest: string }>} */
-  const trustedHeads = {};
-  for (const [devH, head] of Object.entries(state.trustedHeads ?? {})) {
-    if (head) trustedHeads[devH] = { seq: head.seq, digest: head.digest };
-  }
+  const trustedHeads = mergeTrustedHeadsMonotonic(manifest.trusted_heads ?? {}, state.trustedHeads ?? {});
   const compactedThrough = normalizeVectorSyncCursor(state.vectorCursor);
   for (const [devH, head] of Object.entries(trustedHeads)) {
     advanceVectorCursorDevH(compactedThrough, devH, head.seq);
   }
 
   const sanitizedReplica = sanitizeSyncReplicaForPersist(replica);
+  assertSnapshotCoversManifestKnowledge(manifest, {
+    format: SNAPSHOT_FORMAT,
+    epoch: nextEpoch,
+    created_at: new Date().toISOString(),
+    compacted_through: compactedThrough,
+    trusted_heads: trustedHeads,
+    replica: sanitizedReplica,
+  });
   /** @type {StorageSnapshotRecord} */
   const snapRecord = {
     format: SNAPSHOT_FORMAT,
@@ -414,25 +467,46 @@ function parseLogSegmentKey(key) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {import('./storage-manifest.mjs').StorageManifest} [manifest]
  */
-/** @param {import('./storage-manifest.mjs').StorageManifest} manifest @param {string} devH */
-export function gcSafeSeqFloorForDevH(manifest, devH) {
+/**
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ * @param {string} devH
+ */
+export async function gcSafeSeqFloorForDevH(ctx, manifest, devH) {
   const canon = devH.toUpperCase();
   const compactFloor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[canon] ?? -1);
   if (!Number.isFinite(compactFloor) || compactFloor < 0) return -1;
-  const headSeq = Number(manifest.trusted_heads?.[canon]?.seq ?? compactFloor);
-  if (!Number.isFinite(headSeq) || headSeq < 0) return -1;
+  const trustedHead = manifest.trusted_heads?.[canon];
+  if (!trustedHead) return -1;
+  const headEnvelope = await readEnvelopeAtSeq(ctx, canon, trustedHead.seq);
+  if (!headEnvelope || layoutSegmentEnvelopeDigest(headEnvelope) !== trustedHead.digest) {
+    return -1;
+  }
+  const headSeq = trustedHead.seq;
   const participants = manifest.sync_participants ?? [];
-  if (!manifest.devices.length && participants.length) return -1;
+  for (const participant of participants) {
+    const row = manifest.devices.find((d) => d.devH === participant);
+    if (!row) return -1;
+  }
   for (const participant of participants) {
     if (!manifest.devices.some((row) => row.devH === participant)) return -1;
   }
   let minAck = Number.POSITIVE_INFINITY;
   for (const row of manifest.devices) {
-    const ack = row.acknowledged_cursor?.v?.[canon];
-    if (ack === undefined && row.devH !== canon) return -1;
-    const ackSeq = ack !== undefined ? Number(ack) : row.devH === canon ? row.acknowledged_seq : -1;
-    if (!Number.isFinite(ackSeq) || ackSeq < 0) return -1;
-    minAck = Math.min(minAck, ackSeq);
+    const deviceHead = manifest.trusted_heads?.[row.devH];
+    if (deviceHead) {
+      const env = await readEnvelopeAtSeq(ctx, row.devH, deviceHead.seq);
+      if (!env || layoutSegmentEnvelopeDigest(env) !== deviceHead.digest) return -1;
+    }
+    let ackForCanon = Number.isFinite(row.acknowledged_seq) ? row.acknowledged_seq : 0;
+    if (row.devH !== canon) {
+      const cross = row.acknowledged_cursor?.v?.[canon];
+      if (cross === undefined) return -1;
+      ackForCanon = Number(cross);
+    }
+    if (!Number.isFinite(ackForCanon) || ackForCanon < 0) return -1;
+    if (ackForCanon > headSeq) ackForCanon = headSeq;
+    minAck = Math.min(minAck, ackForCanon);
   }
   if (!manifest.devices.length) return -1;
   if (!Number.isFinite(minAck) || minAck < compactFloor) return -1;
@@ -452,7 +526,7 @@ export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
     for (const row of page.objects) {
       const parsed = parseLogSegmentKey(row.key);
       if (!parsed) continue;
-      const threshold = gcSafeSeqFloorForDevH(m, parsed.devH);
+      const threshold = await gcSafeSeqFloorForDevH(ctx, m, parsed.devH);
       const headSeq = Number(m.trusted_heads?.[parsed.devH]?.seq ?? -1);
       if (threshold >= 0 && parsed.seq <= threshold && parsed.seq !== headSeq) toDelete.push(row.key);
     }

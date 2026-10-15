@@ -256,6 +256,34 @@ export function upsertManifestDeviceAck(manifest, devH, acknowledgedSeq, acknowl
   }
 }
 
+/**
+ * Remove a device from manifest GC participation (explicit operator action).
+ * @param {Object} ctx
+ * @param {string} devH
+ */
+/** Register a device as a sync participant with implicit ack 0 until it pulls. */
+export async function registerManifestSyncParticipant(ctx, devH) {
+  const canon = devH.toUpperCase();
+  return updateStorageManifest(ctx, (manifest) => {
+    const participants = new Set(manifest.sync_participants ?? []);
+    participants.add(canon);
+    manifest.sync_participants = [...participants];
+    if (!manifest.devices.some((row) => row.devH === canon)) {
+      manifest.devices.push({ devH: canon, last_seq: 0, acknowledged_seq: 0 });
+    }
+    return manifest;
+  });
+}
+
+export async function removeManifestDevice(ctx, devH) {
+  const canon = devH.toUpperCase();
+  return updateStorageManifest(ctx, (manifest) => {
+    manifest.devices = manifest.devices.filter((row) => row.devH !== canon);
+    manifest.sync_participants = (manifest.sync_participants ?? []).filter((id) => id !== canon);
+    return manifest;
+  });
+}
+
 /** @param {StorageManifest} manifest */
 export function minAcknowledgedSeqAcrossDevices(manifest) {
   if (!manifest.devices.length) return null;

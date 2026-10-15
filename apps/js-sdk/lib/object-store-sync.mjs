@@ -53,7 +53,10 @@ import {
   bootstrapLocalStateFromLatestSnapshot,
   confirmObjectStorePullDelivery,
 } from "./storage/storage-compaction.mjs";
-import { loadStorageManifestForSync } from "./storage/storage-manifest.mjs";
+import {
+  loadStorageManifestForSync,
+  registerManifestSyncParticipant,
+} from "./storage/storage-manifest.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -280,6 +283,15 @@ async function assertTrustedAnchorDigest(ctx, devH, trusted) {
  * @param {string} devH
  * @param {{ seq: number, digest: string }} trusted
  */
+function hasVerifiedLocalSnapshot(state) {
+  return (
+    Number.isFinite(state.appliedSnapshotEpoch) &&
+    state.appliedSnapshotEpoch >= 0 &&
+    state.snapshotCompactedThrough &&
+    typeof state.snapshotCompactedThrough === "object"
+  );
+}
+
 async function assertTrustedHeadIntegrity(ctx, state, devH, trusted) {
   await assertTrustedAnchorDigest(ctx, devH, trusted);
   if (trusted.seq === 0) return;
@@ -287,10 +299,13 @@ async function assertTrustedHeadIntegrity(ctx, state, devH, trusted) {
   if (!prevEnvelope) {
     const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
     const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
-    const snapFloor = Number(
-      normalizeVectorSyncCursor(state.snapshotCompactedThrough ?? state.vectorCursor).v?.[devH] ?? -1,
-    );
-    if (trusted.seq - 1 <= Math.max(floor, snapFloor)) return;
+    if (Number.isFinite(floor) && floor >= 0 && trusted.seq - 1 <= floor) return;
+    if (hasVerifiedLocalSnapshot(state)) {
+      const snapFloor = Number(
+        normalizeVectorSyncCursor(state.snapshotCompactedThrough).v?.[devH] ?? -1,
+      );
+      if (Number.isFinite(snapFloor) && snapFloor >= 0 && trusted.seq - 1 <= snapFloor) return;
+    }
     throw new ObjectStoreLogRollbackError(
       `Remote log for ${devH} missing segment at seq ${trusted.seq - 1}`,
     );
@@ -559,11 +574,18 @@ function resolvePullVectorCursor(state, since) {
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
   const state = ctx.localState.load();
-  await bootstrapLocalStateFromLatestSnapshot(ctx, state);
+  await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  const pendingDelivery = Boolean(state.pendingBootstrapReplica && state.bootstrapReplicaPendingAck);
+  if (!pendingDelivery) {
+    await bootstrapLocalStateFromLatestSnapshot(ctx, state);
+  }
   const cursor = resolvePullVectorCursor(state, options.since);
 
   pullsSinceBoot += 1;
-  if (pullsSinceBoot === 1 || pullsSinceBoot % FULL_CHAIN_VERIFY_EVERY_N === 0) {
+  if (
+    !pendingDelivery &&
+    (pullsSinceBoot === 1 || pullsSinceBoot % FULL_CHAIN_VERIFY_EVERY_N === 0)
+  ) {
     await verifyFullTrustedChains(ctx, state);
   }
 
@@ -690,6 +712,16 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   const batch = Array.isArray(mutations) ? mutations : [];
   let state = ctx.localState.load();
   await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  await registerManifestSyncParticipant(
+    {
+      adapter: ctx.adapter,
+      dek: ctx.dek,
+      layoutPrefix: ctx.layoutPrefix,
+      ownerDevH: ctx.selfDevH,
+      settleMs: 0,
+    },
+    ctx.selfDevH,
+  );
   const headSum = headSequenceForStatus(state);
   /** @type {string[]} */
   const applied = [];
