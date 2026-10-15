@@ -137,7 +137,14 @@ export function recordMessageMutationLog(replica, messageId, entry) {
   const list = /** @type {MessageMutationLogEntry[]} */ (
     replica._message_mutations[messageId] ?? (replica._message_mutations[messageId] = [])
   );
-  list.push(entry);
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (compareLogEntry(list[mid], entry) <= 0) lo = mid + 1;
+    else hi = mid;
+  }
+  list.splice(lo, 0, entry);
 }
 
 /** @param {MessageMutationLogEntry} a @param {MessageMutationLogEntry} b */
@@ -150,9 +157,7 @@ function compareLogEntry(a, b) {
  * @param {string} messageId
  */
 export function recomputeReplicaConflictsForMessage(replica, messageId) {
-  const entries = [...(/** @type {MessageMutationLogEntry[]} */ (replica._message_mutations?.[messageId] ?? []))].sort(
-    compareLogEntry,
-  );
+  const entries = /** @type {MessageMutationLogEntry[]} */ (replica._message_mutations?.[messageId] ?? []);
   /** @type {MessageMutationLogEntry[]} */
   const losers = [];
   /** @type {MessageMutationLogEntry | null} */
@@ -194,24 +199,45 @@ export function recomputeReplicaConflictsForMessage(replica, messageId) {
     }
   }
 
-  const keepIds = new Set(losers.map((l) => replicaConflictId(messageId, l.devH, l.seq, l.index)));
   if (!Array.isArray(replica.sync_conflicts)) replica.sync_conflicts = [];
-  replica.sync_conflicts = replica.sync_conflicts.filter(
-    (row) => String(row.client_id ?? "") !== messageId || keepIds.has(String(row.id)),
-  );
-
-  for (const loser of losers) {
-    upsertReplicaLoserConflict(replica, {
-      context_id: loser.context_id,
-      client_node_id: messageId,
-      op: loser.op,
-      loser_hlc: loser.hlc,
-      data: loser.data,
-      loser_dev_h: loser.devH,
-      loser_seq: loser.seq,
-      loser_index: loser.index,
-    });
+  /** @type {Map<string, Record<string, unknown>>} */
+  const priorById = new Map();
+  for (const row of replica.sync_conflicts) {
+    if (String(row.client_id ?? "") === messageId && row.id) priorById.set(String(row.id), row);
   }
+  const preserved = replica.sync_conflicts.filter((row) => String(row.client_id ?? "") !== messageId);
+  /** @type {Record<string, unknown>[]} */
+  const rebuilt = [];
+  for (const loser of losers) {
+    const id = replicaConflictId(messageId, loser.devH, loser.seq, loser.index);
+    const prior = priorById.get(id);
+    const priorData =
+      prior?.right_payload && typeof prior.right_payload === "object" ? prior.right_payload.data : null;
+    const op = String(loser.op ?? "message_update");
+    const loserHlc = serializeMutationHlc(loser.hlc);
+    /** @type {Record<string, unknown>} */
+    const right_payload = {
+      op,
+      hlc: loserHlc,
+      data: loser.data ?? priorData ?? null,
+      source_dev_h: loser.devH,
+      source_seq: loser.seq,
+      source_index: loser.index,
+    };
+    /** @type {Record<string, unknown>} */
+    const row = prior
+      ? { ...prior, right_payload, context_id: loser.context_id, client_id: messageId, resolved_at: null }
+      : {
+          id,
+          context_id: loser.context_id,
+          client_id: messageId,
+          resolved_at: null,
+          right_payload,
+        };
+    rebuilt.push(row);
+  }
+  replica.sync_conflicts = preserved.concat(rebuilt);
+  refreshReplicaConflictsForMessage(replica, messageId);
 }
 
 export function upsertReplicaLoserConflict(replica, input) {

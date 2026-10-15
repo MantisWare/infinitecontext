@@ -11,15 +11,18 @@ import { createStore } from "../src/store.mjs";
 
 describe("daemon.db object-store replica", () => {
   for (const [label, scenarioFn] of ALL_CONVERGENCE_SCENARIOS) {
-    it(`${label} — full rows match across 300 random pull orders`, () => {
+    it(`${label} — full rows match across 300 random pull orders`, async () => {
       const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-replica-")), "daemon.db");
       const store = createStore({ dbPath });
       try {
+        await store.initObjectStoreReplica();
         assertDaemonStoreConvergesAcrossRandomPulls(scenarioFn(), {
+          applySyncChange: (change) => store.applySyncChange(change),
           load: () => store.loadSyncReplica(),
-          flush: () => store.flushSyncReplica(store.loadSyncReplica()),
+          clearReplicaCache: () => store.clearReplicaCache(),
           reset: () => {
             store.flushSyncReplica(createEmptySyncReplica());
+            store.clearReplicaCache();
           },
         });
       } finally {
@@ -28,10 +31,11 @@ describe("daemon.db object-store replica", () => {
     });
   }
 
-  it("applySyncChange routes object-store changes through the replica table", () => {
+  it("applySyncChange routes object-store changes through the replica table", async () => {
     const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-apply-")), "daemon.db");
     const store = createStore({ dbPath });
     try {
+      await store.initObjectStoreReplica();
       const change = syncChangeFromMergeable(ALL_CONVERGENCE_SCENARIOS[0][1]()[1]);
       store.applySyncChange(change);
       const row = store.loadSyncReplica();
@@ -41,10 +45,11 @@ describe("daemon.db object-store replica", () => {
     }
   });
 
-  it("hosted message_delete still removes sync_message_nodes rows", () => {
+  it("hosted message_delete still removes sync_message_nodes rows", async () => {
     const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-hosted-")), "daemon.db");
     const store = createStore({ dbPath });
     try {
+      await store.initObjectStoreReplica();
       store.applySyncChange({
         op: "message_append",
         context_id: "ctx_h",

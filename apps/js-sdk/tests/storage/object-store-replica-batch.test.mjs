@@ -112,6 +112,7 @@ describe("replica tombstone + batch convergence", () => {
       },
     ]);
     const base = snapshotVectorCursor(localA.load().vectorCursor);
+    const lateUpdateBase = snapshotVectorCursor(localA.load().vectorCursor);
     await writer.pushSyncMutations([
       {
         client_id: generateClientNodeId(),
@@ -127,8 +128,10 @@ describe("replica tombstone + batch convergence", () => {
         client_id: generateClientNodeId(),
         op: "message_update",
         context_id: ctx,
+        base_vector: lateUpdateBase,
         payload: {
           messages: [{ id: msg, role: "user", content: { body: "late" }, metadata: { ic_client_node_id: msg } }],
+          base_vector: lateUpdateBase,
         },
       },
     ]);

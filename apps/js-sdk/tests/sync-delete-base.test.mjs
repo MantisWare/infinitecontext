@@ -112,11 +112,12 @@ describe("message_delete base_sequence", () => {
     const dek = new Uint8Array(32).fill(5);
     const deviceA = "55555555-5555-4555-8555-555555555555";
     const deviceB = "66666666-6666-4666-8666-666666666666";
+    const localA = createInMemoryObjectStoreLocalState();
     const transportA = new ObjectStoreSyncTransport(adapter, {
       dek,
       deviceUuid: deviceA,
       layoutPrefix: "accounts/stale-base",
-      localState: createInMemoryObjectStoreLocalState(),
+      localState: localA,
     });
     const localB = createInMemoryObjectStoreLocalState();
     const transportB = new ObjectStoreSyncTransport(adapter, {
@@ -155,13 +156,16 @@ describe("message_delete base_sequence", () => {
     const baseSeq = Number(statusBeforeUpdate.head_sequence);
     const planVector = snapshotVectorCursor(localB.load().vectorCursor);
     const m2 = generateClientNodeId();
+    const updateBase = snapshotVectorCursor(localA.load().vectorCursor);
     await transportA.pushSyncMutations([
       {
         client_id: m2,
         op: "message_update",
         context_id: contextId,
+        base_vector: updateBase,
         payload: {
           messages: [{ id: m1, role: "user", content: { body: "changed" }, metadata: { ic_client_node_id: m1 } }],
+          base_vector: updateBase,
         },
       },
     ]);

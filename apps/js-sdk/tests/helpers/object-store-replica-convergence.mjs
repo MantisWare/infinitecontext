@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { serializeMutationHlc } from "../../lib/object-store-hlc.mjs";
 import { sortMergeableMutations } from "../../lib/object-store-merge.mjs";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync-replica-apply.mjs";
+import { hydrateSyncReplica, sanitizeSyncReplicaForPersist } from "../../lib/sync-replica-state.mjs";
 
 /** @param {import('../../lib/object-store-merge.mjs').MergeableMutation} item */
 export function syncChangeFromMergeable(item) {
@@ -99,30 +100,69 @@ export function assertConvergesAcrossRandomPulls(items, applyChange, trials = 30
 }
 
 /**
- * Daemon replica: apply into store.loadSyncReplica(), flush once per trial, compare loaded snapshot.
+ * CLI replica: apply, persist, reload from disk after every change (restart simulation).
  * @param {import('../../lib/object-store-merge.mjs').MergeableMutation[]} items
- * @param {{ load: () => ReturnType<typeof createEmptySyncReplica>, flush: () => void }} store
+ * @param {number} [trials]
+ */
+export function assertCliPersistedConvergesAcrossRandomPulls(items, trials = 300) {
+  assertConvergesAcrossRandomPulls(items, (replica, change) => {
+    applySyncChangeToReplica(replica, change, () => {});
+    const reloaded = hydrateSyncReplica(sanitizeSyncReplicaForPersist(replica));
+    replica.contexts = reloaded.contexts;
+    replica.messages = reloaded.messages;
+    replica.sync_conflicts = reloaded.sync_conflicts;
+    replica._message_mutations = reloaded._message_mutations;
+    rebuildIndexFromReplica(replica);
+  }, trials);
+}
+
+/** @param {ReturnType<typeof createEmptySyncReplica>} replica */
+function rebuildIndexFromReplica(replica) {
+  /** @type {Record<string, Set<string>>} */
+  const index = {};
+  const log = replica._message_mutations;
+  if (log && typeof log === "object") {
+    for (const [messageId, entries] of Object.entries(log)) {
+      if (!Array.isArray(entries)) continue;
+      const set = new Set();
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") continue;
+        const row = /** @type {Record<string, unknown>} */ (entry);
+        set.add(`${messageId}:${row.devH}:${row.seq}:${row.index ?? 0}`);
+      }
+      index[messageId] = set;
+    }
+  }
+  replica._mutation_log_ids = index;
+}
+
+/**
+ * Daemon replica: applySyncChange per change, clear in-memory cache after each (reload from db).
+ * @param {import('../../lib/object-store-merge.mjs').MergeableMutation[]} items
+ * @param {{
+ *   applySyncChange: (change: Record<string, unknown>) => void,
+ *   load: () => ReturnType<typeof createEmptySyncReplica>,
+ *   clearReplicaCache: () => void,
+ *   reset: () => void,
+ * }} store
  * @param {number} [trials]
  */
 export function assertDaemonStoreConvergesAcrossRandomPulls(items, store, trials = 300) {
   const sorted = sortMergeableMutations(items);
-  const applyToStore = (change) => {
-    applySyncChangeToReplica(store.load(), change, () => {});
-  };
   for (const item of sorted) {
-    applyToStore(syncChangeFromMergeable(item));
+    store.applySyncChange(syncChangeFromMergeable(item));
+    store.clearReplicaCache();
   }
-  store.flush();
   const expected = fullSnapshot(store.load());
   const plans = randomPullBatchPlans(sorted, trials);
   for (const batches of plans) {
     store.reset();
     for (const batch of batches) {
       for (const item of batch) {
-        applyToStore(syncChangeFromMergeable(item));
+        store.applySyncChange(syncChangeFromMergeable(item));
+        store.clearReplicaCache();
       }
     }
-    store.flush();
     assert.equal(fullSnapshot(store.load()), expected);
   }
 }

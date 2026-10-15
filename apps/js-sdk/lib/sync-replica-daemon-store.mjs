@@ -1,7 +1,9 @@
 import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
+import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
 import {
   hydrateSyncReplica,
   sanitizeSyncReplicaForPersist,
+  wrapReplicaJsonParseError,
 } from "./sync-replica-state.mjs";
 
 /** @param {unknown} change */
@@ -19,15 +21,22 @@ export function createDaemonSyncReplicaPersistence(db, stmt) {
   /** @type {Record<string, unknown> | null} */
   let cachedReplica = null;
 
-  /** @param {Record<string, unknown>} replica */
-  function flushSyncReplicaTxn(replica) {
+  /** @param {Record<string, unknown>} replica @param {{ checkpointWal?: boolean }} [opts] */
+  function flushSyncReplicaTxn(replica, opts = {}) {
     const sanitized = sanitizeSyncReplicaForPersist(replica);
     db.exec("BEGIN");
     try {
       const json = JSON.stringify(sanitized);
       stmt.upsertSyncReplica.run(json);
       db.exec("COMMIT");
-      cachedReplica = hydrateSyncReplica(JSON.parse(json));
+      cachedReplica = replica;
+      if (opts.checkpointWal) {
+        try {
+          db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+        } catch {
+          /* best-effort */
+        }
+      }
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
@@ -42,7 +51,11 @@ export function createDaemonSyncReplicaPersistence(db, stmt) {
         cachedReplica = createEmptySyncReplica();
         return cachedReplica;
       }
-      cachedReplica = hydrateSyncReplica(JSON.parse(String(row.replica_json)));
+      try {
+        cachedReplica = hydrateSyncReplica(JSON.parse(String(row.replica_json)));
+      } catch (err) {
+        wrapReplicaJsonParseError(err);
+      }
       return cachedReplica;
     },
     flushSyncReplica(replica) {
@@ -56,7 +69,8 @@ export function createDaemonSyncReplicaPersistence(db, stmt) {
       }
       const replica = this.loadSyncReplica();
       applySyncChangeToReplica(replica, change, () => {});
-      flushSyncReplicaTxn(replica);
+      const checkpointWal = String(change.op ?? "") === "message_delete";
+      flushSyncReplicaTxn(replica, { checkpointWal });
     },
     clearReplicaCache() {
       cachedReplica = null;

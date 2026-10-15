@@ -16,11 +16,12 @@ describe("object store delete stale race", () => {
     const deviceA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const deviceB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const localB = createInMemoryObjectStoreLocalState();
+    const localA = createInMemoryObjectStoreLocalState();
     const transportA = new ObjectStoreSyncTransport(adapter, {
       dek,
       deviceUuid: deviceA,
       layoutPrefix: "accounts/delete-race",
-      localState: createInMemoryObjectStoreLocalState(),
+      localState: localA,
     });
     const transportB = new ObjectStoreSyncTransport(adapter, {
       dek,
@@ -54,13 +55,16 @@ describe("object store delete stale race", () => {
     await transportB.pullSyncChanges({ since: localB.load().vectorCursor, limit: 50 });
     const planVector = snapshotVectorCursor(localB.load().vectorCursor);
     const baseSeq = (await transportB.fetchSyncStatus()).head_sequence;
+    const updateBase = snapshotVectorCursor(localA.load().vectorCursor);
     await transportA.pushSyncMutations([
       {
         client_id: generateClientNodeId(),
         op: "message_update",
         context_id: contextId,
+        base_vector: updateBase,
         payload: {
           messages: [{ id: m1, role: "user", content: { body: "changed" }, metadata: { ic_client_node_id: m1 } }],
+          base_vector: updateBase,
         },
       },
     ]);
@@ -99,11 +103,12 @@ describe("object store delete stale race", () => {
       layoutPrefix: "accounts/delete-race-c",
       localState: localB,
     });
+    const localC = createInMemoryObjectStoreLocalState();
     const transportC = new ObjectStoreSyncTransport(adapter, {
       dek,
       deviceUuid: deviceC,
       layoutPrefix: "accounts/delete-race-c",
-      localState: createInMemoryObjectStoreLocalState(),
+      localState: localC,
     });
     const contextId = "ctx_never_pulled";
     await transportA.pushSyncMutations([
@@ -129,13 +134,16 @@ describe("object store delete stale race", () => {
     await transportB.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
     const planVector = snapshotVectorCursor(localB.load().vectorCursor);
     const baseSeq = (await transportB.fetchSyncStatus()).head_sequence;
+    const updateBaseC = snapshotVectorCursor(localC.load().vectorCursor);
     await transportC.pushSyncMutations([
       {
         client_id: generateClientNodeId(),
         op: "message_update",
         context_id: contextId,
+        base_vector: updateBaseC,
         payload: {
           messages: [{ id: m1, role: "user", content: { body: "from-c" }, metadata: { ic_client_node_id: m1 } }],
+          base_vector: updateBaseC,
         },
       },
     ]);
@@ -152,4 +160,80 @@ describe("object store delete stale race", () => {
     assert.equal(del.applied.length, 0);
     assert.ok(del.conflicts.some((c) => c.kind === "delete_stale_base"));
   });
+
+  it("message_update push keeps enqueue-time base_vector after pull advances cursor", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const dek = new Uint8Array(32).fill(11);
+    const deviceA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const deviceB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const localA = createInMemoryObjectStoreLocalState();
+    const localB = createInMemoryObjectStoreLocalState();
+    const transportA = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: deviceA,
+      layoutPrefix: "accounts/update-base-enqueue",
+      localState: localA,
+    });
+    const transportB = new ObjectStoreSyncTransport(adapter, {
+      dek,
+      deviceUuid: deviceB,
+      layoutPrefix: "accounts/update-base-enqueue",
+      localState: localB,
+    });
+    const contextId = "ctx_base_enqueue";
+    await transportA.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "context_create",
+        context_id: contextId,
+        payload: { context_id: contextId, metadata: {} },
+      },
+    ]);
+    await transportB.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 50 });
+    const m1 = generateClientNodeId();
+    await transportA.pushSyncMutations([
+      {
+        client_id: m1,
+        op: "message_append",
+        context_id: contextId,
+        payload: {
+          messages: [{ id: m1, role: "user", content: { body: "one" }, metadata: { ic_client_node_id: m1 } }],
+        },
+      },
+    ]);
+    await transportB.pullSyncChanges({ since: localB.load().vectorCursor, limit: 50 });
+    const enqueueBase = snapshotVectorCursor(localB.load().vectorCursor);
+    const queuedUpdate = {
+      client_id: generateClientNodeId(),
+      op: "message_update",
+      context_id: contextId,
+      base_vector: enqueueBase,
+      payload: {
+        messages: [{ id: m1, role: "user", content: { body: "queued" }, metadata: { ic_client_node_id: m1 } }],
+        base_vector: enqueueBase,
+      },
+    };
+    await transportA.pushSyncMutations([
+      {
+        client_id: generateClientNodeId(),
+        op: "message_update",
+        context_id: contextId,
+        base_vector: snapshotVectorCursor(localA.load().vectorCursor),
+        payload: {
+          messages: [{ id: m1, role: "user", content: { body: "remote" }, metadata: { ic_client_node_id: m1 } }],
+          base_vector: snapshotVectorCursor(localA.load().vectorCursor),
+        },
+      },
+    ]);
+    await transportB.pullSyncChanges({ since: localB.load().vectorCursor, limit: 50 });
+    await transportB.pushSyncMutations([queuedUpdate]);
+    const ledgerRow = localB.load().ledger.find((row) => row.client_id === queuedUpdate.client_id);
+    assert.ok(ledgerRow);
+    assert.deepEqual(
+      snapshotVectorCursor(normalizeVectorSyncCursor(ledgerRow.payload?.base_vector ?? ledgerRow.payload)),
+      enqueueBase,
+    );
+  });
+
 });

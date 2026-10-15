@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync-replica-apply.mjs";
-import { sanitizeSyncReplicaForPersist } from "../../lib/sync-replica-state.mjs";
+import { hydrateSyncReplica, sanitizeSyncReplicaForPersist } from "../../lib/sync-replica-state.mjs";
 import { sortMergeableMutations } from "../../lib/object-store-merge.mjs";
 import { fullSnapshot, syncChangeFromMergeable } from "../helpers/object-store-replica-convergence.mjs";
 import { scenarioAppendDeleteSlowUpdate } from "./object-store-replica-scenarios.mjs";
@@ -23,14 +23,17 @@ describe("CLI and daemon replicas", () => {
     const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-match-")), "daemon.db");
     const store = createStore({ dbPath });
     try {
-      const daemonReplica = store.loadSyncReplica();
+      await store.initObjectStoreReplica();
       for (const item of items) {
-        applySyncChangeToReplica(daemonReplica, syncChangeFromMergeable(item), () => {});
+        store.applySyncChange(syncChangeFromMergeable(item));
+        store.clearReplicaCache();
       }
-      store.flushSyncReplica(daemonReplica);
+      store.clearReplicaCache();
       const daemonPersisted = sanitizeSyncReplicaForPersist(store.loadSyncReplica());
       assert.equal(JSON.stringify(daemonPersisted), JSON.stringify(cliPersisted));
-      assert.equal(fullSnapshot(cliReplica), fullSnapshot(store.loadSyncReplica()));
+      const cliRoundTrip = hydrateSyncReplica(cliPersisted);
+      const daemonRoundTrip = hydrateSyncReplica(daemonPersisted);
+      assert.equal(fullSnapshot(cliRoundTrip), fullSnapshot(daemonRoundTrip));
     } finally {
       store.close();
     }

@@ -59,10 +59,12 @@ describe("sync replica privacy on persist", () => {
     const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-priv-")), "daemon.db");
     const store = createStore({ dbPath });
     try {
+      await store.initObjectStoreReplica();
       store.flushSyncReplica(replica);
       const row = store.dbPath;
       const raw = fs.readFileSync(dbPath, "utf8");
       assert.equal(raw.includes(secret), false);
+      store.clearReplicaCache();
       assert.equal(scanForNeedle(store.loadSyncReplica(), secret), false);
       void row;
     } finally {

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -10,11 +9,8 @@ import {
 } from "#sync-cursor";
 
 import { expandHome } from "./utils.mjs";
-
-const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
-const { createDaemonSyncReplicaPersistence, isObjectStoreSyncChange } = await import(
-  `${sdkLib}/sync-replica-daemon-store.mjs`
-);
+import { isObjectStoreSyncChange } from "./object-store-sync-change.mjs";
+import { loadSyncReplicaDaemonModule } from "./load-sync-replica-daemon.mjs";
 
 const DEFAULT_DB_PATH = "~/.infinitecontext/daemon.db";
 
@@ -163,8 +159,6 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     `),
   };
 
-  const replicaPersistence = createDaemonSyncReplicaPersistence(db, stmt);
-
   // manual transaction wrapper (node:sqlite has no .transaction() helper)
   function markEventSeenTxn(eventHash, ttlSeconds) {
     db.exec("BEGIN");
@@ -211,6 +205,21 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
   }
 
   migrateDaemonPullCursor();
+
+  /** @type {ReturnType<import("../../js-sdk/lib/sync-replica-daemon-store.mjs").createDaemonSyncReplicaPersistence> | null} */
+  let replicaPersistence = null;
+  /** @type {Promise<void> | null} */
+  let replicaPersistenceInit = null;
+
+  function ensureReplicaPersistenceInit() {
+    if (replicaPersistence) return Promise.resolve();
+    if (!replicaPersistenceInit) {
+      replicaPersistenceInit = loadSyncReplicaDaemonModule().then((mod) => {
+        replicaPersistence = mod.createDaemonSyncReplicaPersistence(db, stmt);
+      });
+    }
+    return replicaPersistenceInit;
+  }
 
   function applyHostedSyncChange(change) {
     if (!change || typeof change !== "object") return;
@@ -276,6 +285,9 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
 
   return {
     dbPath: resolvedPath,
+    async initObjectStoreReplica() {
+      await ensureReplicaPersistenceInit();
+    },
     markEventSeen(eventHash, ttlSeconds) {
       return markEventSeenTxn(String(eventHash ?? ""), ttlSeconds);
     },
@@ -316,14 +328,26 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       stmt.setContextCache.run(String(cacheKey ?? ""), String(contextId ?? ""));
     },
     loadSyncReplica() {
+      if (!replicaPersistence) {
+        throw new Error("Object store replica is not initialized — call initObjectStoreReplica() first");
+      }
       return replicaPersistence.loadSyncReplica();
     },
     flushSyncReplica(replica) {
+      if (!replicaPersistence) {
+        throw new Error("Object store replica is not initialized — call initObjectStoreReplica() first");
+      }
       replicaPersistence.flushSyncReplica(replica);
+    },
+    clearReplicaCache() {
+      replicaPersistence?.clearReplicaCache();
     },
     applySyncChange(change) {
       if (!change || typeof change !== "object") return;
       if (isObjectStoreSyncChange(change)) {
+        if (!replicaPersistence) {
+          throw new Error("Object store replica is not initialized — call initObjectStoreReplica() first");
+        }
         replicaPersistence.applyObjectStoreSyncChange(change, (hostedChange) => {
           applyHostedSyncChange(hostedChange);
         });
@@ -332,6 +356,8 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       applyHostedSyncChange(change);
     },
     close() {
+      replicaPersistence = null;
+      replicaPersistenceInit = null;
       db.close();
     },
   };

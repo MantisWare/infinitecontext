@@ -735,6 +735,18 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
         continue;
       }
     }
+
+    if (raw.op === "message_update") {
+      if (!raw.base_vector && !raw.payload?.base_vector) {
+        failed.push({
+          client_id: clientId,
+          code: "invalid_input",
+          message: "base_vector is required for message_update",
+          retryable: false,
+        });
+        continue;
+      }
+    }
   }
 
   const accepted = batch.filter((raw) => {
@@ -752,8 +764,10 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
         ...m,
         hlc: serializeMutationHlc(hlcTuple),
       };
-      if (m.op === "message_update" && !m.base_vector && !m.payload?.base_vector) {
-        const base_vector = snapshotVectorCursor(state.vectorCursor);
+      if (m.op === "message_update") {
+        const base_vector = snapshotVectorCursor(
+          normalizeVectorSyncCursor(m.base_vector ?? m.payload?.base_vector),
+        );
         out.base_vector = base_vector;
         out.payload = { ...(m.payload && typeof m.payload === "object" ? m.payload : {}), base_vector };
       }

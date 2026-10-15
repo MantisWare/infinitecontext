@@ -5,6 +5,7 @@ import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync
 import { mergeableFromMutation, sortMergeableMutations } from "../../lib/object-store-merge.mjs";
 import { deriveDevH } from "../../lib/storage/layout.mjs";
 import {
+  assertCliPersistedConvergesAcrossRandomPulls,
   assertConvergesAcrossRandomPulls,
   syncChangeFromMergeable,
 } from "../helpers/object-store-replica-convergence.mjs";
@@ -17,10 +18,14 @@ import {
 
 describe("object store replica conflicts", () => {
   for (const [label, scenarioFn] of ALL_CONVERGENCE_SCENARIOS) {
-    it(`${label} — full rows match across 300 random pull orders`, () => {
+    it(`${label} — full rows match across 300 random pull orders (in memory)`, () => {
       assertConvergesAcrossRandomPulls(scenarioFn(), (replica, change) => {
         applySyncChangeToReplica(replica, change, () => {});
       });
+    });
+
+    it(`${label} — full rows match across 300 random pull orders (persist + restart)`, () => {
+      assertCliPersistedConvergesAcrossRandomPulls(scenarioFn());
     });
   }
 

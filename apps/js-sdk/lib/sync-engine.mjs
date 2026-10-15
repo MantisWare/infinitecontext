@@ -10,7 +10,11 @@ import {
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
-import { hydrateSyncReplica, sanitizeSyncReplicaForPersist } from "./sync-replica-state.mjs";
+import {
+  hydrateSyncReplica,
+  sanitizeSyncReplicaForPersist,
+  wrapReplicaJsonParseError,
+} from "./sync-replica-state.mjs";
 import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
 
 export { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
@@ -27,6 +31,18 @@ function readJsonFile(filePath, fallback) {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
     return fallback;
+  }
+}
+
+function readSyncReplicaFile() {
+  if (!fs.existsSync(SYNC_REPLICA_FILE)) {
+    return createEmptySyncReplica();
+  }
+  try {
+    const text = fs.readFileSync(SYNC_REPLICA_FILE, "utf8");
+    return hydrateSyncReplica(JSON.parse(text));
+  } catch (err) {
+    wrapReplicaJsonParseError(err);
   }
 }
 
@@ -183,7 +199,7 @@ export async function flushSyncOutbox({ baseUrl, log, transport } = {}) {
 }
 
 function readReplica() {
-  return hydrateSyncReplica(readJsonFile(SYNC_REPLICA_FILE, null));
+  return readSyncReplicaFile();
 }
 
 /** Vector cursor from dedicated object-store sync state (not sync-cli-state.json). */
@@ -311,6 +327,19 @@ export function mutationForMessageAppend(contextId, messages) {
     op: "message_append",
     context_id: contextId,
     payload: { messages },
+  };
+}
+
+export function mutationForMessageUpdate(contextId, messages, { base_vector: baseVector } = {}) {
+  const base_vector = baseVector
+    ? snapshotVectorCursor(normalizeVectorSyncCursor(baseVector))
+    : snapshotObjectStoreBaseVector();
+  return {
+    client_id: generateClientNodeId(),
+    op: "message_update",
+    context_id: contextId,
+    base_vector,
+    payload: { messages, base_vector },
   };
 }
 
