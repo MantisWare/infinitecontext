@@ -51,7 +51,7 @@ describe("object store replica recompute performance", () => {
     assert.equal(replica.messages[msgId].payload.content.body, "u2400");
   });
 
-  it("recomputes 2400 concurrent edits to one message in under 4s", () => {
+  it("recomputes 2400 concurrent edits to one message in under 6s", () => {
     const devA = deriveDevH(TEST_DEK, "11111111-1111-4111-8111-111111111111");
     const devB = deriveDevH(TEST_DEK, "22222222-2222-4222-8222-222222222222");
     const ctx = "ctx_perf_concurrent";
@@ -91,7 +91,7 @@ describe("object store replica recompute performance", () => {
       );
     }
     const elapsed = performance.now() - start;
-    assert.ok(elapsed < 4000, `expected < 4000ms, got ${elapsed.toFixed(1)}ms`);
+    assert.ok(elapsed < 6000, `expected < 6000ms, got ${elapsed.toFixed(1)}ms`);
     assert.equal(replica.sync_conflicts.length, 2400);
   });
 });

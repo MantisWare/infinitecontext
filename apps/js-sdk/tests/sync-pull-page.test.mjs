@@ -9,11 +9,11 @@ const enginePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../l
 describe("pullAndApplySync paging", () => {
   it("persists replica once per page and saves cursor inside the pull loop", () => {
     const src = fs.readFileSync(enginePath, "utf8");
-    assert.match(src, /applySyncChangeToReplica\(replica, change, \(\) => \{\}\)/);
+    assert.match(src, /applySyncChangeToReplica\(daemonReplica, change/);
     const loopStart = src.indexOf("while (hasMore)");
     const loopEnd = src.indexOf("return { applied: total");
     const loop = src.slice(loopStart, loopEnd);
-    assert.match(loop, /if \(replica\) persistReplica\(\)/);
+    assert.match(loop, /if \(daemonReplica \|\| cliReplica\) persistReplica\(\)/);
     assert.match(loop, /writeCursor\(since\)/);
     assert.doesNotMatch(loop, /fetchSyncStatus/);
   });

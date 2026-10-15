@@ -1246,11 +1246,7 @@ export async function daemonBoot({
         loadBootstrapModule: loadBootstrapModule,
         bootstrapOptions: { baseUrl: cfg.baseUrl, dbPath: cfg.dbFile },
       });
-      const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
-      const hostedBackend = !storageBackend || storageBackend === "hosted";
-      if (!hostedBackend) {
-        await store.initObjectStoreReplica();
-      }
+      await store.initObjectStoreReplica();
     }
 
     // connectivity check

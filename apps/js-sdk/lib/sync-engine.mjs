@@ -10,6 +10,7 @@ import {
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
+import { isObjectStoreSyncChange } from "./sync-replica-daemon-store.mjs";
 import {
   hydrateSyncReplica,
   sanitizeSyncReplicaForPersist,
@@ -254,24 +255,31 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
   let hasMore = true;
   let lastPage = null;
 
-  const replicaMode = store?.loadSyncReplica && store?.flushSyncReplica;
-  const legacyReplicaMode = !replicaMode && store?.flushReplica;
-  const replica = replicaMode
-    ? store.loadSyncReplica()
-    : legacyReplicaMode
-      ? readReplica()
-      : null;
+  /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
+  let daemonReplica = null;
+  if (store?.loadSyncReplica && store?.flushSyncReplica) {
+    try {
+      daemonReplica = store.loadSyncReplica();
+    } catch {
+      daemonReplica = null;
+    }
+  }
+  const daemonReplicaMode = daemonReplica !== null;
+  const legacyReplicaMode = !daemonReplicaMode && store?.flushReplica;
+  const cliReplica = legacyReplicaMode ? readReplica() : null;
   const persistReplica = () => {
-    if (replica && replicaMode) store.flushSyncReplica(replica);
-    else if (replica && legacyReplicaMode) store.flushReplica(replica);
+    if (daemonReplica && daemonReplicaMode) store.flushSyncReplica(daemonReplica);
+    else if (cliReplica && legacyReplicaMode) store.flushReplica(cliReplica);
   };
 
   while (hasMore) {
     lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
-      if (store?.applySyncChange || replica) {
-        if (replica) {
-          applySyncChangeToReplica(replica, change, () => {});
+      if (store?.applySyncChange || daemonReplica || cliReplica) {
+        if (daemonReplica && isObjectStoreSyncChange(change)) {
+          applySyncChangeToReplica(daemonReplica, change, () => {});
+        } else if (cliReplica) {
+          applySyncChangeToReplica(cliReplica, change, () => {});
         } else if (store?.applySyncChange) {
           store.applySyncChange(change);
         }
@@ -281,7 +289,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
       }
       total += 1;
     }
-    if (replica) persistReplica();
+    if (daemonReplica || cliReplica) persistReplica();
     if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
       since = lastPage.next_since;
     }
