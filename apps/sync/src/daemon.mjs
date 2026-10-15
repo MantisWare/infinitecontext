@@ -1248,7 +1248,9 @@ export async function daemonBoot({
         loadBootstrapModule: loadBootstrapModule,
         bootstrapOptions: { baseUrl: cfg.baseUrl, dbPath: cfg.dbFile },
       });
-      await store.initObjectStoreReplica();
+      const { isHostedStorageBackend } = await import("../../js-sdk/lib/sync-storage-backend.mjs");
+      const objectStoreBackend = !isHostedStorageBackend(runtimeConfig);
+      await store.initObjectStoreReplica({ objectStoreBackend });
     }
 
     // connectivity check

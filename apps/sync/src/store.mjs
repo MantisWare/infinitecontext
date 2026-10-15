@@ -290,7 +290,9 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     get objectStoreReplicaPullEnabled() {
       return objectStoreReplicaPullEnabled;
     },
-    async initObjectStoreReplica() {
+    async initObjectStoreReplica(options = {}) {
+      const enabled = options.objectStoreBackend !== false;
+      if (!enabled) return;
       await ensureReplicaPersistenceInit();
       objectStoreReplicaPullEnabled = true;
     },

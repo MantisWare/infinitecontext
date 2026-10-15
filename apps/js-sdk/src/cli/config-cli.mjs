@@ -16,6 +16,7 @@ import {
   writeConfigFile,
 } from "../../lib/client-config.mjs";
 import { getValidAccessToken, hasSessionCredentials, loadCredentials } from "../../lib/credentials.mjs";
+import { resolveDaemonDbPathFromEnv } from "../../lib/object-store-sync-runtime.mjs";
 
 function printHelp() {
   console.log(`Usage: infinitecontext config <command>
@@ -136,14 +137,18 @@ async function checkLocalSyncReplicaFiles() {
     });
   }
 
-  const dbPath = path.join(home, "daemon.db");
+  const dbPath = resolveDaemonDbPathFromEnv(process.env);
   if (fs.existsSync(dbPath)) {
-    tryLoad("daemon.db sync_replica_state", () => {
+    tryLoad(`daemon.db sync_replica_state (${dbPath})`, () => {
       const db = new DatabaseSync(dbPath, { readOnly: true });
       try {
         const row = db.prepare("SELECT replica_json FROM sync_replica_state WHERE id = 1").get();
         if (row?.replica_json) {
-          hydrateSyncReplica(JSON.parse(String(row.replica_json)));
+          try {
+            hydrateSyncReplica(JSON.parse(String(row.replica_json)));
+          } catch (err) {
+            wrapReplicaJsonParseError(err);
+          }
         }
       } finally {
         db.close();
@@ -159,6 +164,7 @@ async function cmdDoctor() {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
+    await checkLocalSyncReplicaFiles();
     return;
   }
 
@@ -169,6 +175,7 @@ async function cmdDoctor() {
   } catch (error) {
     console.error(`✗ Cannot reach server: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
+    await checkLocalSyncReplicaFiles();
     return;
   }
 

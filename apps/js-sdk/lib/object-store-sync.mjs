@@ -48,6 +48,10 @@ import {
   logSegmentRelativePath,
 } from "./storage/layout.mjs";
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
+import {
+  bootstrapLocalStateFromLatestSnapshot,
+  recordManifestAcknowledgement,
+} from "./storage/storage-compaction.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -534,6 +538,7 @@ export async function objectStoreFetchSyncStatus(ctx) {
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
   const state = ctx.localState.load();
+  await bootstrapLocalStateFromLatestSnapshot(ctx, state);
   const cursor = normalizeVectorSyncCursor(options.since ?? state.vectorCursor);
 
   pullsSinceBoot += 1;
@@ -638,6 +643,11 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
 
   state.vectorCursor = cursor;
   await persistLocalState(ctx, state);
+  try {
+    await recordManifestAcknowledgement(ctx, state);
+  } catch {
+    /* manifest is advisory */
+  }
 
   const hasMore = pendingSegments.length > segmentsTaken;
   return {
