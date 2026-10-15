@@ -9,20 +9,6 @@ on:
 jobs:
   storage-tests:
     runs-on: ubuntu-latest
-    services:
-      minio:
-        image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
-        ports:
-          - 9000:9000
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        options: >-
-          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-          --cmd "server /data --console-address :9001"
     env:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
@@ -39,6 +25,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Start MinIO (S3-compatible)
+        run: |
+          curl -fsSL "https://dl.min.io/server/minio/release/linux-amd64/minio" -o /tmp/minio
+          chmod +x /tmp/minio
+          mkdir -p /tmp/minio-data
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live; then
+              echo "MinIO ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO failed to start"
+          exit 1
 
       - run: pnpm install --frozen-lockfile
 
