@@ -25,6 +25,7 @@ export const DEVICE_MANIFEST_CONTRIBUTION_FIELD = "ic_layout_device_manifest_v2"
  * @property {{ seq: number, digest: string }} [trusted_head] self only
  * @property {number} latest_snapshot_epoch
  * @property {import('../sync-cursor.mjs').VectorSyncCursor} compacted_through
+ * @property {string} [snapshot_digest] hex digest of snap/<epoch>.enc when epoch >= 0
  * @property {string[]} removed_devices
  */
 
@@ -65,6 +66,8 @@ export function parseDeviceManifestContribution(raw) {
     trusted_head,
     latest_snapshot_epoch: Number(record.latest_snapshot_epoch ?? -1),
     compacted_through: normalizeVectorSyncCursor(record.compacted_through ?? 0),
+    snapshot_digest:
+      typeof record.snapshot_digest === "string" && record.snapshot_digest ? record.snapshot_digest : undefined,
     removed_devices: Array.isArray(record.removed_devices)
       ? record.removed_devices.map((d) => String(d).toUpperCase())
       : [],
@@ -89,6 +92,14 @@ export function mergeMaxDeviceContributionPair(a, b) {
         : a.trusted_head.seq >= b.trusted_head.seq
           ? a.trusted_head
           : b.trusted_head;
+  const tupleA = `${a.latest_snapshot_epoch}:${JSON.stringify(a.compacted_through)}:${a.snapshot_digest ?? ""}`;
+  const tupleB = `${b.latest_snapshot_epoch}:${JSON.stringify(b.compacted_through)}:${b.snapshot_digest ?? ""}`;
+  if (tupleA !== tupleB) {
+    throw new StorageError(
+      `Device manifest compaction tuple fork for ${a.devH}`,
+      "storage_fork",
+    );
+  }
   return {
     devH: a.devH,
     record_generation: Math.max(a.record_generation, b.record_generation),
@@ -101,8 +112,9 @@ export function mergeMaxDeviceContributionPair(a, b) {
     ),
     last_seen_at: a.last_seen_at && b.last_seen_at ? (a.last_seen_at > b.last_seen_at ? a.last_seen_at : b.last_seen_at) : (a.last_seen_at ?? b.last_seen_at),
     trusted_head: trusted,
-    latest_snapshot_epoch: Math.max(a.latest_snapshot_epoch, b.latest_snapshot_epoch),
-    compacted_through: maxVectorSyncCursor(a.compacted_through, b.compacted_through),
+    latest_snapshot_epoch: a.latest_snapshot_epoch,
+    compacted_through: a.compacted_through,
+    snapshot_digest: a.snapshot_digest ?? b.snapshot_digest,
     removed_devices: [...new Set([...(a.removed_devices ?? []), ...(b.removed_devices ?? [])])],
   };
 }
@@ -132,11 +144,6 @@ export function mergeDeviceManifestContributions(contributions) {
     maxRecordGen = Math.max(maxRecordGen, row.record_generation ?? 0);
     if (row.sync_participant) participants.add(row.devH);
     for (const id of row.removed_devices ?? []) removed.add(id);
-    manifest.latest_snapshot_epoch = Math.max(manifest.latest_snapshot_epoch, row.latest_snapshot_epoch ?? -1);
-    manifest.compacted_through = maxVectorSyncCursor(
-      manifest.compacted_through,
-      row.compacted_through ?? normalizeVectorSyncCursor(0),
-    );
     if (row.trusted_head && Number.isFinite(row.trusted_head.seq)) {
       manifest.trusted_heads = mergeTrustedHeadsMonotonic(manifest.trusted_heads, {
         [row.devH]: row.trusted_head,
@@ -187,11 +194,33 @@ export async function loadAllDeviceManifestContributions(adapter, dek, layoutPre
           const plain = readLayoutObjectPlaintext(dek, row.key, body);
           const parsed = parseDeviceManifestContribution(plain);
           if (parsed) parsedRows.push(parsed);
-        } catch {
-          /* skip invalid */
+        } catch (error) {
+          throw error instanceof StorageError
+            ? error
+            : new StorageError(
+                `Undecryptable device manifest contribution at ${row.key}`,
+                "corrupt_storage",
+              );
         }
       }
-      const merged = mergeMaxDeviceContributions(parsedRows);
+      if (bodies.length > 0 && parsedRows.length === 0) {
+        throw new StorageError(
+          `Undecryptable device manifest contribution at ${row.key}`,
+          "corrupt_storage",
+        );
+      }
+      let merged;
+      try {
+        merged = mergeMaxDeviceContributions(parsedRows);
+      } catch (error) {
+        if (error instanceof StorageError && error.code === "storage_fork") {
+          throw new StorageError(
+            `${error.message}. Run \`infinitecontext storage doctor --repair\` on the owning device.`,
+            "storage_fork",
+          );
+        }
+        throw error;
+      }
       if (merged) out.push(merged);
     }
     if (!page.nextCursor) break;
@@ -225,7 +254,17 @@ async function loadDeviceContributionBodies(adapter, dek, objectKey) {
 export async function loadFolderMergedManifest(adapter, dek, layoutPrefix) {
   const contributions = await loadAllDeviceManifestContributions(adapter, dek, layoutPrefix);
   if (!contributions.length) return createEmptyStorageManifest();
-  return mergeDeviceManifestContributions(contributions);
+  const manifest = mergeDeviceManifestContributions(contributions);
+  const { compactionClaimFromDeviceContribution, pickVerifiedCompactionFloor } = await import(
+    "./compaction-floor-tuple.mjs"
+  );
+  const claims = contributions
+    .map((row) => compactionClaimFromDeviceContribution(row))
+    .filter(Boolean);
+  const floor = await pickVerifiedCompactionFloor({ adapter, dek, layoutPrefix }, claims);
+  manifest.latest_snapshot_epoch = floor.epoch;
+  manifest.compacted_through = floor.compacted_through;
+  return manifest;
 }
 
 /**
@@ -275,7 +314,15 @@ export async function updateFolderMergedManifest(ctx, mutate) {
       previous = null;
     }
   }
-  const contribution = contributionFromOwnerManifestView(next, ctx.ownerDevH, previous);
+  let contribution = contributionFromOwnerManifestView(next, ctx.ownerDevH, previous);
+  if (contribution.latest_snapshot_epoch >= 0) {
+    const { loadSnapshotBodyDigest } = await import("./compaction-floor-tuple.mjs");
+    const digest = await loadSnapshotBodyDigest(
+      { adapter: ctx.adapter, dek: ctx.dek, layoutPrefix: ctx.layoutPrefix },
+      contribution.latest_snapshot_epoch,
+    );
+    contribution = { ...contribution, snapshot_digest: digest ?? undefined };
+  }
   const body = sealLayoutObjectPlaintext(ctx.dek, key, wrapDeviceManifestContribution(contribution));
   if (!prevRow) {
     await ctx.adapter.put(key, body, { ifNoneMatch: "*" });

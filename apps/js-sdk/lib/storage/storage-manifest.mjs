@@ -108,7 +108,8 @@ export async function loadStorageManifest(adapter, dek, layoutPrefix) {
   const plain = readLayoutObjectPlaintext(dek, key, row.body);
   const manifest = parseStorageManifestPlain(plain);
   sanitizeManifestDeviceAcks(manifest);
-  return manifest;
+  const { applyVerifiedCompactionFloorToManifest } = await import("./compaction-floor-tuple.mjs");
+  return applyVerifiedCompactionFloorToManifest(adapter, dek, layoutPrefix, manifest);
 }
 
 /** @param {StorageManifest} manifest */

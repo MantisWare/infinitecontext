@@ -299,7 +299,7 @@ async function mergeSelfPushedLogIntoBootstrapReplica(ctx, state, bootstrapPlain
 export async function bootstrapVerifiedSnapshotFloorCatchUp(ctx, state, manifest, readEnvelopeAtSeq) {
   if (!stateNeedsSnapshotFloorCatchUp(state, manifest)) return false;
   if (manifest.latest_snapshot_epoch < 0) {
-    throw new ObjectStoreLogRollbackError("Manifest compacted_through set without latest_snapshot_epoch");
+    return false;
   }
   const snap = await loadStorageSnapshot(ctx, manifest.latest_snapshot_epoch);
   if (!snap) {
@@ -330,7 +330,7 @@ export async function ensureManifestVerifiedSnapshotFloors(ctx, state, manifest,
   if (vectorCursorBelowManifestFloor(state, manifest)) return false;
   if (!manifestNeedsVerifiedSnapshotFloorAdoption(state, manifest)) return false;
   if (manifest.latest_snapshot_epoch < 0) {
-    throw new ObjectStoreLogRollbackError("Manifest compacted_through set without latest_snapshot_epoch");
+    return false;
   }
   const snap = await loadStorageSnapshot(ctx, manifest.latest_snapshot_epoch);
   if (!snap) {

@@ -6,7 +6,11 @@ import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 import { loadLatestObjectGenerationAtDir } from "./filesystem-generations.mjs";
 import { keyMatchesListPrefix, normalizeListPrefix } from "./filesystem-keys.mjs";
 import { canonicalizeConflictStorageKey } from "./folder-conflict-copies.mjs";
-import { ensureMaterializedLocalFile } from "./folder-icloud-placeholder.mjs";
+import {
+  ensureMaterializedLocalFile,
+  icloudPlaceholderSiblingPath,
+  isEvictedICloudPlaceholderPath,
+} from "./folder-icloud-placeholder.mjs";
 import {
   physicalKeyDirsForCanonicalKey,
   scanCanonicalKeysFromObjectsTree,
@@ -25,6 +29,7 @@ export const FOLDER_HONEST_CAPABILITIES = storageCapabilitySet([
   STORAGE_CAPABILITIES.list,
   STORAGE_CAPABILITIES.delete,
   STORAGE_CAPABILITIES.conditionalCreate,
+  // crossDeviceCas intentionally omitted (eventual sync / folder policy)
 ]);
 
 /**
@@ -100,20 +105,41 @@ export function createFolderStorageAdapter(options) {
   /**
    * @param {string} key
    */
-  async function listConflictGetCandidates(key) {
+  /**
+   * @param {string} key
+   * @param {{ skipCrossCopyForkCheck?: boolean }} [opts]
+   */
+  async function listConflictGetCandidates(key, opts = {}) {
     const canonical = canonicalizeConflictStorageKey(key);
     const dirs = physicalKeyDirsForCanonicalKey(rootDir, canonical);
     /** @type {import("./types.mjs").StorageGetResult[]} */
     const found = [];
     for (const row of dirs) {
+      if (isEvictedICloudPlaceholderPath(row.keyDir)) {
+        throw new StorageError(
+          `Evicted iCloud placeholder for storage object ${canonical}`,
+          "evicted_placeholder",
+        );
+      }
       await materializePhysicalKeyDir(rootDir, row, placeholderTimeoutMs);
-      const latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+      let latest;
+      try {
+        latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+      } catch (error) {
+        if (error instanceof StorageError && error.code === "corrupt_storage") {
+          continue;
+        }
+        throw error;
+      }
       if (!latest || latest.header.tombstone) continue;
       found.push({
         body: latest.body,
         etag: latest.header.etag,
         size: latest.header.size,
       });
+    }
+    if (opts.skipCrossCopyForkCheck) {
+      return found;
     }
     /** @type {Map<string, import("./types.mjs").StorageGetResult>} */
     const unique = new Map();
@@ -196,6 +222,22 @@ export function createFolderStorageAdapter(options) {
       /** @type {import("./types.mjs").StorageObjectInfo[]} */
       const objects = [];
       for (const key of pageKeys) {
+        const canonical = canonicalizeConflictStorageKey(key);
+        for (const row of physicalKeyDirsForCanonicalKey(rootDir, canonical)) {
+          if (isEvictedICloudPlaceholderPath(row.keyDir)) {
+            throw new StorageError(
+              `Evicted iCloud placeholder for storage object ${canonical}`,
+              "evicted_placeholder",
+            );
+          }
+          const placeholder = icloudPlaceholderSiblingPath(row.keyDir);
+          if (fs.existsSync(placeholder)) {
+            throw new StorageError(
+              `Evicted iCloud placeholder for storage object ${canonical}`,
+              "evicted_placeholder",
+            );
+          }
+        }
         const head = await adapter.head(key);
         if (!head) continue;
         objects.push({
@@ -210,6 +252,7 @@ export function createFolderStorageAdapter(options) {
 
   return Object.assign(adapter, {
     inner,
+    rootDir,
     listConflictGetCandidates,
     loadContributionBodiesForKey,
     exposeInternalsForTests: inner.exposeInternalsForTests?.bind(inner),

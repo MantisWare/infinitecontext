@@ -8,6 +8,27 @@ import { StorageError } from "./errors.mjs";
 const execFileAsync = promisify(execFile);
 
 /** @param {string} targetPath absolute path to materialized file */
+/**
+ * @param {string} targetPath absolute path
+ */
+export function isEvictedICloudPlaceholderPath(targetPath) {
+  const placeholder = icloudPlaceholderSiblingPath(targetPath);
+  try {
+    if (fs.existsSync(placeholder)) {
+      return true;
+    }
+    if (fs.existsSync(targetPath)) {
+      const st = fs.statSync(targetPath);
+      if (st.isFile() && st.size === 0 && fs.existsSync(placeholder)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 export function icloudPlaceholderSiblingPath(targetPath) {
   const dir = path.dirname(targetPath);
   const base = path.basename(targetPath);

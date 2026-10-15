@@ -22,7 +22,7 @@ const DEV_B = deriveDevH(DEK, UUID_B);
 const PREFIX = "accounts/merge-test";
 
 describe("folder merged manifest", () => {
-  it("unions participants and maxes snapshot epoch from device files", async () => {
+  it("unions participants without max-merging unverified snapshot epochs", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-merge-manifest-"));
     const adapter = createFolderStorageAdapter({ rootDir: root, placeholderTimeoutMs: 100 });
     await adapter.init();
@@ -61,7 +61,7 @@ describe("folder merged manifest", () => {
     await adapter.put(keyA, bodyA, { ifNoneMatch: "*" });
     await adapter.put(keyB, bodyB, { ifNoneMatch: "*" });
     const merged = await loadFolderMergedManifest(adapter, DEK, PREFIX);
-    assert.equal(merged.latest_snapshot_epoch, 4);
+    assert.equal(merged.latest_snapshot_epoch, -1);
     assert.deepEqual(new Set(merged.sync_participants), new Set([DEV_A, DEV_B]));
     assert.equal(merged.devices.length, 2);
   });

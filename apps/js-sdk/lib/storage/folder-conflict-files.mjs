@@ -132,18 +132,36 @@ export function assertGenerationCopyPathsConsistent(paths, canonicalKeyForAad, r
  * @param {string} rootDir
  * @param {number} highWater
  */
-export function listNonStaleConflictAwareGenerationPaths(keyDir, canonicalKeyForAad, rootDir, highWater) {
-  const paths = listConflictAwareGenerationPaths(keyDir);
-  const filtered = highWater > 0 ? paths.filter((row) => row.gen >= highWater) : paths;
-  if (filtered.length > 0) {
-    const topGen = filtered[0].gen;
+/**
+ * @param {string} keyDir
+ * @param {string} canonicalKeyForAad
+ * @param {string} rootDir
+ * @param {{ gen: number, path: string }[]} filtered
+ */
+function assertForkCheckAcrossGenerations(keyDir, canonicalKeyForAad, rootDir, filtered) {
+  /** @type {Map<number, string[]>} */
+  const byGen = new Map();
+  for (const row of filtered) {
+    const list = byGen.get(row.gen) ?? [];
+    list.push(row.path);
+    byGen.set(row.gen, list);
+  }
+  for (const gen of [...byGen.keys()].sort((a, b) => b - a)) {
     const sameGenPaths = [];
     for (const name of fs.readdirSync(keyDir)) {
-      if (parseConflictAwareGenerationFileName(name) === topGen) {
+      if (parseConflictAwareGenerationFileName(name) === gen) {
         sameGenPaths.push(path.join(keyDir, name));
       }
     }
     assertGenerationCopyPathsConsistent(sameGenPaths, canonicalKeyForAad, rootDir);
+  }
+}
+
+export function listNonStaleConflictAwareGenerationPaths(keyDir, canonicalKeyForAad, rootDir, highWater) {
+  const paths = listConflictAwareGenerationPaths(keyDir);
+  const filtered = highWater > 0 ? paths.filter((row) => row.gen >= highWater) : paths;
+  if (filtered.length > 0) {
+    assertForkCheckAcrossGenerations(keyDir, canonicalKeyForAad, rootDir, filtered);
   }
   return filtered;
 }

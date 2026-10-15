@@ -1,5 +1,5 @@
 /**
- * @typedef {'get' | 'head' | 'put' | 'list' | 'delete' | 'conditionalCreate' | 'conditionalReplace' | 'strongListAfterWrite' | 'serverSideTimestamps'} StorageCapability
+ * @typedef {'get' | 'head' | 'put' | 'list' | 'delete' | 'conditionalCreate' | 'conditionalReplace' | 'strongListAfterWrite' | 'serverSideTimestamps' | 'crossDeviceCas'} StorageCapability
  */
 
 /**
@@ -85,6 +85,7 @@ export const STORAGE_CAPABILITIES = Object.freeze({
   conditionalReplace: "conditionalReplace",
   strongListAfterWrite: "strongListAfterWrite",
   serverSideTimestamps: "serverSideTimestamps",
+  crossDeviceCas: "crossDeviceCas",
 });
 
 /** @param {Iterable<StorageCapability>} values */

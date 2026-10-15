@@ -339,8 +339,6 @@ export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
   const epochs = await listSnapshotEpochs(ctx);
   if (!epochs.length) return null;
   const sorted = [...epochs].sort((a, b) => b - a);
-  /** @type {string | null} */
-  let lastError = null;
   for (const epoch of sorted) {
     const snap = await loadStorageSnapshot(ctx, epoch);
     if (!snap) continue;
@@ -349,12 +347,9 @@ export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
       assertSnapshotCoversManifestKnowledge(manifest, snap, { localTrustedHeads: state.trustedHeads });
       await assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, snap);
       return { epoch, snap };
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+    } catch {
+      /* ignore forked / conflict snapshot copies; replay full log when intact */
     }
-  }
-  if (lastError) {
-    throw new Error(`No verified snapshot satisfies manifest compaction floor (${lastError})`);
   }
   return null;
 }
@@ -386,6 +381,10 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function adoptVerifiedOrphanSnapshots(ctx) {
+  const { isObjectStoreCompactionEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreCompactionEnabled(ctx.adapter)) {
+    return loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+  }
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   const epochs = await listSnapshotEpochs(ctx);
   /** @type {StorageSnapshotRecord | null} */
@@ -427,6 +426,10 @@ export async function adoptVerifiedOrphanSnapshots(ctx) {
  * @param {number} [options.settleMs]
  */
 export async function compactObjectStoreReplica(ctx, state, replica, options = {}) {
+  const { isObjectStoreCompactionEnabled } = await import("./storage-adapter-policy.mjs");
+  if (!isObjectStoreCompactionEnabled(ctx.adapter)) {
+    return { skipped: true, reason: "compaction_disabled" };
+  }
   await adoptVerifiedOrphanSnapshots(ctx);
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   if (!isCompactionCaughtUpWithManifest(manifest, state)) {

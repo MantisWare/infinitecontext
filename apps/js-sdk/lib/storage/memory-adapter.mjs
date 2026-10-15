@@ -69,6 +69,7 @@ export function createMemoryStorageAdapter(options = {}) {
       STORAGE_CAPABILITIES.conditionalCreate,
       STORAGE_CAPABILITIES.conditionalReplace,
       STORAGE_CAPABILITIES.strongListAfterWrite,
+      STORAGE_CAPABILITIES.crossDeviceCas,
     ]),
 
     async init() {

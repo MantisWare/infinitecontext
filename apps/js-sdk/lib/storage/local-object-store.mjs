@@ -5,6 +5,7 @@ import { infinitecontextHome } from "../client-config.mjs";
 import { createProductionObjectStoreLocalState } from "../object-store-sync-runtime.mjs";
 import { StorageError } from "./errors.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
+import { assertLocalObjectStoreRootNotSynced } from "./sync-root-guard.mjs";
 import { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -79,6 +80,7 @@ export function resolveConfiguredStoreRoot(rootPath) {
   }
   const resolved = path.resolve(trimmed);
   assertAbsoluteStoreRoot(resolved);
+  assertLocalObjectStoreRootNotSynced(resolved);
   return resolved;
 }
 
@@ -100,7 +102,9 @@ export function resolveLocalObjectStoreRootDir(opts = {}) {
       return resolveConfiguredStoreRoot(rootDir.trim());
     }
   }
-  return defaultLocalObjectStoreRootDir();
+  const root = defaultLocalObjectStoreRootDir();
+  assertLocalObjectStoreRootNotSynced(root);
+  return root;
 }
 
 /**

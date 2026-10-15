@@ -655,6 +655,13 @@ function resolvePullVectorCursor(state, since) {
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
   let state = ctx.localState.load();
+  const { usesFolderMergedDeviceManifest } = await import("./storage/storage-adapter-policy.mjs");
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { repairOwnDeviceManifestFileIfAuthoritative } = await import(
+      "./storage/storage-manifest-folder-repair.mjs"
+    );
+    await repairOwnDeviceManifestFileIfAuthoritative(ctx);
+  }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   assertDeviceNotRemoved(ctx, manifest);
   state = ctx.localState.load();
