@@ -31,7 +31,7 @@ Remote ciphertext object storage using the **`StorageAdapter`** contract over **
 
 ## CI
 
-**`storage.yml`** runs contract tests against a **pinned MinIO service container** (`minio/minio:RELEASE.2024-11-07T00-52-20Z` on port 9000 — no GitHub release binary download). When `IC_REQUIRE_MINIO=1`, tests require `AWS_ENDPOINT_URL` + the CI test bucket env. A dedicated step logs **`IC_S3_CAS_RACE_CI:`** after **200** parallel create-only rounds. Tests skip locally without MinIO.
+**`storage.yml`** runs contract tests against a **pinned MinIO service container** (`quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z` on port 9000 — no GitHub release binary download). When `IC_REQUIRE_MINIO=1`, tests require `AWS_ENDPOINT_URL` + the CI test bucket env. A dedicated step logs **`IC_S3_CAS_RACE_CI:`** after **200** parallel create-only rounds. Tests skip locally without MinIO.
 
 ## Related docs
 
