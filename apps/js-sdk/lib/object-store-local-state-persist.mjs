@@ -89,6 +89,9 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
     appliedSnapshotEpoch: Number.isFinite(appliedSnapshotEpoch) ? appliedSnapshotEpoch : -1,
     bootstrapReplicaPendingAck: Boolean(record.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: Number(record.manifestGenerationHighWater ?? 0),
+    verifiedManifestGeneration: Number.isFinite(Number(record.verifiedManifestGeneration))
+      ? Number(record.verifiedManifestGeneration)
+      : undefined,
   };
   if (record.snapshotCompactedThrough !== undefined && record.snapshotCompactedThrough !== null) {
     hydrated.snapshotCompactedThrough = normalizeVectorSyncCursor(record.snapshotCompactedThrough);
@@ -132,6 +135,9 @@ export function serializeObjectStoreLocalSyncState(state) {
     bootstrapReplicaPendingAck: Boolean(state.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: state.manifestGenerationHighWater ?? 0,
   };
+  if (state.verifiedManifestGeneration !== undefined && Number.isFinite(state.verifiedManifestGeneration)) {
+    out.verifiedManifestGeneration = state.verifiedManifestGeneration;
+  }
   if (state.snapshotCompactedThrough) {
     out.snapshotCompactedThrough = normalizeVectorSyncCursor(state.snapshotCompactedThrough);
   }
@@ -227,6 +233,19 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
       persisted.manifestGenerationHighWater ?? 0,
       incoming.manifestGenerationHighWater,
     );
+  }
+  if (
+    incoming.verifiedManifestGeneration !== undefined &&
+    Number.isFinite(incoming.verifiedManifestGeneration)
+  ) {
+    const prevEpoch = persisted.appliedSnapshotEpoch ?? -1;
+    const nextEpoch = incoming.appliedSnapshotEpoch ?? prevEpoch;
+    if (nextEpoch >= prevEpoch) {
+      persisted.verifiedManifestGeneration = Math.max(
+        persisted.verifiedManifestGeneration ?? -1,
+        incoming.verifiedManifestGeneration,
+      );
+    }
   }
   if (incoming.pendingPullDeliveryApply !== undefined) {
     if (incoming.pendingPullDeliveryApply === null) {

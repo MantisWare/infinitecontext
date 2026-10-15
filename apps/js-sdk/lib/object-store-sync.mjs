@@ -64,6 +64,10 @@ import {
   registerManifestSyncParticipant,
 } from "./storage/storage-manifest.mjs";
 import { writeDeviceSyncAckFromState } from "./storage/storage-device-sync-ack.mjs";
+import {
+  ensureManifestVerifiedSnapshotFloors,
+  verifiedSnapshotFloorForDevH,
+} from "./object-store-snapshot-floor.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -91,7 +95,8 @@ async function persistLocalState(ctx, state, options = {}) {
  * @param {ObjectStoreSyncContext} ctx
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
-async function verifyFullTrustedChains(ctx, state) {
+async function verifyFullTrustedChains(ctx, state, manifest) {
+  await maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest);
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
     if (!trusted || trusted.seq < 0) continue;
     await verifyDeviceLogThroughSeq(
@@ -101,7 +106,7 @@ async function verifyFullTrustedChains(ctx, state) {
       (seq) => readEnvelopeAtSeq(ctx, devH, seq),
       trusted.seq,
     );
-    await assertLogContiguousToHead(ctx, state, devH, trusted);
+    await assertLogContiguousToHead(ctx, state, manifest, devH, trusted);
   }
 }
 
@@ -290,13 +295,18 @@ async function assertTrustedAnchorDigest(ctx, devH, trusted) {
  * @param {string} devH
  * @param {{ seq: number, digest: string }} trusted
  */
-function hasVerifiedLocalSnapshot(state) {
-  return (
-    Number.isFinite(state.appliedSnapshotEpoch) &&
-    state.appliedSnapshotEpoch >= 0 &&
-    state.snapshotCompactedThrough &&
-    typeof state.snapshotCompactedThrough === "object"
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+async function maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest) {
+  const adopted = await ensureManifestVerifiedSnapshotFloors(ctx, state, manifest, (devH, seq) =>
+    readEnvelopeAtSeq(ctx, devH, seq),
   );
+  if (adopted) {
+    await persistLocalState(ctx, state);
+  }
 }
 
 /** @param {ObjectStoreSyncContext} ctx @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest */
@@ -332,13 +342,12 @@ async function listPresentSeqsForDevH(ctx, devH) {
  * @param {string} devH
  * @param {{ seq: number, digest: string }} trusted
  */
-async function assertLogContiguousToHead(ctx, state, devH, trusted) {
+async function assertLogContiguousToHead(ctx, state, manifest, devH, trusted) {
   if (!trusted || trusted.seq < 0) return;
+  await maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest);
   let startSeq = 0;
-  if (hasVerifiedLocalSnapshot(state)) {
-    const floor = Number(normalizeVectorSyncCursor(state.snapshotCompactedThrough).v?.[devH] ?? -1);
-    if (Number.isFinite(floor) && floor >= 0) startSeq = floor + 1;
-  }
+  const floor = verifiedSnapshotFloorForDevH(state, manifest, devH);
+  if (floor >= 0) startSeq = floor + 1;
   const present = await listPresentSeqsForDevH(ctx, devH);
   for (let seq = startSeq; seq <= trusted.seq; seq += 1) {
     if (!present.has(seq)) {
@@ -371,16 +380,17 @@ async function assertLogContiguousToHead(ctx, state, devH, trusted) {
  * @param {string} devH
  * @param {{ seq: number, digest: string }} trusted
  */
-async function verifyOwnerTrustedPrefix(ctx, devH, trusted) {
+async function verifyOwnerTrustedPrefix(ctx, manifest, devH, trusted) {
   const state = ctx.localState.load();
-  await assertLogContiguousToHead(ctx, state, devH, trusted);
+  await assertLogContiguousToHead(ctx, state, manifest, devH, trusted);
 }
 
-/** @param {ObjectStoreSyncContext} ctx @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
-async function assertTrustedAnchorsMatchRemote(ctx, state) {
+/** @param {ObjectStoreSyncContext} ctx @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest */
+async function assertTrustedAnchorsMatchRemote(ctx, state, manifest) {
+  await maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest);
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
     if (!trusted || trusted.seq < 0) continue;
-    await assertLogContiguousToHead(ctx, state, devH, trusted);
+    await assertLogContiguousToHead(ctx, state, manifest, devH, trusted);
   }
 }
 
@@ -501,7 +511,7 @@ async function reconcileOwnLogPrefix(ctx, state) {
     trustedSelf = manifestHead;
   }
   if (trustedSelf) {
-    await verifyOwnerTrustedPrefix(ctx, ctx.selfDevH, trustedSelf);
+    await verifyOwnerTrustedPrefix(ctx, manifest, ctx.selfDevH, trustedSelf);
   }
   const afterSeq = trustedSelf?.seq ?? -1;
   const keys = await listSegmentKeysForDevHAfter(ctx, ctx.selfDevH, -1);
@@ -546,7 +556,7 @@ async function reconcileOwnLogPrefix(ctx, state) {
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  * @param {import('./sync-cursor.mjs').VectorSyncCursor} cursor
  */
-async function discoverPendingSegments(ctx, state, cursor) {
+async function discoverPendingSegments(ctx, state, cursor, manifest) {
   /** @type {{ devH: string, seq: number, key: string }[]} */
   const pending = [];
   /** @type {Record<string, number>} */
@@ -581,7 +591,7 @@ async function discoverPendingSegments(ctx, state, cursor) {
     }
   }
   assertNoRemoteRollback(state, remoteMaxByDevH);
-  await assertTrustedAnchorsMatchRemote(ctx, state);
+  await assertTrustedAnchorsMatchRemote(ctx, state, manifest);
 
   for (const devH of devHs) {
     const after = cursor.v[devH] ?? -1;
@@ -629,10 +639,10 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
     !pendingDelivery &&
     (pullsSinceBoot === 1 || pullsSinceBoot % FULL_CHAIN_VERIFY_EVERY_N === 0)
   ) {
-    await verifyFullTrustedChains(ctx, state);
+    await verifyFullTrustedChains(ctx, state, manifest);
   }
 
-  const pendingSegments = await discoverPendingSegments(ctx, state, cursor);
+  const pendingSegments = await discoverPendingSegments(ctx, state, cursor, manifest);
 
   /** @type {import('./object-store-merge.mjs').MergeableMutation[]} */
   const mergeItems = [];

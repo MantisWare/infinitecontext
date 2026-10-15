@@ -155,6 +155,8 @@ export async function loadStorageManifestForSync(adapter, dek, layoutPrefix, sta
     );
   }
   state.manifestGenerationHighWater = Math.max(highWater, manifest.manifest_generation);
+  const { refreshVerifiedSnapshotGenerationBinding } = await import("../object-store-snapshot-floor.mjs");
+  refreshVerifiedSnapshotGenerationBinding(state, manifest);
   return manifest;
 }
 

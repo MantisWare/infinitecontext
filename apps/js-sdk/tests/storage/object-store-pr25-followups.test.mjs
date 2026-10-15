@@ -47,6 +47,7 @@ import { fullSnapshot, syncChangeFromMergeable } from "../helpers/object-store-r
 import { scenarioThreeUpdates } from "./object-store-replica-scenarios.mjs";
 import { sortMergeableMutations } from "../../lib/object-store-merge.mjs";
 import { PreconditionFailedError } from "../../lib/storage/errors.mjs";
+import { verifiedSnapshotFloorForDevH } from "../../lib/object-store-snapshot-floor.mjs";
 
 const TEST_DEK = new Uint8Array(32).fill(3);
 const LAYOUT_PREFIX = "acct/pr25";
@@ -618,6 +619,135 @@ describe("PR #25 follow-ups", () => {
     assert.equal(loaded.pendingBootstrapReplica, undefined);
     assert.equal(loaded.bootstrapReplicaPendingAck, false);
   });
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`existing devices adopt verified snapshot floor after honest GC on ${backendLabel}`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      for (let i = 0; i < 4; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `gcok${i}`,
+            op: "context_create",
+            context_id: `ctx_gcok_${i}`,
+            payload: { context_id: `ctx_gcok_${i}`, metadata: { n: i } },
+          },
+        ]);
+      }
+      const readerUuid = "22222222-2222-4222-8222-222222222222";
+      let readerLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-gc-floor-")), "object-store-sync-state.json");
+        readerLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-gc-floor-db-")), "daemon.db");
+        readerLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const readerCtx = ctx(adapter, readerUuid, readerLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      await confirmObjectStorePullDeliveryForContext(readerCtx);
+      assert.ok(readerLocal.load().trustedHeads[writerCtx.selfDevH]);
+
+      const replica = createEmptySyncReplica();
+      await compactObjectStoreReplica(writerCtx, writerLocal.load(), replica, { settleMs: 0 });
+      await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
+      await writeDeviceSyncAckFromState(readerCtx, readerLocal.load());
+      const gc = await gcLogSegmentsCoveredByCompaction(writerCtx);
+      assert.ok(gc.deleted >= 3, `expected at least 3 GC deletions, got ${gc.deleted}`);
+
+      const writerSt = writerLocal.load();
+      delete writerSt.appliedSnapshotEpoch;
+      delete writerSt.verifiedManifestGeneration;
+      delete writerSt.snapshotCompactedThrough;
+      await writerLocal.save(writerSt);
+
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(writerCtx, { limit: 500 });
+      await objectStorePushSyncMutations(writerCtx, [
+        {
+          client_id: "gcok_tail",
+          op: "context_create",
+          context_id: "ctx_gcok_tail",
+          payload: { context_id: "ctx_gcok_tail", metadata: {} },
+        },
+      ]);
+      const writerAfter = writerLocal.load();
+      const manifestAfter = await loadStorageManifestForSync(adapter, TEST_DEK, LAYOUT_PREFIX, writerAfter);
+      await writerLocal.save(writerAfter);
+      assert.equal(writerAfter.verifiedManifestGeneration, manifestAfter.manifest_generation);
+      assert.ok(verifiedSnapshotFloorForDevH(writerAfter, manifestAfter, writerCtx.selfDevH) >= 0);
+
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      const readerAfter = readerLocal.load();
+      assert.ok(readerAfter.verifiedManifestGeneration !== undefined);
+      if (readerLocal.close) readerLocal.close();
+    });
+  }
+
+  for (const backendLabel of ["file", "daemon.db"]) {
+    it(`forged snapshot floor raise rejects existing device on ${backendLabel}`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      const writerCtx = ctx(adapter, writerUuid, writerLocal);
+      for (let i = 0; i < 4; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `gcbad${i}`,
+            op: "context_create",
+            context_id: `ctx_gcbad_${i}`,
+            payload: { context_id: `ctx_gcbad_${i}`, metadata: {} },
+          },
+        ]);
+      }
+      let victimLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-gc-forge-")), "object-store-sync-state.json");
+        victimLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-gc-forge-db-")), "daemon.db");
+        victimLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const victimUuid = "33333333-3333-4333-8333-333333333333";
+      const victimCtx = ctx(adapter, victimUuid, victimLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(victimCtx, { limit: 500 });
+      await confirmObjectStorePullDeliveryForContext(victimCtx);
+
+      const replica = createEmptySyncReplica();
+      await compactObjectStoreReplica(writerCtx, writerLocal.load(), replica, { settleMs: 0 });
+      await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
+      await writeDeviceSyncAckFromState(victimCtx, victimLocal.load());
+      await gcLogSegmentsCoveredByCompaction(writerCtx);
+
+      await updateStorageManifest(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          ownerDevH: writerCtx.selfDevH,
+          settleMs: 0,
+        },
+        (m) => {
+          m.compacted_through = { kind: "vector", v: { [writerCtx.selfDevH]: 999 } };
+          return m;
+        },
+      );
+
+      resetObjectStorePullVerifyGenerationForTests();
+      await assert.rejects(
+        () => objectStorePullSyncChanges(victimCtx, { limit: 500 }),
+        /Snapshot|compacted|floor|rollback|missing/i,
+      );
+      if (victimLocal.close) victimLocal.close();
+    });
+  }
 
   it("detects deleted log prefix when no verified snapshot applies", async () => {
     const adapter = createMemoryStorageAdapter();

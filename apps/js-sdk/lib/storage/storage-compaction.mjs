@@ -375,6 +375,7 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
   state.vectorCursor = bootCursor;
   state.snapshotCompactedThrough = normalizeVectorSyncCursor(snap.compacted_through);
   state.appliedSnapshotEpoch = epoch;
+  state.verifiedManifestGeneration = manifest.manifest_generation;
   state.pendingBootstrapReplica = sanitizeSyncReplicaForPersist(snap.replica);
   state.bootstrapReplicaPendingAck = true;
   return snap;
@@ -484,7 +485,7 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
     await options.testHookAfterSnapshotWrite({ epoch: nextEpoch, snapRecord });
   }
 
-  await updateStorageManifest(
+  const updatedManifest = await updateStorageManifest(
     {
       adapter: ctx.adapter,
       dek: ctx.dek,
@@ -507,6 +508,7 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
   );
 
   state.appliedSnapshotEpoch = nextEpoch;
+  state.verifiedManifestGeneration = updatedManifest.manifest_generation;
   state.snapshotCompactedThrough = normalizeVectorSyncCursor(compactedThrough);
   await ctx.localState.save(state);
   return { epoch: nextEpoch, compacted_through: compactedThrough };
