@@ -97,6 +97,32 @@ async function persistLocalState(ctx, state, options = {}) {
  * @param {ObjectStoreSyncContext} ctx
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
+/**
+ * @param {ObjectStoreSyncContext} ctx
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+async function assertFolderManifestTrustedHeadsVerifiable(ctx, manifest) {
+  for (const [devH, head] of Object.entries(manifest.trusted_heads ?? {})) {
+    if (!head || head.seq < 0) continue;
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      devH,
+      undefined,
+      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+      head.seq,
+    );
+    const env = await readEnvelopeAtSeq(ctx, devH, head.seq);
+    if (!env) {
+      throw new ObjectStoreLogRollbackError(
+        `Remote log for ${devH} missing owner-written head at seq ${head.seq}`,
+      );
+    }
+    if (layoutSegmentEnvelopeDigest(env) !== head.digest) {
+      throw new ObjectStoreLogForkError(`Remote log fork at ${devH} seq ${head.seq}`);
+    }
+  }
+}
+
 async function verifyFullTrustedChains(ctx, state, manifest) {
   await maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest);
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
@@ -678,6 +704,9 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
     await repairOwnDeviceManifestFileIfAuthoritative(ctx);
   }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    await assertFolderManifestTrustedHeadsVerifiable(ctx, manifest);
+  }
   assertDeviceNotRemoved(ctx, manifest);
   state = ctx.localState.load();
   const pendingDelivery = Boolean(state.pendingBootstrapReplica && state.bootstrapReplicaPendingAck);

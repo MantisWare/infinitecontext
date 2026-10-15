@@ -2,7 +2,7 @@ import { deriveDevH, devHForObjectKey, deviceEncRelativePath } from "./layout.mj
 import { normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { readLayoutObjectPlaintext, storageReadModifyWrite } from "./storage-cas-rmw.mjs";
 import { usesFolderMergedDeviceManifest } from "./storage-adapter-policy.mjs";
-import { upsertManifestDeviceAck } from "./storage-manifest.mjs";
+import { mergeTrustedHeadsMonotonic, upsertManifestDeviceAck } from "./storage-manifest.mjs";
 
 export const DEVICE_SYNC_ACK_PLAIN_FIELD = "ic_layout_device_sync_v1";
 
@@ -59,7 +59,10 @@ export async function writeDeviceSyncAckFromState(ctx, state) {
     updated_at: new Date().toISOString(),
   };
   if (usesFolderMergedDeviceManifest(ctx.adapter)) {
-    const { updateFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
+    const { migrateOwnLegacyFolderDeviceSidecar, updateFolderMergedManifest } = await import(
+      "./storage-manifest-folder.mjs"
+    );
+    await migrateOwnLegacyFolderDeviceSidecar(ctx.adapter, ctx.dek, ctx.layoutPrefix, ownerDevH);
     await updateFolderMergedManifest(
       {
         adapter: ctx.adapter,
@@ -69,6 +72,12 @@ export async function writeDeviceSyncAckFromState(ctx, state) {
       },
       (manifest) => {
         upsertManifestDeviceAck(manifest, ownerDevH, record.acknowledged_seq, record.acknowledged_cursor);
+        const selfHead = state.trustedHeads[ownerDevH];
+        if (selfHead && selfHead.seq >= 0) {
+          manifest.trusted_heads = mergeTrustedHeadsMonotonic(manifest.trusted_heads, {
+            [ownerDevH]: { seq: selfHead.seq, digest: selfHead.digest },
+          });
+        }
         return manifest;
       },
     );

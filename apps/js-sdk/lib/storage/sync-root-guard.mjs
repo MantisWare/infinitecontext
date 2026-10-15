@@ -74,6 +74,23 @@ function hasDropboxRootMarker(normalized) {
 }
 
 /**
+ * Walk ancestors for provider markers (e.g. /mnt/Dropbox/.dropbox).
+ * @param {string} normalized absolute path
+ */
+function ancestorHasDropboxMarker(normalized) {
+  let cursor = normalized;
+  for (;;) {
+    if (hasDropboxRootMarker(cursor)) {
+      return true;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return false;
+}
+
+/**
  * @param {string} normalized absolute path
  */
 function isGoogleDriveVolume(normalized) {
@@ -93,7 +110,7 @@ export function isKnownSyncedFolderRoot(rootDir) {
     homeReal = path.resolve(os.homedir());
   }
 
-  if (hasDropboxRootMarker(normalized)) {
+  if (hasDropboxRootMarker(normalized) || ancestorHasDropboxMarker(normalized)) {
     return true;
   }
   if (isGoogleDriveVolume(normalized)) {
@@ -118,7 +135,8 @@ export function assertLocalObjectStoreRootNotSynced(rootDir) {
   if (isKnownSyncedFolderRoot(rootDir)) {
     throw new StorageError(
       "This path looks like a desktop-sync folder (iCloud/Dropbox/Google Drive/OneDrive/CloudStorage). " +
-        "Use storage.backend=folder with storage.folder.path instead of backend=local.",
+        "Use storage.backend=folder with storage.folder.path instead of backend=local. " +
+        "On Windows, drive-letter paths such as D:\\OneDrive are detected best-effort only.",
       "invalid_argument",
     );
   }

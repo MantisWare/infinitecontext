@@ -4,8 +4,13 @@ import path from "node:path";
 import { verifyDeviceLogThroughSeq } from "../object-store-chain-verify.mjs";
 import { layoutRootPath, logSegmentRelativePath } from "./layout.mjs";
 import { StorageError } from "./errors.mjs";
-import { physicalKeyDirsForCanonicalKey } from "./folder-on-disk-scan.mjs";
+import {
+  physicalKeyDirsForCanonicalKey,
+  scanCanonicalKeysFromObjectsTree,
+} from "./folder-on-disk-scan.mjs";
 import { canonicalizeConflictStorageKey, conflictSegmentToCanonical } from "./folder-conflict-copies.mjs";
+import { quarantineObjectsRelativePath } from "./folder-quarantine.mjs";
+import { ObjectStoreLogMissingError } from "../object-store-local-sync-state.mjs";
 
 const OBJECTS = "objects";
 const QUARANTINE = "quarantine";
@@ -14,8 +19,9 @@ const QUARANTINE = "quarantine";
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {string} devH
  * @param {number} headSeq
+ * @param {string} headDigest
  */
-async function verifyDeviceLogFromZero(ctx, devH, headSeq) {
+async function verifyDeviceLogFromZero(ctx, devH, headSeq, headDigest) {
   if (headSeq < 0) return;
   const readEnvelopeAtSeq = async (seq) => {
     const key = logSegmentRelativePath(ctx.layoutPrefix, devH, seq);
@@ -25,32 +31,65 @@ async function verifyDeviceLogFromZero(ctx, devH, headSeq) {
     const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
     return plain?.ic_layout_segment_envelope_v1 ?? null;
   };
-  const headRow = await ctx.adapter.get(logSegmentRelativePath(ctx.layoutPrefix, devH, headSeq));
-  if (!headRow?.body) {
+  await verifyDeviceLogThroughSeq(ctx, devH, undefined, readEnvelopeAtSeq, headSeq);
+  const headEnv = await readEnvelopeAtSeq(headSeq);
+  if (!headEnv) {
     throw new StorageError(`Log replay failed: missing head segment for ${devH}`, "storage_fork");
   }
   const { layoutSegmentEnvelopeDigest } = await import("./layout.mjs");
-  const headEnv = await readEnvelopeAtSeq(headSeq);
-  if (!headEnv) {
-    throw new StorageError(`Log replay failed for ${devH}`, "storage_fork");
+  if (layoutSegmentEnvelopeDigest(headEnv) !== headDigest) {
+    throw new StorageError(`Log head digest mismatch for ${devH} at seq ${headSeq}`, "storage_fork");
   }
-  const digest = layoutSegmentEnvelopeDigest(headEnv);
-  await verifyDeviceLogThroughSeq(ctx, devH, { seq: headSeq, digest }, readEnvelopeAtSeq, headSeq);
 }
 
 /**
- * @param {string} rootDir folder adapter root
- * @param {string} relPath under objects/
- * @param {string} quarantineRoot
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
-function quarantineRelativePath(rootDir, relPath, quarantineRoot) {
-  const src = path.join(rootDir, OBJECTS, relPath);
-  if (!fs.existsSync(src)) return;
-  const dest = path.join(quarantineRoot, relPath);
-  fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
-  const stamp = Date.now();
-  const finalDest = fs.existsSync(dest) ? `${dest}.${stamp}` : dest;
-  fs.renameSync(src, finalDest);
+async function assertNoForkedStorageKeys(ctx) {
+  const folderAdapter = /** @type {{ rootDir?: string, listConflictGetCandidates?: (k: string) => Promise<unknown[]> }} */ (
+    ctx.adapter
+  );
+  const rootDir = folderAdapter.rootDir;
+  if (!rootDir) return;
+  const objectsRoot = path.join(rootDir, OBJECTS);
+  for (const key of scanCanonicalKeysFromObjectsTree(objectsRoot)) {
+    if (typeof folderAdapter.listConflictGetCandidates === "function") {
+      try {
+        await folderAdapter.listConflictGetCandidates.call(ctx.adapter, key);
+      } catch (error) {
+        if (error instanceof StorageError && error.code === "storage_fork") {
+          throw error;
+        }
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ */
+async function assertRepairLogPreconditions(ctx, manifest) {
+  for (const row of manifest.devices) {
+    const head = manifest.trusted_heads?.[row.devH];
+    const headSeq = head?.seq ?? row.last_seq ?? -1;
+    if (headSeq < 0) continue;
+    if (!head?.digest) {
+      throw new StorageError(
+        `Device ${row.devH} missing owner-written trusted head digest; repair refused`,
+        "storage_fork",
+      );
+    }
+    try {
+      await verifyDeviceLogFromZero(ctx, row.devH, headSeq, head.digest);
+    } catch (error) {
+      if (error instanceof ObjectStoreLogMissingError) {
+        throw new StorageError(error.message, "storage_fork");
+      }
+      throw error;
+    }
+  }
 }
 
 /**
@@ -65,15 +104,11 @@ export async function repairFolderObjectStoreVault(ctx, options = {}) {
   }
   const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
   const manifest = await loadFolderMergedManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
-  for (const row of manifest.devices) {
-    const head = manifest.trusted_heads?.[row.devH];
-    const headSeq = head?.seq ?? row.last_seq ?? -1;
-    if (headSeq >= 0) {
-      await verifyDeviceLogFromZero(ctx, row.devH, headSeq);
-    }
-  }
+  await assertNoForkedStorageKeys(ctx);
+  await assertRepairLogPreconditions(ctx, manifest);
+
   const objectsRoot = path.join(rootDir, OBJECTS);
-  const quarantineRoot = path.join(rootDir, QUARANTINE, String(Date.now()));
+  const quarantineRoot = path.join(rootDir, QUARANTINE, "repair");
   /** @type {string[]} */
   const moved = [];
   if (!options.dryRun) {
@@ -82,14 +117,16 @@ export async function repairFolderObjectStoreVault(ctx, options = {}) {
   const snapPrefix = `${layoutRootPath(ctx.layoutPrefix)}/snap/`.toLowerCase();
   for (const key of scanCanonicalKeysFromObjectsTree(objectsRoot)) {
     if (key.toLowerCase().startsWith(snapPrefix)) {
-      const rel = key;
-      if (!options.dryRun) {
-        for (const row of physicalKeyDirsForCanonicalKey(rootDir, key)) {
-          const relDir = path.relative(objectsRoot, row.keyDir);
-          quarantineRelativePath(rootDir, relDir, quarantineRoot);
+      for (const row of physicalKeyDirsForCanonicalKey(rootDir, key)) {
+        const relDir = path.relative(objectsRoot, row.keyDir);
+        if (!options.dryRun) {
+          if (quarantineObjectsRelativePath(rootDir, relDir, quarantineRoot)) {
+            moved.push(key);
+          }
+        } else {
+          moved.push(key);
         }
       }
-      moved.push(key);
     }
   }
   const walkConflictDirs = (dir, relParts) => {
@@ -112,9 +149,12 @@ export async function repairFolderObjectStoreVault(ctx, options = {}) {
       if (mapped && mapped !== name.toLowerCase()) {
         const relDir = [...relParts, name].join("/");
         if (!options.dryRun) {
-          quarantineRelativePath(rootDir, relDir, quarantineRoot);
+          if (quarantineObjectsRelativePath(rootDir, relDir, quarantineRoot)) {
+            moved.push(canonicalizeConflictStorageKey([...relParts, mapped].join("/")));
+          }
+        } else {
+          moved.push(canonicalizeConflictStorageKey([...relParts, mapped].join("/")));
         }
-        moved.push(canonicalizeConflictStorageKey([...relParts, mapped].join("/")));
         continue;
       }
       walkConflictDirs(full, [...relParts, name]);

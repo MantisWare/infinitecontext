@@ -167,6 +167,36 @@ export function createFolderStorageAdapter(options) {
         throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
       }
     }
+    if (dirs.length > 1) {
+      let liveDirs = 0;
+      let corruptDirs = 0;
+      /** @type {Set<string>} */
+      const liveEtags = new Set();
+      for (const row of dirs) {
+        let latest;
+        try {
+          latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+        } catch (error) {
+          if (error instanceof StorageError && error.code === "corrupt_storage") {
+            corruptDirs += 1;
+            continue;
+          }
+          throw error;
+        }
+        if (!latest || latest.header.tombstone) continue;
+        liveDirs += 1;
+        liveEtags.add(latest.header.etag ?? "");
+      }
+      if (liveEtags.size > 1) {
+        throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
+      }
+      if (liveDirs > 0 && corruptDirs > 0) {
+        throw new StorageError(
+          "Undecryptable or foreign-key conflict copy for storage object",
+          "corrupt_storage",
+        );
+      }
+    }
     return [...unique.values()];
   }
 

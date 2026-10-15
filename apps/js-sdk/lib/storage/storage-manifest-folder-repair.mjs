@@ -8,6 +8,11 @@ import {
 } from "./storage-manifest-folder.mjs";
 import { physicalKeyDirsForCanonicalKey } from "./folder-on-disk-scan.mjs";
 import { loadLatestObjectGenerationAtDir } from "./filesystem-generations.mjs";
+import { quarantineObjectsRelativePath } from "./folder-quarantine.mjs";
+import path from "node:path";
+import fs from "node:fs";
+
+const QUARANTINE = "quarantine";
 
 /**
  * When sync conflict copies disagree on the owning device's manifest file, rewrite from
@@ -99,4 +104,14 @@ export async function repairOwnDeviceManifestFileIfAuthoritative(ctx) {
   };
   const body = sealLayoutObjectPlaintext(ctx.dek, key, wrapDeviceManifestContribution(repairFrom));
   await inner.put(key, body);
+
+  const objectsRoot = path.join(rootDir, "objects");
+  const quarantineRoot = path.join(rootDir, QUARANTINE, "owner-manifest");
+  fs.mkdirSync(quarantineRoot, { recursive: true, mode: 0o700 });
+  const leaf = key.split("/").pop() ?? "";
+  for (const row of physicalKeyDirsForCanonicalKey(rootDir, key)) {
+    if (path.basename(row.keyDir) === leaf) continue;
+    const relDir = path.relative(objectsRoot, row.keyDir);
+    quarantineObjectsRelativePath(rootDir, relDir, quarantineRoot);
+  }
 }

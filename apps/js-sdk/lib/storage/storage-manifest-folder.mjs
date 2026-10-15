@@ -280,33 +280,32 @@ async function loadDeviceContributionBodies(adapter, dek, objectKey) {
  * @param {Uint8Array} dek
  * @param {string} layoutPrefix
  */
-export async function migrateLegacyFolderDeviceSidecars(adapter, dek, layoutPrefix) {
-  const prefix = `${layoutRootPath(layoutPrefix)}/devices/`;
-  let cursor;
-  for (;;) {
-    const page = await adapter.list(prefix, { limit: 200, cursor });
-    for (const row of page.objects) {
-      const got = await adapter.get(row.key);
-      if (!got?.body) continue;
-      let plain;
-      try {
-        plain = readLayoutObjectPlaintext(dek, row.key, got.body);
-      } catch {
-        continue;
-      }
-      if (parseDeviceManifestContribution(plain)) continue;
-      const migrated = parseDeviceSidecarPlain(plain, dek);
-      if (!migrated) continue;
-      const body = sealLayoutObjectPlaintext(dek, row.key, wrapDeviceManifestContribution(migrated));
-      await adapter.put(row.key, body);
-    }
-    if (!page.nextCursor) break;
-    cursor = page.nextCursor;
+/**
+ * Only the owning device may rewrite its devices/ sidecar on disk (M1).
+ *
+ * @param {import('./types.mjs').StorageAdapter} adapter
+ * @param {Uint8Array} dek
+ * @param {string} layoutPrefix
+ * @param {string} ownerDevH
+ */
+export async function migrateOwnLegacyFolderDeviceSidecar(adapter, dek, layoutPrefix, ownerDevH) {
+  const key = deviceEncRelativePath(layoutPrefix, ownerDevH);
+  const got = await adapter.get(key);
+  if (!got?.body) return;
+  let plain;
+  try {
+    plain = readLayoutObjectPlaintext(dek, key, got.body);
+  } catch {
+    return;
   }
+  if (parseDeviceManifestContribution(plain)) return;
+  const migrated = parseDeviceSidecarPlain(plain, dek);
+  if (!migrated) return;
+  const body = sealLayoutObjectPlaintext(dek, key, wrapDeviceManifestContribution(migrated));
+  await adapter.put(key, body);
 }
 
 export async function loadFolderMergedManifest(adapter, dek, layoutPrefix) {
-  await migrateLegacyFolderDeviceSidecars(adapter, dek, layoutPrefix);
   const contributions = await loadAllDeviceManifestContributions(adapter, dek, layoutPrefix);
   if (!contributions.length) return createEmptyStorageManifest();
   const manifest = mergeDeviceManifestContributions(contributions);
@@ -330,12 +329,18 @@ export async function loadFolderMergedManifest(adapter, dek, layoutPrefix) {
 export function contributionFromOwnerManifestView(manifest, ownerDevH, previous) {
   const canon = ownerDevH.toUpperCase();
   const row = manifest.devices.find((d) => d.devH === canon);
-  const head = manifest.trusted_heads?.[canon];
+  const head = manifest.trusted_heads?.[canon] ?? previous?.trusted_head;
+  const lastSeq = Math.max(
+    row?.last_seq ?? -1,
+    previous?.last_seq ?? -1,
+    head?.seq ?? -1,
+    manifest.trusted_heads?.[canon]?.seq ?? -1,
+  );
   return {
     devH: canon,
     record_generation: (previous?.record_generation ?? 0) + 1,
     sync_participant: (manifest.sync_participants ?? []).includes(canon),
-    last_seq: row?.last_seq ?? previous?.last_seq ?? -1,
+    last_seq: lastSeq,
     acknowledged_seq: row?.acknowledged_seq ?? previous?.acknowledged_seq ?? -1,
     acknowledged_cursor: row?.acknowledged_cursor ?? previous?.acknowledged_cursor,
     last_seen_at: row?.last_seen_at ?? new Date().toISOString(),

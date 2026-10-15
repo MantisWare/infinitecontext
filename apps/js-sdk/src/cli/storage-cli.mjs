@@ -54,7 +54,16 @@ Environment:
           throw new Error("storage doctor --repair requires local object store sync");
         }
         await configureObjectStoreSyncTransportIfNeeded({ mode: "cli", baseUrl });
-        const unlocked = await getUnlockedDek({ baseUrl });
+        const testDekB64 = String(process.env.INFINITECONTEXT_TEST_UNLOCKED_DEK_B64 ?? "").trim();
+        const unlocked = testDekB64
+          ? {
+              dek: new Uint8Array(Buffer.from(testDekB64, "base64")),
+              accountKey: "test",
+              crypto: { initialized: true, dek_version: 1 },
+              dekVersion: 1,
+              userPublicId: "test",
+            }
+          : await getUnlockedDek({ baseUrl });
         if (!unlocked?.dek) throw new Error("Vault unlock required");
         const storage = config.storage;
         const backend =

@@ -64,6 +64,14 @@ export async function createFolderObjectStore(options = {}) {
     maxObjectBytes: options.maxObjectBytes,
   });
   await adapter.init();
+  if (options.dek) {
+    const { assertFolderVaultLogsBeginAtSeqZero } = await import("./folder-vault-preflight.mjs");
+    await assertFolderVaultLogsBeginAtSeqZero(
+      adapter,
+      options.dek,
+      options.layoutPrefix ?? "accounts/local",
+    );
+  }
   const persist = options.sync?.persist !== false;
   const localState =
     options.localState ??
