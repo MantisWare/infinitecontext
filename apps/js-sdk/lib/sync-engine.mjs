@@ -10,6 +10,7 @@ import {
   defaultObjectStoreSyncStatePath,
 } from "./object-store-local-state-persist.mjs";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
+import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
 import { isObjectStoreSyncChange } from "./sync-replica-daemon-store.mjs";
 import {
   hydrateSyncReplica,
@@ -257,10 +258,14 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
 
   /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
   let daemonReplica = null;
+  const objectStoreReplicaPull = Boolean(store?.objectStoreReplicaPullEnabled);
   if (store?.loadSyncReplica && store?.flushSyncReplica) {
     try {
       daemonReplica = store.loadSyncReplica();
-    } catch {
+    } catch (err) {
+      if (err instanceof ObjectStoreSyncStateError && err.code === "corrupt_state") {
+        throw err;
+      }
       daemonReplica = null;
     }
   }
@@ -276,7 +281,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
     lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange || daemonReplica || cliReplica) {
-        if (daemonReplica && isObjectStoreSyncChange(change)) {
+        if (daemonReplica && objectStoreReplicaPull && isObjectStoreSyncChange(change)) {
           applySyncChangeToReplica(daemonReplica, change, () => {});
         } else if (cliReplica) {
           applySyncChangeToReplica(cliReplica, change, () => {});

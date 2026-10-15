@@ -118,8 +118,10 @@ export function DaemonTui({ snapshot, actions }) {
   const footerWidth = Math.max(layout.containerWidth, 24);
 
   // status info for the right side of footer
-  const health = snapshot.stats.errors > 0 ? "DEGRADED" : "HEALTHY";
-  const healthColor = health === "HEALTHY" ? "green" : "yellow";
+  const syncState = snapshot.sync?.state ?? "ok";
+  const health =
+    syncState === "corrupt_state" ? "CORRUPT" : snapshot.stats.errors > 0 ? "DEGRADED" : "HEALTHY";
+  const healthColor = health === "HEALTHY" ? "green" : health === "CORRUPT" ? "red" : "yellow";
   const uptime = formatUptime(Date.now() - Number(snapshot.stats.startedAt ?? 0));
   const statusRight = `● ${health}  ·  uptime ${uptime}`;
 

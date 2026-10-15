@@ -9,8 +9,11 @@ import {
 /** @param {unknown} change */
 export function isObjectStoreSyncChange(change) {
   if (!change || typeof change !== "object") return false;
-  const hlc = /** @type {Record<string, unknown>} */ (change).hlc;
-  return hlc !== null && hlc !== undefined && typeof hlc === "object";
+  const row = /** @type {Record<string, unknown>} */ (change);
+  const hlc = row.hlc;
+  if (hlc === null || hlc === undefined || typeof hlc !== "object") return false;
+  const devH = row.source_dev_h;
+  return typeof devH === "string" && devH.length > 0;
 }
 
 /**
@@ -32,7 +35,7 @@ export function createDaemonSyncReplicaPersistence(db, stmt) {
       cachedReplica = replica;
       if (opts.checkpointWal) {
         try {
-          db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
         } catch {
           /* best-effort */
         }

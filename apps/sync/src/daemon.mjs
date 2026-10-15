@@ -106,6 +106,7 @@ async function writeStatusJson(cfg, stats, state, runtime) {
       captureAgents: cfg.captureAgents,
       projectPaths: cfg.projectPaths,
     },
+    sync: runtime.sync ?? { state: "ok" },
   };
   const tmp = STATUS_FILE + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2) + "\n", "utf8");
@@ -288,6 +289,7 @@ export async function daemonBoot({
     daemonRunning: false,
     lockHandle: null,
     projectPathCache: new Map(),
+    sync: { state: "ok" },
   };
 
   // ── stdio guards ──
@@ -1326,8 +1328,17 @@ export async function daemonBoot({
             setCursor: (value) => store.setSyncPullCursor(value),
           });
           await syncEngine.flushSyncOutbox({ baseUrl: cfg.baseUrl, log });
+          runtime.sync = { state: "ok", updatedAt: new Date().toISOString() };
         } catch (error) {
           bumpStat("errors");
+          const code = /** @type {{ code?: string }} */ (error)?.code;
+          if (code === "corrupt_state") {
+            runtime.sync = {
+              state: "corrupt_state",
+              message: error instanceof Error ? error.message : String(error),
+              updatedAt: new Date().toISOString(),
+            };
+          }
           log("warn", "Sync pull/push cycle failed", errorDetails(error));
         }
       }

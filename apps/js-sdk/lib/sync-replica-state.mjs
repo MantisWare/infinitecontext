@@ -110,6 +110,11 @@ function entryUncoveredByBaseVector(entry, baseVector) {
   );
 }
 
+/** @param {Record<string, unknown>} entry */
+function mutationLogEntryKey(entry) {
+  return `${String(entry.devH)}:${Number(entry.seq)}:${Number(entry.index ?? 0)}`;
+}
+
 /**
  * @param {Record<string, unknown>} replica
  * @param {string} messageId
@@ -137,7 +142,14 @@ function mutationLogEntryRetainsData(replica, messageId, entry, sortedEntries) {
     }
   }
 
-  const entryIdx = sortedEntries.indexOf(entry);
+  const key = mutationLogEntryKey(entry);
+  let entryIdx = -1;
+  for (let i = 0; i < sortedEntries.length; i += 1) {
+    if (mutationLogEntryKey(sortedEntries[i]) === key) {
+      entryIdx = i;
+      break;
+    }
+  }
   if (entryIdx < 0) return true;
   for (let i = entryIdx + 1; i < sortedEntries.length; i += 1) {
     const later = sortedEntries[i];
@@ -148,6 +160,32 @@ function mutationLogEntryRetainsData(replica, messageId, entry, sortedEntries) {
     }
   }
   return false;
+}
+
+/**
+ * @param {Record<string, unknown>} replica
+ * @param {string} messageId
+ */
+function deleteBaseVectorForTombstone(replica, messageId) {
+  const msg = replica.messages?.[messageId];
+  if (!msg || typeof msg !== "object" || !msg.tombstone) return null;
+  const src = msg._source;
+  if (!src || typeof src !== "object") return null;
+  const log = replica._message_mutations?.[messageId];
+  if (!Array.isArray(log)) return null;
+  for (const entry of log) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = /** @type {Record<string, unknown>} */ (entry);
+    if (String(row.op ?? "") !== "message_delete") continue;
+    if (
+      String(row.devH) === String(/** @type {{ devH?: string }} */ (src).devH ?? "") &&
+      Number(row.seq) === Number(/** @type {{ seq?: number }} */ (src).seq ?? 0)
+    ) {
+      const base = row.delete_base_vector;
+      return base && typeof base === "object" ? /** @type {Record<string, unknown>} */ (base) : null;
+    }
+  }
+  return null;
 }
 
 /** @param {Record<string, unknown>[]} entries */
@@ -174,14 +212,23 @@ export function sanitizeSyncReplicaForPersist(replica) {
     sync_conflicts: Array.isArray(replica.sync_conflicts)
       ? replica.sync_conflicts.map((row) => {
           if (!row || typeof row !== "object") return row;
+          if (String(row.kind ?? "") !== "tombstone_blocked_update") return row;
           const messageId = String(row.client_id ?? "");
-          const msg = replica.messages?.[messageId];
-          if (!msg || typeof msg !== "object" || !msg.tombstone) return row;
-          const copy = { ...row };
-          if (copy.right_payload && typeof copy.right_payload === "object") {
-            copy.right_payload = { ...copy.right_payload, data: null };
+          const right = row.right_payload;
+          if (!right || typeof right !== "object") return row;
+          const deleteBase = deleteBaseVectorForTombstone(replica, messageId);
+          if (!deleteBase) return row;
+          const loserSource = {
+            devH: String(/** @type {Record<string, unknown>} */ (right).source_dev_h ?? ""),
+            seq: Number(/** @type {Record<string, unknown>} */ (right).source_seq ?? 0),
+          };
+          if (!isMessageSourceCoveredByVectorBase(loserSource, deleteBase)) {
+            return row;
           }
-          return copy;
+          return {
+            ...row,
+            right_payload: { .../** @type {Record<string, unknown>} */ (right), data: null },
+          };
         })
       : [],
     _message_mutations: {},

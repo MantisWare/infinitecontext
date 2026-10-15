@@ -153,6 +153,7 @@ export function assertDaemonStoreConvergesAcrossRandomPulls(items, store, trials
     store.applySyncChange(syncChangeFromMergeable(item));
     store.clearReplicaCache();
   }
+  store.clearReplicaCache();
   const expected = fullSnapshot(store.load());
   const plans = randomPullBatchPlans(sorted, trials);
   for (const batches of plans) {

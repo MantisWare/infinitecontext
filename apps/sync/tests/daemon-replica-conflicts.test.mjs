@@ -45,6 +45,28 @@ describe("daemon.db object-store replica", () => {
     }
   });
 
+  it("hosted change with stray hlc but no source_dev_h uses sync_message_nodes", async () => {
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-stray-hlc-")), "daemon.db");
+    const store = createStore({ dbPath });
+    try {
+      await store.initObjectStoreReplica();
+      store.applySyncChange({
+        op: "message_append",
+        context_id: "ctx_stray",
+        sequence: 1,
+        hlc: { wall_ms: 1, counter: 0, devH: "INVALID" },
+        payload: {
+          context_id: "ctx_stray",
+          data: [{ id: "icn_stray", role: "user", metadata: { ic_client_node_id: "icn_stray" } }],
+        },
+      });
+      const replica = store.loadSyncReplica();
+      assert.equal(replica.messages.icn_stray, undefined);
+    } finally {
+      store.close();
+    }
+  });
+
   it("hosted message_delete still removes sync_message_nodes rows", async () => {
     const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-hosted-")), "daemon.db");
     const store = createStore({ dbPath });

@@ -42,6 +42,7 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
   const db = new DatabaseSync(resolvedPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA secure_delete = ON");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS seen_events (
@@ -210,6 +211,7 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
   let replicaPersistence = null;
   /** @type {Promise<void> | null} */
   let replicaPersistenceInit = null;
+  let objectStoreReplicaPullEnabled = false;
 
   function ensureReplicaPersistenceInit() {
     if (replicaPersistence) return Promise.resolve();
@@ -285,8 +287,12 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
 
   return {
     dbPath: resolvedPath,
+    get objectStoreReplicaPullEnabled() {
+      return objectStoreReplicaPullEnabled;
+    },
     async initObjectStoreReplica() {
       await ensureReplicaPersistenceInit();
+      objectStoreReplicaPullEnabled = true;
     },
     markEventSeen(eventHash, ttlSeconds) {
       return markEventSeenTxn(String(eventHash ?? ""), ttlSeconds);
@@ -358,6 +364,7 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     close() {
       replicaPersistence = null;
       replicaPersistenceInit = null;
+      objectStoreReplicaPullEnabled = false;
       db.close();
     },
   };
