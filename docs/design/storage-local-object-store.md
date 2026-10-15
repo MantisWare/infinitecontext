@@ -9,7 +9,8 @@ For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `
 - **Log segment GC and compaction/snapshot writes are disabled** on `folder` (and any backend without **`crossDeviceCas`**). Segments are never deleted; clients replay from **seq 0**. Forked snapshot copies are ignored when logs verify.
 - **No shared manifest LWW.** Sync coordination uses **per-device** `devices/<devH>.json.enc` contributions (owner-writable). The effective manifest is a deterministic **union / max** merge across device files. Lease locks are not relied on for correctness on folder.
 - **Conflict preflight** applies to **`log/` and `devices/`** on init/pull/push: file-level duplicate `.icgen` files use the same rules as segments (**`storage_fork`** vs **`corrupt_storage`**); device rows never silently disappear when a sidecar is unreadable.
-- **Backend switch:** **`manifestGenerationHighWaterByBindingKey`** stores a separate manifest high-water per **`storageBindingKey`** (`<backendId>:<realpath>`). Symlinked folder paths share the same key. Legacy state without the map migrates its scalar high-water into the current binding on first open. Provider manifest rollback below the binding’s high-water on the same root is rejected.
+- **Backend switch:** **`manifestGenerationHighWaterByBindingKey`** stores a separate manifest high-water per **`storageBindingKey`** (`<backendId>:<realpath>` of the **effective `rootDir`**). A **new** object root gets a **fresh** high-water entry; legacy scalar state migrates into the current binding on first open. **Symlinked store roots are refused** (`storage init` and open). Provider manifest rollback below the binding’s high-water on the same root is rejected.
+- **CLI:** `infinitecontext storage init`, `storage doctor` (audit + optional `--repair`), and **`storage migrate`** (resumable local→folder copy, full log verify before config switch, source never deleted). See **`docs/design/storage-layout.md`** § CLI maintenance.
 - **Evicted segments:** placeholder-only key dirs (no materialized **`.icgen`**) surface **`evicted_placeholder`** on list, preflight, push, and pull.
 - **`storage doctor --repair`** refuses when copy folders differ and prints a **manual resolution hint** (device + seq); quarantine is **deduped** when an identical tree is already under `quarantine/`.
 - `infinitecontext config doctor` reports folder GC/manifest policy when `storage.backend=folder`.
@@ -41,4 +42,4 @@ Object format, CAS, listing, and repair semantics: **`docs/design/storage-filesy
 | 4 | `createFilesystemStorageAdapter` |
 | **5** | **Default local object store factory + config resolution (this PR)** |
 
-Future PRs: hosted/S3/WebDAV object backends, manifest CAS, CLI `infinitecontext storage …`.
+Future PRs: hosted/S3/WebDAV object backends, manifest CAS, additional `infinitecontext storage …` backends.

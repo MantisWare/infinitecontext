@@ -77,7 +77,7 @@ async function assertNoForkedStorageKeys(ctx) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {import('./storage-manifest.mjs').StorageManifest} manifest
  */
-async function assertRepairLogPreconditions(ctx, manifest) {
+export async function verifyFolderDeviceLogsForManifest(ctx, manifest) {
   for (const row of manifest.devices) {
     const head = manifest.trusted_heads?.[row.devH];
     const headSeq = head?.seq ?? row.last_seq ?? -1;
@@ -112,7 +112,7 @@ export async function repairFolderObjectStoreVault(ctx, options = {}) {
   const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
   const manifest = await loadFolderMergedManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   await assertNoForkedStorageKeys(ctx);
-  await assertRepairLogPreconditions(ctx, manifest);
+  await verifyFolderDeviceLogsForManifest(ctx, manifest);
 
   const objectsRoot = path.join(rootDir, OBJECTS);
   const quarantineRoot = path.join(rootDir, QUARANTINE, "repair");

@@ -121,15 +121,17 @@ export async function loadCachedDek(accountKey) {
       const payload = await withKeytarTimeout(
         keytar.getPassword("infinitecontext-vault", accountKey),
       );
-      if (!payload) return null;
-      const parsed = JSON.parse(payload);
-      if (Date.parse(String(parsed.expiresAt ?? 0)) <= Date.now()) return null;
-      const dek = Buffer.from(String(parsed.dekB64 ?? ""), "base64");
-      memoryDek = dek;
-      memoryExpiresAt = Date.parse(String(parsed.expiresAt));
-      return new Uint8Array(dek);
+      if (payload) {
+        const parsed = JSON.parse(payload);
+        if (Date.parse(String(parsed.expiresAt ?? 0)) > Date.now()) {
+          const dek = Buffer.from(String(parsed.dekB64 ?? ""), "base64");
+          memoryDek = dek;
+          memoryExpiresAt = Date.parse(String(parsed.expiresAt));
+          return new Uint8Array(dek);
+        }
+      }
     } catch {
-      return null;
+      /* fall through to vault agent */
     }
   }
 

@@ -25,9 +25,17 @@ export function resolveStorageRootRealpathForBinding(rootPath) {
 /**
  * @param {Record<string, unknown>} [config]
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ rootDir?: string, backendId?: string }} [options]
  */
-export function resolveObjectStoreSyncBindingKey(config = readConfigFile(), env = process.env) {
-  const backendId = resolveStorageBackendId(config);
+export function resolveObjectStoreSyncBindingKey(
+  config = readConfigFile(),
+  env = process.env,
+  options = {},
+) {
+  const backendId = options.backendId ?? resolveStorageBackendId(config);
+  if (options.rootDir) {
+    return `${backendId}:${resolveStorageRootRealpathForBinding(options.rootDir)}`;
+  }
   if (backendId === FOLDER_STORAGE_ADAPTER_ID) {
     const root = resolveFolderObjectStoreRootDir(config, env);
     return `${backendId}:${resolveStorageRootRealpathForBinding(root)}`;
