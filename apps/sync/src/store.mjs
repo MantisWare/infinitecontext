@@ -291,10 +291,8 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
       return objectStoreReplicaPullEnabled;
     },
     async initObjectStoreReplica(options = {}) {
-      const enabled = options.objectStoreBackend !== false;
-      if (!enabled) return;
       await ensureReplicaPersistenceInit();
-      objectStoreReplicaPullEnabled = true;
+      objectStoreReplicaPullEnabled = options.objectStoreBackend === false ? false : true;
     },
     markEventSeen(eventHash, ttlSeconds) {
       return markEventSeenTxn(String(eventHash ?? ""), ttlSeconds);

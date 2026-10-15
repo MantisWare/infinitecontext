@@ -259,7 +259,7 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
   /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
   let daemonReplica = null;
   const objectStoreReplicaPull = Boolean(store?.objectStoreReplicaPullEnabled);
-  if (store?.loadSyncReplica && store?.flushSyncReplica) {
+  if (objectStoreReplicaPull && store?.loadSyncReplica && store?.flushSyncReplica) {
     try {
       daemonReplica = store.loadSyncReplica();
     } catch (err) {
