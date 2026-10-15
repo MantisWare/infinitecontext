@@ -1,5 +1,5 @@
 import { assertFolderCopyFolderDirsClean, assertFolderObjectFileCopiesClean } from "./folder-object-conflict-preflight.mjs";
-import { verifyFolderDeviceLogsForManifest } from "./folder-storage-repair.mjs";
+import { verifyFolderDeviceLogsChainOnly } from "./folder-storage-repair.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
 
@@ -39,7 +39,7 @@ export async function auditFolderObjectStoreVault(params) {
       const selfDevH = params.deviceUuid
         ? deriveDevH(params.dek, params.deviceUuid)
         : manifest.devices[0]?.devH;
-      await verifyFolderDeviceLogsForManifest(
+      await verifyFolderDeviceLogsChainOnly(
         {
           adapter: params.adapter,
           dek: params.dek,

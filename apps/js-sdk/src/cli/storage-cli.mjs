@@ -178,24 +178,21 @@ Environment:
         storage && typeof storage === "object" && !Array.isArray(storage)
           ? String(/** @type {Record<string, unknown>} */ (storage).deviceUuid ?? "")
           : "";
-      const { createFolderObjectStore } = await import("../../lib/storage/folder-object-store.mjs");
-      const store = await createFolderObjectStore({
-        dek: unlocked.dek,
-        deviceUuid: deviceUuid || undefined,
-        config,
-        sync: { mode: "cli", persist: true },
-        layoutPrefix: "accounts/local",
-      });
+      const { resolveFolderObjectStoreRootDir } = await import(
+        "../../lib/storage/folder-object-store.mjs"
+      );
+      const { createFolderStorageAdapter } = await import("../../lib/storage/folder-adapter.mjs");
+      const rootDir = resolveFolderObjectStoreRootDir(config);
+      const adapter = createFolderStorageAdapter({ rootDir, auditReadOnly: true });
       const { auditFolderObjectStoreVault } = await import("../../lib/storage/storage-doctor.mjs");
       const report = await auditFolderObjectStoreVault({
-        adapter: store.adapter,
+        adapter,
         dek: unlocked.dek,
         layoutPrefix: "accounts/local",
         deviceUuid,
       });
       console.log(JSON.stringify(report, null, 2));
-      await store.close();
-      await resetObjectStoreBootstrapForTests();
+      await adapter.close();
     });
   }
 
