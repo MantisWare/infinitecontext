@@ -16,6 +16,7 @@ import {
   clearVaultKeychainCache,
   defaultVaultTtlMs,
   loadCachedDek,
+  assertVaultUnlockPersisted,
   storeUnlockedDek,
   vaultAccountKey,
 } from "./vault-keychain.mjs";
@@ -54,6 +55,7 @@ export async function unlockVaultWithPassphrase({ baseUrl, passphrase, accountKe
   const kek = await deriveVaultKek(passphrase, new Uint8Array(salt));
   const dek = unwrapDek(new Uint8Array(wrapped), kek);
   await storeUnlockedDek(accountKey, dek, { ttlMs: defaultVaultTtlMs() });
+  await assertVaultUnlockPersisted(accountKey);
   return dek;
 }
 
@@ -63,6 +65,7 @@ export async function unlockVaultWithRecoveryKey({ baseUrl, recoveryKey, account
   const kek = recoveryKeyToKek(decodeRecoveryKey(recoveryKey));
   const dek = unwrapDek(new Uint8Array(wrapped), kek);
   await storeUnlockedDek(accountKey, dek, { ttlMs: defaultVaultTtlMs() });
+  await assertVaultUnlockPersisted(accountKey);
   return dek;
 }
 

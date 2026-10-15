@@ -20,8 +20,9 @@ import {
  * @property {Record<string, unknown>} [pendingBootstrapReplica] sanitized replica pending pull delivery
  * @property {boolean} [bootstrapReplicaPendingAck] bootstrap delivered to client but manifest ack deferred
  * @property {import('./sync-cursor.mjs').VectorSyncCursor} [snapshotCompactedThrough] floor covered by applied snapshot
- * @property {number} [manifestGenerationHighWater] last trusted manifest generation seen locally
- * @property {string} [storageBindingKey] backend id + root path for manifest high-water rebinding
+ * @property {number} [manifestGenerationHighWater] high-water for active storageBindingKey (legacy scalar + view)
+ * @property {Record<string, number>} [manifestGenerationHighWaterByBindingKey] per backend+realpath binding
+ * @property {string} [storageBindingKey] active backend id + realpath root for manifest high-water
  * @property {number} [verifiedManifestGeneration] manifest generation bound to appliedSnapshotEpoch + snapshot floor
  * @property {object} [pendingPullDeliveryApply] deferred cursor/trust until confirmPullDelivery
  */

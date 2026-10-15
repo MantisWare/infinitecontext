@@ -8,15 +8,19 @@ import {
  * @param {Record<string, unknown>} [config]
  * @param {NodeJS.ProcessEnv} [env]
  */
-export function maybeRebindPersistedObjectStoreState(localState, config = {}, env = process.env) {
+export async function maybeRebindPersistedObjectStoreState(localState, config = {}, env = process.env) {
   if (!localState) return;
   const bindingKey = resolveObjectStoreSyncBindingKey(config, env);
   const loaded = localState.load();
   const rebound = rebindObjectStoreSyncStateForBackend(loaded, bindingKey);
+  const mapChanged =
+    JSON.stringify(rebound.manifestGenerationHighWaterByBindingKey ?? {}) !==
+    JSON.stringify(loaded.manifestGenerationHighWaterByBindingKey ?? {});
   if (
     rebound.storageBindingKey !== loaded.storageBindingKey ||
-    rebound.manifestGenerationHighWater !== loaded.manifestGenerationHighWater
+    rebound.manifestGenerationHighWater !== loaded.manifestGenerationHighWater ||
+    mapChanged
   ) {
-    localState.save(rebound);
+    await localState.save(rebound);
   }
 }

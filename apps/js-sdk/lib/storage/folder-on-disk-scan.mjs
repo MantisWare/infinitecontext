@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { FS_GEN_SUFFIX } from "./filesystem-object-file.mjs";
 import { canonicalizeConflictStorageKey, conflictSegmentToCanonical } from "./folder-conflict-copies.mjs";
+import { keyDirIsPlaceholderOnlyEvicted } from "./folder-evicted-key-dir.mjs";
 import { mapFsError } from "./filesystem-paths.mjs";
 
 const OBJECTS_SUBDIR = "objects";
@@ -43,7 +44,7 @@ export function scanCanonicalKeysFromObjectsTree(objectsRoot, prefix = "") {
       }
       throw mapFsError(error, cursor);
     }
-    if (directoryHasObjectGenerations(cursor)) {
+    if (directoryHasObjectGenerations(cursor) || keyDirIsPlaceholderOnlyEvicted(cursor)) {
       const rawKey = relParts.map((seg) => String(seg).toLowerCase()).join("/");
       keys.add(canonicalizeConflictStorageKey(rawKey));
       return;

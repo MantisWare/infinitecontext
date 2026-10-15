@@ -4,6 +4,7 @@ import { StorageError } from "./errors.mjs";
 import { layoutRootPath } from "./layout.mjs";
 import { physicalKeyDirsForCanonicalKey, scanCanonicalKeysFromObjectsTree } from "./folder-on-disk-scan.mjs";
 import { assertAllConflictAwareGenerationCopiesConsistent } from "./folder-conflict-files.mjs";
+import { keyDirIsPlaceholderOnlyEvicted } from "./folder-evicted-key-dir.mjs";
 import { findEvictedPlaceholderFileInKeyDir } from "./folder-icloud-placeholder.mjs";
 
 /**
@@ -11,6 +12,12 @@ import { findEvictedPlaceholderFileInKeyDir } from "./folder-icloud-placeholder.
  * @param {string} canonicalKey
  */
 function assertKeyDirNoEvictedPlaceholder(keyDir, canonicalKey) {
+  if (keyDirIsPlaceholderOnlyEvicted(keyDir)) {
+    throw new StorageError(
+      `Evicted iCloud placeholder for storage object ${canonicalKey}`,
+      "evicted_placeholder",
+    );
+  }
   const evicted = findEvictedPlaceholderFileInKeyDir(keyDir);
   if (evicted) {
     throw new StorageError(

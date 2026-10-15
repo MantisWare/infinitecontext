@@ -85,7 +85,7 @@ export async function createFolderObjectStore(options = {}) {
       : null);
   if (localState) {
     const { maybeRebindPersistedObjectStoreState } = await import("../object-store-sync-state-rebind.mjs");
-    maybeRebindPersistedObjectStoreState(localState, config, options.env);
+    await maybeRebindPersistedObjectStoreState(localState, config, options.env);
   }
   const transport = new ObjectStoreSyncTransport(
     adapter,

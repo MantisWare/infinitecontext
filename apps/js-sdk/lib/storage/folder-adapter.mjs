@@ -17,6 +17,7 @@ import {
   scanCanonicalKeysFromObjectsTree,
 } from "./folder-on-disk-scan.mjs";
 import { assertAllConflictAwareGenerationCopiesConsistent } from "./folder-conflict-files.mjs";
+import { keyDirIsPlaceholderOnlyEvicted } from "./folder-evicted-key-dir.mjs";
 import { conflictResolutionHintForStorageKey } from "./folder-copy-resolution-hint.mjs";
 import { FS_GEN_SUFFIX } from "./filesystem-object-file.mjs";
 import { STORAGE_CAPABILITIES, storageCapabilitySet } from "./types.mjs";
@@ -155,6 +156,12 @@ export function createFolderStorageAdapter(options) {
     /** @type {import("./types.mjs").StorageGetResult[]} */
     const found = [];
     for (const row of dirs) {
+      if (keyDirIsPlaceholderOnlyEvicted(row.keyDir)) {
+        throw new StorageError(
+          `Evicted iCloud placeholder for storage object ${canonical}`,
+          "evicted_placeholder",
+        );
+      }
       if (isEvictedICloudPlaceholderPath(row.keyDir)) {
         throw new StorageError(
           `Evicted iCloud placeholder for storage object ${canonical}`,

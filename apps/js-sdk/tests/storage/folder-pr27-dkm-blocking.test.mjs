@@ -5,11 +5,6 @@ import path from "node:path";
 import { describe, it, afterEach } from "node:test";
 
 import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
-import {
-  hydrateObjectStoreLocalSyncState,
-  serializeObjectStoreLocalSyncState,
-} from "../../lib/object-store-local-state-persist.mjs";
-import { rebindObjectStoreSyncStateForBackend } from "../../lib/object-store-sync-binding.mjs";
 import { objectStorePullSyncChanges, objectStorePushSyncMutations } from "../../lib/object-store-sync.mjs";
 import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import { createFolderStorageAdapter } from "../../lib/storage/folder-adapter.mjs";
@@ -112,27 +107,6 @@ describe("PR27 D/K/M blocking (994a533)", () => {
         () => adapter.list(`${layoutRootPath(PREFIX)}/log/`),
         (err) => err instanceof StorageError && err.code === "evicted_placeholder",
       );
-    });
-  });
-
-  describe("M1' backend switch rebinds manifest high-water", () => {
-    it("resets manifestGenerationHighWater on backend binding change; two devices still merge", async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-m1p-bind-"));
-      await seedTwoDevices(root);
-      const stale = hydrateObjectStoreLocalSyncState({
-        manifestGenerationHighWater: 999,
-        storageBindingKey: "local-filesystem:/old/root",
-      });
-      const rebound = rebindObjectStoreSyncStateForBackend(stale, `folder:${root}`);
-      assert.equal(rebound.manifestGenerationHighWater, 0);
-      assert.equal(rebound.storageBindingKey, `folder:${root}`);
-      const adapter = createFolderStorageAdapter({ rootDir: root, placeholderTimeoutMs: 80 });
-      await adapter.init();
-      const reader = syncCtx(adapter, DEVICE_A, createInMemoryObjectStoreLocalState(rebound));
-      const pull = await objectStorePullSyncChanges(reader, { since: normalizeVectorSyncCursor(0), limit: 50 });
-      assert.ok(pull.changes.length >= 1);
-      const merged = await loadFolderMergedManifest(adapter, DEK, PREFIX);
-      assert.equal(merged.devices.length, 2);
     });
   });
 

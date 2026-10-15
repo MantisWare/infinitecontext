@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, afterEach, before } from "node:test";
+import { describe, it, afterEach, after, before } from "node:test";
 
 import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
 import { objectStorePullSyncChanges, objectStorePushSyncMutations } from "../../lib/object-store-sync.mjs";
@@ -15,6 +15,10 @@ import { StorageError } from "../../lib/storage/errors.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
 import { deriveDevH, logSegmentRelativePath } from "../../lib/storage/layout.mjs";
 import { storeUnlockedDek } from "../../lib/vault-keychain.mjs";
+import {
+  clearVaultKeychainBackendForTests,
+  setVaultKeychainBackendForTests,
+} from "../../lib/vault-keychain-inject.mjs";
 import {
   clearTestVaultContextProvider,
   setTestVaultContextProvider,
@@ -57,10 +61,26 @@ function addForeignFileLevelCopy(root, key, foreignSuffix = "-foreign") {
 }
 
 describe("PR27 Q/C/T blocking (46861d9)", () => {
+  before(() => {
+    /** @type {Map<string, string>} */
+    const passwords = new Map();
+    setVaultKeychainBackendForTests({
+      setPassword: async (_service, account, password) => {
+        passwords.set(account, password);
+      },
+      getPassword: async (_service, account) => passwords.get(account) ?? null,
+      deletePassword: async (_service, account) => passwords.delete(account),
+    });
+  });
+
   afterEach(async () => {
     await resetObjectStoreBootstrapForTests();
     clearTestVaultContextProvider();
     clearStorageCliDepsForTests();
+  });
+
+  after(() => {
+    clearVaultKeychainBackendForTests();
   });
 
   describe("Q1 quarantine destination reuse", () => {
@@ -187,10 +207,6 @@ describe("PR27 Q/C/T blocking (46861d9)", () => {
   });
 
   describe("T1 storage CLI unlock seam", () => {
-    before(() => {
-      process.env.INFINITECONTEXT_TEST_NO_KEYTAR = "1";
-    });
-
     it("vault unlock fails fast without TTY when no passphrase flags", async () => {
       const { runVaultCli } = await import("../../src/cli/vault.mjs");
       setTestVaultContextProvider(() => ({

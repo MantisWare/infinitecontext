@@ -1,5 +1,6 @@
 import os from "node:os";
 
+import { getVaultKeychainBackendForTests } from "./vault-keychain-inject.mjs";
 import { vaultAgentClear, vaultAgentLoad, vaultAgentStore } from "./vault-agent.mjs";
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
@@ -30,11 +31,10 @@ async function withKeytarTimeout(promise, timeoutMs = KEYTAR_IO_TIMEOUT_MS) {
 let memoryDek = null;
 let memoryExpiresAt = 0;
 
-/** @returns {Promise<import('keytar') | null>} */
+/** @returns {Promise<import('./vault-keychain-inject.mjs').VaultKeychainBackend | import('keytar') | null>} */
 async function loadKeytar() {
-  if (String(process.env.INFINITECONTEXT_TEST_NO_KEYTAR ?? "") === "1") {
-    return null;
-  }
+  const injected = getVaultKeychainBackendForTests();
+  if (injected) return injected;
   try {
     const dynamicImport = new Function("specifier", "return import(specifier)");
     const mod = await dynamicImport("keytar");
@@ -58,6 +58,11 @@ export async function clearVaultKeychainCache(accountKey) {
   await vaultAgentClear(accountKey);
 }
 
+/**
+ * @param {string} accountKey
+ * @param {Uint8Array} dekBytes
+ * @param {{ ttlMs?: number }} [options]
+ */
 export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_TTL_MS } = {}) {
   memoryDek = Buffer.from(dekBytes);
   memoryExpiresAt = Date.now() + ttlMs;
@@ -68,18 +73,41 @@ export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_T
       dekB64: Buffer.from(dekBytes).toString("base64"),
       expiresAt: new Date(memoryExpiresAt).toISOString(),
     });
-    // Do not block unlock on OS keychain I/O; in-memory cache is authoritative for this process.
-    void withKeytarTimeout(
+    const stored = await withKeytarTimeout(
       keytar.setPassword("infinitecontext-vault", accountKey, payload),
-    ).catch(() => {});
-    return;
-  }
-
-  if (String(process.env.INFINITECONTEXT_TEST_NO_KEYTAR ?? "") === "1") {
-    return;
+    );
+    if (stored !== null) {
+      return;
+    }
   }
 
   await vaultAgentStore(accountKey, dekBytes, { ttlMs });
+}
+
+/**
+ * Verify unlock can be reloaded without this process memory cache (keychain or vault agent).
+ *
+ * @param {string} accountKey
+ */
+export async function assertVaultUnlockPersisted(accountKey) {
+  const savedDek = memoryDek;
+  const savedExpires = memoryExpiresAt;
+  memoryDek = null;
+  memoryExpiresAt = 0;
+  try {
+    const loaded = await loadCachedDek(accountKey);
+    if (!loaded) {
+      throw new Error(
+        "Vault unlock did not persist (OS keychain and vault agent unavailable). Unlock will not survive leaving this process.",
+      );
+    }
+    memoryDek = Buffer.from(loaded);
+    memoryExpiresAt = savedExpires > Date.now() ? savedExpires : Date.now() + DEFAULT_TTL_MS;
+  } catch (error) {
+    memoryDek = savedDek;
+    memoryExpiresAt = savedExpires;
+    throw error;
+  }
 }
 
 export async function loadCachedDek(accountKey) {

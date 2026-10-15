@@ -89,6 +89,18 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
     appliedSnapshotEpoch: Number.isFinite(appliedSnapshotEpoch) ? appliedSnapshotEpoch : -1,
     bootstrapReplicaPendingAck: Boolean(record.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: Number(record.manifestGenerationHighWater ?? 0),
+    manifestGenerationHighWaterByBindingKey:
+      record.manifestGenerationHighWaterByBindingKey &&
+      typeof record.manifestGenerationHighWaterByBindingKey === "object" &&
+      !Array.isArray(record.manifestGenerationHighWaterByBindingKey)
+        ? Object.fromEntries(
+            Object.entries(
+              /** @type {Record<string, unknown>} */ (record.manifestGenerationHighWaterByBindingKey),
+            )
+              .map(([k, v]) => [String(k), Number(v)])
+              .filter(([, v]) => Number.isFinite(v) && v >= 0),
+          )
+        : undefined,
     storageBindingKey:
       typeof record.storageBindingKey === "string" && record.storageBindingKey
         ? record.storageBindingKey
@@ -139,6 +151,12 @@ export function serializeObjectStoreLocalSyncState(state) {
     bootstrapReplicaPendingAck: Boolean(state.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: state.manifestGenerationHighWater ?? 0,
   };
+  if (
+    state.manifestGenerationHighWaterByBindingKey &&
+    Object.keys(state.manifestGenerationHighWaterByBindingKey).length > 0
+  ) {
+    out.manifestGenerationHighWaterByBindingKey = state.manifestGenerationHighWaterByBindingKey;
+  }
   if (state.storageBindingKey) {
     out.storageBindingKey = state.storageBindingKey;
   }
@@ -235,11 +253,38 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
       incoming.appliedSnapshotEpoch,
     );
   }
+  if (incoming.manifestGenerationHighWaterByBindingKey) {
+    persisted.manifestGenerationHighWaterByBindingKey =
+      persisted.manifestGenerationHighWaterByBindingKey ?? {};
+    for (const [bindingKey, raw] of Object.entries(incoming.manifestGenerationHighWaterByBindingKey)) {
+      const next = Number(raw);
+      if (!Number.isFinite(next) || next < 0) continue;
+      persisted.manifestGenerationHighWaterByBindingKey[bindingKey] = Math.max(
+        persisted.manifestGenerationHighWaterByBindingKey[bindingKey] ?? 0,
+        next,
+      );
+    }
+  }
   if (incoming.manifestGenerationHighWater !== undefined) {
     persisted.manifestGenerationHighWater = Math.max(
       persisted.manifestGenerationHighWater ?? 0,
       incoming.manifestGenerationHighWater,
     );
+    if (incoming.storageBindingKey) {
+      persisted.manifestGenerationHighWaterByBindingKey =
+        persisted.manifestGenerationHighWaterByBindingKey ?? {};
+      persisted.manifestGenerationHighWaterByBindingKey[incoming.storageBindingKey] = Math.max(
+        persisted.manifestGenerationHighWaterByBindingKey[incoming.storageBindingKey] ?? 0,
+        incoming.manifestGenerationHighWater,
+      );
+    }
+  }
+  if (incoming.storageBindingKey && incoming.storageBindingKey !== persisted.storageBindingKey) {
+    persisted.storageBindingKey = incoming.storageBindingKey;
+    const map = persisted.manifestGenerationHighWaterByBindingKey ?? {};
+    if (map[incoming.storageBindingKey] !== undefined) {
+      persisted.manifestGenerationHighWater = map[incoming.storageBindingKey];
+    }
   }
   if (
     incoming.verifiedManifestGeneration !== undefined &&
