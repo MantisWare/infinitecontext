@@ -230,6 +230,10 @@ export async function releaseLeaseLock(options) {
  * @param {number} [options.settleMs]
  * @param {() => Promise<T>} options.fn
  */
+export async function verifyLeaseLockAfterWrite(options) {
+  await readLeaseLockForFence(options);
+}
+
 export async function readLeaseLockForFence(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
   const existing = await readLeasePayload(

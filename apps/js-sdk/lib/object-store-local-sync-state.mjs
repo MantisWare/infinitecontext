@@ -18,6 +18,9 @@ import {
  * @property {string} [logListCursor] pagination cursor for discovering remote log prefixes
  * @property {number} [appliedSnapshotEpoch] snapshot epoch hydrated on this device (-1 = none)
  * @property {Record<string, unknown>} [pendingBootstrapReplica] sanitized replica pending pull delivery
+ * @property {boolean} [bootstrapReplicaPendingAck] bootstrap delivered to client but manifest ack deferred
+ * @property {import('./sync-cursor.mjs').VectorSyncCursor} [snapshotCompactedThrough] floor covered by applied snapshot
+ * @property {number} [manifestGenerationHighWater] last trusted manifest generation seen locally
  */
 
 /** @returns {ObjectStoreLocalSyncState} */

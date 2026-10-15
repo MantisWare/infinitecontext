@@ -14,7 +14,9 @@ import {
   listSnapshotEpochs,
   loadStorageSnapshot,
   verifySnapshotTrustedHeads,
+  assertSnapshotCoversManifestKnowledge,
 } from "../../lib/storage/storage-compaction.mjs";
+import { confirmObjectStorePullDeliveryForContext } from "../../lib/object-store-sync.mjs";
 import { loadStorageManifest } from "../../lib/storage/storage-manifest.mjs";
 import {
   objectStorePullSyncChanges,
@@ -172,6 +174,7 @@ describe("storage compaction + bootstrap", () => {
     resetObjectStorePullVerifyGenerationForTests();
     const fresh = syncCtx(adapter, "33333333-3333-4333-8333-333333333333");
     const tailPull = await objectStorePullSyncChanges(fresh, { limit: 500 });
+    await confirmObjectStorePullDeliveryForContext(fresh);
     assert.ok(tailPull.bootstrap_replica);
     const bootReplica = hydrateSyncReplica(tailPull.bootstrap_replica);
     for (const change of tailPull.changes) {
@@ -408,10 +411,8 @@ describe("storage compaction + bootstrap", () => {
     const snap = await loadStorageSnapshot(writer, 0);
     assert.ok(snap);
     snap.trusted_heads = {};
-    await assert.rejects(
-      () => verifySnapshotTrustedHeads(writer, snap, { requireFullLogCoverage: true }),
-      /omits or misstates/i,
-    );
+    const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
+    assert.throws(() => assertSnapshotCoversManifestKnowledge(manifest, snap), /omits manifest-known/i);
   });
 
   it("concurrent compaction: one wins CAS, other observes existing epoch", async () => {

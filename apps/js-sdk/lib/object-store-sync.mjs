@@ -1,5 +1,6 @@
 import {
   advanceVectorCursorDevH,
+  maxVectorSyncCursor,
   normalizeVectorSyncCursor,
   vectorCursorHeadSum,
 } from "./sync-cursor.mjs";
@@ -50,10 +51,9 @@ import {
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
 import {
   bootstrapLocalStateFromLatestSnapshot,
-  clearPendingBootstrapReplica,
-  recordManifestAcknowledgement,
+  confirmObjectStorePullDelivery,
 } from "./storage/storage-compaction.mjs";
-import { loadStorageManifest } from "./storage/storage-manifest.mjs";
+import { loadStorageManifestForSync } from "./storage/storage-manifest.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -91,7 +91,7 @@ async function verifyFullTrustedChains(ctx, state) {
       (seq) => readEnvelopeAtSeq(ctx, devH, seq),
       trusted.seq,
     );
-    await assertTrustedHeadIntegrity(ctx, devH, trusted);
+    await assertTrustedHeadIntegrity(ctx, state, devH, trusted);
   }
 }
 
@@ -280,12 +280,20 @@ async function assertTrustedAnchorDigest(ctx, devH, trusted) {
  * @param {string} devH
  * @param {{ seq: number, digest: string }} trusted
  */
-async function assertTrustedHeadIntegrity(ctx, devH, trusted) {
+async function assertTrustedHeadIntegrity(ctx, state, devH, trusted) {
   await assertTrustedAnchorDigest(ctx, devH, trusted);
   if (trusted.seq === 0) return;
   const prevEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq - 1);
   if (!prevEnvelope) {
-    return;
+    const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
+    const snapFloor = Number(
+      normalizeVectorSyncCursor(state.snapshotCompactedThrough ?? state.vectorCursor).v?.[devH] ?? -1,
+    );
+    if (trusted.seq - 1 <= Math.max(floor, snapFloor)) return;
+    throw new ObjectStoreLogRollbackError(
+      `Remote log for ${devH} missing segment at seq ${trusted.seq - 1}`,
+    );
   }
   const curEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
   if (!curEnvelope) {
@@ -309,21 +317,15 @@ async function assertTrustedHeadIntegrity(ctx, devH, trusted) {
  * @param {{ seq: number, digest: string }} trusted
  */
 async function verifyOwnerTrustedPrefix(ctx, devH, trusted) {
-  await assertTrustedAnchorDigest(ctx, devH, trusted);
-  await verifyDeviceLogThroughSeq(
-    ctx,
-    devH,
-    trusted,
-    (seq) => readEnvelopeAtSeq(ctx, devH, seq),
-    trusted.seq,
-  );
+  const state = ctx.localState.load();
+  await assertTrustedHeadIntegrity(ctx, state, devH, trusted);
 }
 
 /** @param {ObjectStoreSyncContext} ctx @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
 async function assertTrustedAnchorsMatchRemote(ctx, state) {
   for (const [devH, trusted] of Object.entries(state.trustedHeads)) {
     if (!trusted) continue;
-    await assertTrustedHeadIntegrity(ctx, devH, trusted);
+    await assertTrustedHeadIntegrity(ctx, state, devH, trusted);
   }
 }
 
@@ -432,20 +434,16 @@ function resolveDeleteTargetClientIds(idsRaw, ledger, contextId) {
  */
 async function reconcileOwnLogPrefix(ctx, state) {
   let trustedSelf = state.trustedHeads[ctx.selfDevH];
-  try {
-    const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
-    const manifestHead = manifest.trusted_heads?.[ctx.selfDevH];
-    if (
-      manifestHead &&
-      (!trustedSelf ||
-        manifestHead.seq > trustedSelf.seq ||
-        (manifestHead.seq === trustedSelf.seq && manifestHead.digest !== trustedSelf.digest))
-    ) {
-      commitTrustedHeadAdvance(state, ctx.selfDevH, manifestHead);
-      trustedSelf = manifestHead;
-    }
-  } catch {
-    /* manifest optional for local-only dev */
+  const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
+  const manifestHead = manifest.trusted_heads?.[ctx.selfDevH];
+  if (
+    manifestHead &&
+    (!trustedSelf ||
+      manifestHead.seq > trustedSelf.seq ||
+      (manifestHead.seq === trustedSelf.seq && manifestHead.digest !== trustedSelf.digest))
+  ) {
+    commitTrustedHeadAdvance(state, ctx.selfDevH, manifestHead);
+    trustedSelf = manifestHead;
   }
   if (trustedSelf) {
     await verifyOwnerTrustedPrefix(ctx, ctx.selfDevH, trustedSelf);
@@ -550,11 +548,19 @@ export async function objectStoreFetchSyncStatus(ctx) {
   return { head_sequence: headSequenceForStatus(state) };
 }
 
+function resolvePullVectorCursor(state, since) {
+  const fromState = normalizeVectorSyncCursor(state.vectorCursor);
+  if (since && typeof since === "object" && since.kind === "vector") {
+    return maxVectorSyncCursor(normalizeVectorSyncCursor(since), fromState);
+  }
+  return fromState;
+}
+
 export async function objectStorePullSyncChanges(ctx, options = {}) {
   const segmentLimit = options.limit ?? 500;
   const state = ctx.localState.load();
   await bootstrapLocalStateFromLatestSnapshot(ctx, state);
-  const cursor = normalizeVectorSyncCursor(options.since ?? state.vectorCursor);
+  const cursor = resolvePullVectorCursor(state, options.since);
 
   pullsSinceBoot += 1;
   if (pullsSinceBoot === 1 || pullsSinceBoot % FULL_CHAIN_VERIFY_EVERY_N === 0) {
@@ -661,10 +667,8 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   let bootstrapReplica;
   if (state.pendingBootstrapReplica) {
     bootstrapReplica = state.pendingBootstrapReplica;
-    clearPendingBootstrapReplica(state);
   }
   await persistLocalState(ctx, state);
-  await recordManifestAcknowledgement(ctx, state);
 
   const hasMore = pendingSegments.length > segmentsTaken;
   return {
@@ -678,9 +682,14 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   };
 }
 
+export async function confirmObjectStorePullDeliveryForContext(ctx) {
+  await confirmObjectStorePullDelivery(ctx);
+}
+
 export async function objectStorePushSyncMutations(ctx, mutations) {
   const batch = Array.isArray(mutations) ? mutations : [];
   let state = ctx.localState.load();
+  await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   const headSum = headSequenceForStatus(state);
   /** @type {string[]} */
   const applied = [];

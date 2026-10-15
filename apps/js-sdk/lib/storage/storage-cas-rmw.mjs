@@ -1,6 +1,11 @@
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
-import { readLeaseLockForFence, withLeaseLock } from "./lease-lock.mjs";
+import {
+  LEASE_DEFAULT_SETTLE_MS,
+  readLeaseLockForFence,
+  verifyLeaseLockAfterWrite,
+  withLeaseLock,
+} from "./lease-lock.mjs";
 import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
@@ -80,13 +85,14 @@ export async function storageReadModifyWrite(params) {
     throw new Error("storageReadModifyWrite exhausted CAS attempts");
   }
 
+  const settleMs = Math.max(params.settleMs ?? 0, LEASE_DEFAULT_SETTLE_MS);
   return withLeaseLock({
     adapter: params.adapter,
     dek: params.dek,
     layoutPrefix: params.layoutPrefix,
     lockName: params.lockName,
     ownerDevH: params.ownerDevH,
-    settleMs: params.settleMs,
+    settleMs,
     fn: async (lease) => {
       const row = await params.adapter.get(params.objectKey);
       const current = row?.body
@@ -109,6 +115,14 @@ export async function storageReadModifyWrite(params) {
       } else {
         await params.adapter.put(params.objectKey, body, { ifMatch: row.etag });
       }
+      await verifyLeaseLockAfterWrite({
+        adapter: params.adapter,
+        dek: params.dek,
+        layoutPrefix: params.layoutPrefix,
+        lockName: params.lockName,
+        ownerDevH: params.ownerDevH,
+        nonce: lease.nonce,
+      });
       return result;
     },
   });

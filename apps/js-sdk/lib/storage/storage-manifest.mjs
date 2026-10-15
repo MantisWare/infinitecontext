@@ -21,6 +21,7 @@ const MANIFEST_PLAIN_FIELD = "ic_layout_manifest_v1";
  * @property {import('../sync-cursor.mjs').VectorSyncCursor} compacted_through
  * @property {number} latest_snapshot_epoch
  * @property {number} manifest_generation monotonic anti-replay generation
+ * @property {string[]} [sync_participants] devH rows that must ack before GC
  * @property {Record<string, { seq: number, digest: string }>} [trusted_heads]
  */
 
@@ -32,6 +33,7 @@ export function createEmptyStorageManifest() {
     compacted_through: normalizeVectorSyncCursor(0),
     latest_snapshot_epoch: -1,
     manifest_generation: 0,
+    sync_participants: [],
     trusted_heads: {},
   };
 }
@@ -66,6 +68,9 @@ export function parseStorageManifestPlain(raw) {
     compacted_through: normalizeVectorSyncCursor(record.compacted_through ?? 0),
     latest_snapshot_epoch: Number(record.latest_snapshot_epoch ?? -1),
     manifest_generation: Number(record.manifest_generation ?? 0),
+    sync_participants: Array.isArray(record.sync_participants)
+      ? record.sync_participants.map((d) => String(d).toUpperCase())
+      : [],
     trusted_heads:
       record.trusted_heads && typeof record.trusted_heads === "object"
         ? /** @type {Record<string, { seq: number, digest: string }>} */ (record.trusted_heads)
@@ -88,7 +93,61 @@ export async function loadStorageManifest(adapter, dek, layoutPrefix) {
   const row = await adapter.get(key);
   if (!row?.body) return createEmptyStorageManifest();
   const plain = readLayoutObjectPlaintext(dek, key, row.body);
-  return parseStorageManifestPlain(plain);
+  const manifest = parseStorageManifestPlain(plain);
+  sanitizeManifestDeviceAcks(manifest);
+  return manifest;
+}
+
+/** @param {StorageManifest} manifest */
+export function sanitizeManifestDeviceAcks(manifest) {
+  for (const row of manifest.devices) {
+    const headSelf = manifest.trusted_heads?.[row.devH]?.seq;
+    if (Number.isFinite(headSelf) && headSelf >= 0 && row.acknowledged_seq > headSelf) {
+      row.acknowledged_seq = headSelf;
+    }
+    if (row.acknowledged_cursor?.v) {
+      for (const [devH, seq] of Object.entries(row.acknowledged_cursor.v)) {
+        const cap = manifest.trusted_heads?.[devH]?.seq;
+        if (Number.isFinite(cap) && cap >= 0 && Number(seq) > cap) {
+          row.acknowledged_cursor.v[devH] = cap;
+        }
+      }
+    }
+  }
+}
+
+/** @param {Record<string, { seq: number, digest: string }>} prev @param {Record<string, { seq: number, digest: string }>} next */
+export function mergeTrustedHeadsMonotonic(prev, next) {
+  /** @type {Record<string, { seq: number, digest: string }>} */
+  const out = { ...(prev ?? {}) };
+  for (const [devH, head] of Object.entries(next ?? {})) {
+    if (!head) continue;
+    const existing = out[devH];
+    if (!existing || head.seq > existing.seq) {
+      out[devH] = { seq: head.seq, digest: head.digest };
+    } else if (head.seq === existing.seq && head.digest !== existing.digest) {
+      out[devH] = { seq: head.seq, digest: head.digest };
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {import('./types.mjs').StorageAdapter} adapter
+ * @param {Uint8Array} dek
+ * @param {string} layoutPrefix
+ * @param {import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ */
+export async function loadStorageManifestForSync(adapter, dek, layoutPrefix, state) {
+  const manifest = await loadStorageManifest(adapter, dek, layoutPrefix);
+  const highWater = state.manifestGenerationHighWater ?? 0;
+  if (manifest.manifest_generation < highWater) {
+    throw new PreconditionFailedError(
+      `Manifest generation ${manifest.manifest_generation} is below local high-water ${highWater}`,
+    );
+  }
+  state.manifestGenerationHighWater = Math.max(highWater, manifest.manifest_generation);
+  return manifest;
 }
 
 /**
@@ -177,6 +236,9 @@ export function upsertManifestDeviceAck(manifest, devH, acknowledgedSeq, acknowl
     row.acknowledged_seq = Math.max(row.acknowledged_seq, cappedSeq);
     row.last_seq = Math.max(row.last_seq, cappedSeq);
   }
+  const participants = new Set(manifest.sync_participants ?? []);
+  participants.add(canon);
+  manifest.sync_participants = [...participants];
   if (acknowledgedCursor) {
     const cursor = normalizeVectorSyncCursor(acknowledgedCursor);
     /** @type {Record<string, number>} */
