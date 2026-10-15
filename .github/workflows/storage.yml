@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       minio:
-        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
         ports:
           - 9000:9000
         env:
@@ -22,8 +22,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-          --entrypoint /bin/sh
-          -c "mkdir -p /data && minio server /data --address :9000"
+          --cmd "server /data --console-address :9001"
     env:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
