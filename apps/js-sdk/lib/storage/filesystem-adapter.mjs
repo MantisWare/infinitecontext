@@ -103,12 +103,12 @@ export function createFilesystemStorageAdapter(options) {
 
     async init() {
       try {
-        ensurePrivateDir(rootDir);
-        assertHardLinkCommitSupported(rootDir);
-        rejectSymlinkInStoreRoot(rootDir);
         if (auditReadOnly) {
           return;
         }
+        ensurePrivateDir(rootDir);
+        assertHardLinkCommitSupported(rootDir);
+        rejectSymlinkInStoreRoot(rootDir);
         sweepStaleFilesystemTempFiles(rootDir);
         await withObjectsStoreLock(rootDir, async (assertHeld) => {
           sweepStaleTombstoneOnlyKeys(rootDir, assertHeld);

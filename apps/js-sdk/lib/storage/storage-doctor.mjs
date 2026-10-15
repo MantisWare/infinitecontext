@@ -1,7 +1,7 @@
 import { assertFolderCopyFolderDirsClean, assertFolderObjectFileCopiesClean } from "./folder-object-conflict-preflight.mjs";
-import { verifyFolderDeviceLogsChainOnly } from "./folder-storage-repair.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
+import { auditVaultStoreTrust } from "./storage-vault-trust-audit.mjs";
 
 /**
  * Read-only folder vault audit (no quarantine / repair).
@@ -11,6 +11,8 @@ import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
  *   dek: Uint8Array,
  *   layoutPrefix: string,
  *   deviceUuid?: string,
+ *   cliStatePath?: string,
+ *   daemonDbPath?: string,
  * }} params
  */
 export async function auditFolderObjectStoreVault(params) {
@@ -22,7 +24,9 @@ export async function auditFolderObjectStoreVault(params) {
   /** @type {{ code: string, message: string } | null} */
   let preflightError = null;
   try {
-    await assertFolderObjectFileCopiesClean(params.adapter, params.layoutPrefix);
+    await assertFolderObjectFileCopiesClean(params.adapter, params.layoutPrefix, {
+      includeManifest: true,
+    });
     await assertFolderCopyFolderDirsClean(params.adapter, params.layoutPrefix);
   } catch (error) {
     preflightError = {
@@ -31,28 +35,20 @@ export async function auditFolderObjectStoreVault(params) {
     };
   }
   const manifest = await loadFolderMergedManifest(params.adapter, params.dek, params.layoutPrefix);
-  /** @type {{ ok: boolean, error?: string }} */
+  /** @type {{ ok: boolean, code?: string, status?: string, error?: string }} */
   let logVerify = { ok: true };
   if (!preflightError) {
-    try {
-      const { deriveDevH } = await import("./layout.mjs");
-      const selfDevH = params.deviceUuid
-        ? deriveDevH(params.dek, params.deviceUuid)
-        : manifest.devices[0]?.devH;
-      await verifyFolderDeviceLogsChainOnly(
-        {
-          adapter: params.adapter,
-          dek: params.dek,
-          layoutPrefix: params.layoutPrefix,
-          selfDevH: selfDevH ?? "",
-          deviceUuid: params.deviceUuid ?? "",
-          localState: { load: () => ({}), save: async () => {} },
-        },
-        manifest,
-      );
-    } catch (error) {
-      logVerify = { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+    const trust = await auditVaultStoreTrust({
+      adapter: params.adapter,
+      dek: params.dek,
+      layoutPrefix: params.layoutPrefix,
+      deviceUuid: params.deviceUuid ?? "",
+      storeRootDir: folder.rootDir,
+      cliStatePath: params.cliStatePath,
+      daemonDbPath: params.daemonDbPath,
+      backendId: FOLDER_STORAGE_ADAPTER_ID,
+    });
+    logVerify = trust.logVerify;
   } else {
     logVerify = { ok: false, error: "skipped due to preflight failure" };
   }

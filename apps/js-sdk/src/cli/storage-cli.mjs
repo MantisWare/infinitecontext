@@ -46,7 +46,7 @@ export async function runStorageCli(subcommand, args, deps = getStorageCliDepsFo
 Commands:
   init <folderPath>                 Create folder store skeleton (objects/)
   doctor [--repair] [--dry-run]     Audit folder vault; optional quarantine repair
-  migrate [--to <folder>] [--apply-config]  Resumable local → folder copy + log verify
+  migrate [--to <folder>] [--apply-config] [--reset]  Resumable local → folder copy + trust verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 
 Environment:
@@ -67,6 +67,7 @@ Environment:
 
   if (cmd === "migrate") {
     const applyConfig = args.includes("--apply-config");
+    const reset = args.includes("--reset");
     return run(async () => {
       const config = readConfigFile();
       if (isHostedStorageBackend(config)) {
@@ -89,11 +90,17 @@ Environment:
         toIdx >= 0 && args[toIdx + 1]
           ? path.resolve(String(args[toIdx + 1]))
           : resolveFolderObjectStoreRootDir(config);
-      const { runStorageMigrateLocalToFolder } = await import(
+      const { runStorageMigrateLocalToFolder, resetStorageMigrate } = await import(
         "../../lib/storage/storage-migrate-local-folder.mjs"
       );
+      const scopeKey = `cli:${sourceRoot}:${destRoot}`;
+      if (reset) {
+        const cleared = resetStorageMigrate(scopeKey);
+        console.log(JSON.stringify({ reset: true, ...cleared }, null, 2));
+        return;
+      }
       const result = await runStorageMigrateLocalToFolder({
-        scopeKey: `cli:${sourceRoot}:${destRoot}`,
+        scopeKey,
         dek: unlocked.dek,
         layoutPrefix: "accounts/local",
         sourceRoot,
