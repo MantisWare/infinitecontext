@@ -55,6 +55,20 @@ export function advanceVectorCursorDevH(cursor, devH, seq) {
   }
 }
 
+/** Per-devH max of two vector cursors (monotonic compaction floor). */
+export function maxVectorSyncCursor(a, b) {
+  const left = normalizeVectorSyncCursor(a);
+  const right = normalizeVectorSyncCursor(b);
+  /** @type {Record<string, number>} */
+  const v = { ...left.v };
+  for (const [devH, seq] of Object.entries(right.v ?? {})) {
+    const n = Number(seq);
+    if (!Number.isSafeInteger(n) || n < 0) continue;
+    v[devH] = Math.max(v[devH] ?? -1, n);
+  }
+  return { kind: "vector", v };
+}
+
 /** @param {VectorSyncCursor} cursor */
 export function serializeVectorSyncCursor(cursor) {
   return JSON.stringify(cursor);
