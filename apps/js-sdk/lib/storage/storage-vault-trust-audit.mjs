@@ -11,8 +11,9 @@ import {
 } from "../object-store-local-state-persist.mjs";
 import {
   manifestGenerationHighWaterForBinding,
-  resolveObjectStoreSyncBindingKey,
+  resolveObjectStoreTrustBindingKey,
 } from "../object-store-sync-binding.mjs";
+import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
 import { mergeTrustedHeadsMonotonic } from "./storage-manifest.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
 import { logSegmentRelativePath } from "./layout.mjs";
@@ -170,10 +171,8 @@ export async function auditVaultStoreTrust(params) {
       cliStatePath: params.cliStatePath,
       daemonDbPath: params.daemonDbPath,
     });
-  const bindingKey = resolveObjectStoreSyncBindingKey(undefined, process.env, {
-    rootDir: params.storeRootDir,
-    backendId: params.backendId ?? "filesystem",
-  });
+  const backendId = params.backendId ?? FOLDER_STORAGE_ADAPTER_ID;
+  const bindingKey = resolveObjectStoreTrustBindingKey(params.storeRootDir, backendId);
   const manifest = await loadFolderMergedManifest(params.adapter, params.dek, params.layoutPrefix);
   const rollbackIssues = collectVaultTrustRollbackIssues({ manifest, localTrust, bindingKey });
   if (rollbackIssues.length) {

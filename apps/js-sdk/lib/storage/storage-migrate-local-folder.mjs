@@ -4,6 +4,10 @@ import path from "node:path";
 
 import { infinitecontextHome } from "../client-config.mjs";
 import { readConfigFile, writeConfigFile } from "../client-config.mjs";
+import { LOCAL_OBJECT_STORE_BACKEND_ID } from "./local-object-store.mjs";
+import { FOLDER_STORAGE_ADAPTER_ID } from "./folder-adapter.mjs";
+import { resolveFolderObjectStoreRootDir } from "./folder-object-store.mjs";
+import { isFolderObjectStoreBackend } from "../sync-storage-backend.mjs";
 import { createFolderStorageAdapter } from "./folder-adapter.mjs";
 import { createFilesystemStorageAdapter } from "./filesystem-adapter.mjs";
 import { loadFolderMergedManifest } from "./storage-manifest-folder.mjs";
@@ -186,6 +190,87 @@ function objectsTreeHasRegularFiles(rootDir) {
  *   resumeState?: Record<string, unknown> | null,
  * }} params
  */
+/**
+ * @param {string} relFromStoreRoot path relative to store root (includes `objects/…`)
+ * @param {string} layoutPrefix
+ */
+export function isMigrationResetProtectedRelativePath(relFromStoreRoot, layoutPrefix) {
+  const normalized = String(relFromStoreRoot).replace(/\\/g, "/");
+  const vaultPrefix = `${OBJECTS}/${layoutPrefix}/ic-v1/`;
+  if (!normalized.startsWith(vaultPrefix)) {
+    return false;
+  }
+  const suffix = normalized.slice(vaultPrefix.length);
+  if (suffix === "vault.json") {
+    return true;
+  }
+  if (suffix === "manifest.json.enc" || suffix.startsWith("manifest.json.enc/")) {
+    return true;
+  }
+  if (suffix.startsWith("devices/")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {{
+ *   scopeKey: string,
+ *   state: Record<string, unknown>,
+ *   destRoot: string,
+ *   dek: Uint8Array,
+ *   layoutPrefix: string,
+ *   allowRecord?: boolean,
+ * }} params
+ */
+async function recordAndAssertMigrationDestinationIdentity(params) {
+  const objects = path.join(params.destRoot, OBJECTS);
+  if (!fs.existsSync(objects) || !objectsTreeHasRegularFiles(params.destRoot)) {
+    return;
+  }
+  const recorded = params.state.destStoreIdentity ? String(params.state.destStoreIdentity) : null;
+  if (!recorded && !params.allowRecord) {
+    return;
+  }
+  const adapter = createFolderStorageAdapter({
+    rootDir: params.destRoot,
+    placeholderTimeoutMs: 80,
+    auditReadOnly: true,
+  });
+  try {
+    await adapter.init();
+    const manifest = await loadFolderMergedManifest(adapter, params.dek, params.layoutPrefix);
+    const identity = computeFolderStoreIdentity(manifest);
+    if (recorded && recorded !== identity) {
+      throw new StorageError(
+        "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`",
+        "invalid_argument",
+      );
+    }
+    if (!recorded && params.allowRecord) {
+      params.state.destStoreIdentity = identity;
+      saveStorageMigrateState(params.scopeKey, params.state);
+    }
+  } finally {
+    await adapter.close();
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} config
+ * @param {string | null} destRoot
+ */
+function activeConfigPointsAtMigrationDest(config, destRoot) {
+  if (!destRoot || !isFolderObjectStoreBackend(config)) {
+    return false;
+  }
+  try {
+    return path.resolve(resolveFolderObjectStoreRootDir(config)) === path.resolve(destRoot);
+  } catch {
+    return false;
+  }
+}
+
 async function assertMigrationDestinationPrecheck(params) {
   if (!objectsTreeHasRegularFiles(params.destRoot)) {
     return;
@@ -301,7 +386,7 @@ async function assertSourceVaultTrustBeforeFinalize(options) {
       storeRootDir: options.sourceRoot,
       cliStatePath: options.cliStatePath,
       daemonDbPath: options.daemonDbPath,
-      backendId: "filesystem",
+      backendId: LOCAL_OBJECT_STORE_BACKEND_ID,
     });
   } finally {
     await adapter.close();
@@ -334,7 +419,7 @@ export async function verifyDestinationFolderVaultLogs(options) {
       storeRootDir: options.destRoot,
       cliStatePath: options.cliStatePath,
       daemonDbPath: options.daemonDbPath,
-      backendId: "folder",
+      backendId: FOLDER_STORAGE_ADAPTER_ID,
     });
     if (!trust.logVerify.ok) {
       throw new StorageError(
@@ -437,20 +522,62 @@ export function saveStorageMigrateState(scopeKey, state) {
 
 /**
  * @param {string} scopeKey
+ * @param {{ config?: Record<string, unknown>, layoutPrefix?: string }} [options]
  */
-export function resetStorageMigrate(scopeKey) {
+export function resetStorageMigrate(scopeKey, options = {}) {
   const state = loadStorageMigrateState(scopeKey);
-  if (!state) return { removed: 0 };
+  if (!state) return { removed: 0, skipped: 0 };
+  const layoutPrefix = options.layoutPrefix ?? "accounts/local";
+  const config = options.config ?? readConfigFile();
   const destRoot = state.destRoot ? path.resolve(String(state.destRoot)) : null;
+
+  if (state.configApplied) {
+    throw new StorageError(
+      "`storage migrate --reset` is refused after `--apply-config` (the destination folder is the live vault)",
+      "invalid_argument",
+    );
+  }
+  if (activeConfigPointsAtMigrationDest(config, destRoot)) {
+    throw new StorageError(
+      "`storage migrate --reset` is refused while `config.json` points `storage.folder.path` at the migration destination",
+      "invalid_argument",
+    );
+  }
+
+  /** @type {Record<string, { size: number, hash: string }>} */
+  const fingerprints =
+    state.fileFingerprints && typeof state.fileFingerprints === "object"
+      ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
+      : {};
+
   let removed = 0;
+  let skipped = 0;
   if (destRoot) {
     for (const rel of state.copiedRelativePaths ?? []) {
+      if (isMigrationResetProtectedRelativePath(rel, layoutPrefix)) {
+        skipped += 1;
+        continue;
+      }
+      const recorded = fingerprints[rel];
+      if (!recorded) {
+        skipped += 1;
+        continue;
+      }
       const target = path.join(destRoot, rel);
+      if (!fs.existsSync(target)) {
+        skipped += 1;
+        continue;
+      }
+      const current = fileContentFingerprint(target);
+      if (current.hash !== recorded.hash || current.size !== recorded.size) {
+        skipped += 1;
+        continue;
+      }
       try {
         fs.unlinkSync(target);
         removed += 1;
       } catch {
-        /* ignore missing */
+        skipped += 1;
       }
     }
   }
@@ -459,7 +586,7 @@ export function resetStorageMigrate(scopeKey) {
   } catch {
     /* ignore */
   }
-  return { removed };
+  return { removed, skipped };
 }
 
 /**
@@ -510,6 +637,17 @@ export async function runStorageMigrateLocalToFolder(options) {
       configApplied: false,
     };
     saveStorageMigrateState(scopeKey, state);
+  }
+
+  if (state.destStoreIdentity) {
+    await recordAndAssertMigrationDestinationIdentity({
+      scopeKey,
+      state,
+      destRoot,
+      dek: options.dek,
+      layoutPrefix: options.layoutPrefix,
+      allowRecord: false,
+    });
   }
 
   /** @type {Record<string, { size: number, hash: string }>} */

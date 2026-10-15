@@ -4,7 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, afterEach } from "node:test";
 
-import { createCliFileObjectStoreLocalState } from "../../lib/object-store-local-state-persist.mjs";
+import {
+  createCliFileObjectStoreLocalState,
+  createDaemonDbObjectStoreLocalState,
+} from "../../lib/object-store-local-state-persist.mjs";
+import { writeConfigFile, readConfigFile } from "../../lib/client-config.mjs";
+import { LOCAL_OBJECT_STORE_BACKEND_ID } from "../../lib/storage/local-object-store.mjs";
+import { FOLDER_STORAGE_ADAPTER_ID } from "../../lib/storage/folder-adapter.mjs";
+import {
+  clearStorageCliDepsForTests,
+  setStorageCliDepsForTests,
+} from "../../lib/storage-cli-deps.mjs";
 import { objectStorePushSyncMutations } from "../../lib/object-store-sync.mjs";
 import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-adapter.mjs";
@@ -16,11 +26,12 @@ import {
   migrationCopyFileWithFsync,
   MIGRATION_COPY_TMP_BASENAME_PREFIX,
   resetStorageMigrate,
+  isMigrationResetProtectedRelativePath,
   runStorageMigrateLocalToFolder,
   saveStorageMigrateState,
   storageMigrateStatePath,
 } from "../../lib/storage/storage-migrate-local-folder.mjs";
-import { resolveObjectStoreSyncBindingKey } from "../../lib/object-store-sync-binding.mjs";
+import { resolveObjectStoreTrustBindingKey } from "../../lib/object-store-sync-binding.mjs";
 import { auditFolderObjectStoreVault } from "../../lib/storage/storage-doctor.mjs";
 import { deriveDevH, logSegmentRelativePath } from "../../lib/storage/layout.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
@@ -137,7 +148,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-rollback-d-"));
       initFolderStorageRoot(folderRoot);
       const { syncStatePath } = await seedLocalVault(localRoot);
-      await inflateLocalTrustAheadOfStore(syncStatePath, localRoot, "filesystem");
+      await inflateLocalTrustAheadOfStore(syncStatePath, localRoot, LOCAL_OBJECT_STORE_BACKEND_ID);
       await assert.rejects(
         () =>
           runStorageMigrateLocalToFolder({
@@ -276,7 +287,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       assert.equal(cleanupMigrationTempCopyFiles(folderRoot), 0);
     });
 
-    it("storage migrate --reset removes only files recorded in migration state", async () => {
+    it("storage migrate --reset deletes only fingerprint-matching copies and never manifest/devices", async () => {
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-reset-src-"));
       const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-reset-d-"));
       initFolderStorageRoot(folderRoot);
@@ -290,13 +301,62 @@ describe("Phase 4.5 storage CLI (#9)", () => {
         destRoot: folderRoot,
         deviceUuid: DEVICE_A,
         cliStatePath: syncStatePath,
-        maxCopyFiles: 2,
       });
       const state = loadStorageMigrateState(sk);
       assert.ok(state.copiedRelativePaths.length >= 1);
-      const removed = resetStorageMigrate(sk);
+      const manifestRel = state.copiedRelativePaths.find((rel) =>
+        isMigrationResetProtectedRelativePath(rel, PREFIX),
+      );
+      assert.ok(manifestRel, "expected manifest or devices path in copied set");
+      const removed = resetStorageMigrate(sk, { layoutPrefix: PREFIX });
       assert.ok(removed.removed >= 1);
+      assert.ok(removed.skipped >= 1);
+      assert.ok(fs.existsSync(path.join(folderRoot, manifestRel)));
       assert.equal(loadStorageMigrateState(sk), null);
+    });
+
+    it("storage migrate --reset is refused after --apply-config or when config points at dest", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-reset-ref-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-reset-ref-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedLocalVault(localRoot);
+      const sk = `${scopeKey}-reset-refused`;
+      await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        applyConfig: true,
+      });
+      const applied = loadStorageMigrateState(sk);
+      assert.equal(applied.configApplied, true);
+      assert.throws(
+        () => resetStorageMigrate(sk, { layoutPrefix: PREFIX }),
+        (err) => err instanceof StorageError && /refused after `--apply-config`/i.test(err.message),
+      );
+      const folderRootLive = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-reset-live-d-"));
+      initFolderStorageRoot(folderRootLive);
+      const sk2 = `${scopeKey}-reset-config-live`;
+      await runStorageMigrateLocalToFolder({
+        scopeKey: sk2,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRootLive,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+      });
+      writeConfigFile({
+        storage: { backend: "folder", folder: { path: folderRootLive }, deviceUuid: DEVICE_A },
+      });
+      assert.throws(
+        () => resetStorageMigrate(sk2, { config: readConfigFile(), layoutPrefix: PREFIX }),
+        (err) =>
+          err instanceof StorageError && /refused while `config\.json` points/i.test(err.message),
+      );
     });
 
     it("refuses to overwrite differing destination bytes", async () => {
@@ -505,7 +565,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
         deviceUuid: DEVICE_A,
         cliStatePath: syncStatePath,
       });
-      await inflateLocalTrustAheadOfStore(syncStatePath, folderRoot, "folder");
+      await inflateLocalTrustAheadOfStore(syncStatePath, folderRoot, FOLDER_STORAGE_ADAPTER_ID);
       const adapter = createFolderStorageAdapter({ rootDir: folderRoot, auditReadOnly: true });
       await adapter.init();
       const report = await auditFolderObjectStoreVault({
@@ -594,7 +654,134 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       assert.match(String(report.preflight?.message ?? ""), /manifest\.json\.enc|2\.icgen/i);
     });
   });
+
+  describe("storage CLI daemon.db trust wiring (B1)", () => {
+    /** @type {string | undefined} */
+    let priorDbFileEnv;
+
+    afterEach(() => {
+      clearStorageCliDepsForTests();
+      if (priorDbFileEnv === undefined) {
+        delete process.env.INFINITECONTEXT_DB_FILE;
+      } else {
+        process.env.INFINITECONTEXT_DB_FILE = priorDbFileEnv;
+      }
+    });
+
+    it("real CLI doctor catches folder rollback using daemon.db trust only", async () => {
+      priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      const daemonDbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-db-")), "daemon.db");
+      process.env.INFINITECONTEXT_DB_FILE = daemonDbPath;
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-daemon-rb-"));
+      initFolderStorageRoot(folderRoot);
+      writeConfigFile({
+        baseUrl: "http://127.0.0.1:9",
+        storage: { backend: "folder", folder: { path: folderRoot }, deviceUuid: DEVICE_A },
+      });
+      const { syncStatePath } = await seedLocalVault(folderRoot);
+      await copyCliTrustIntoDaemonDb(syncStatePath, daemonDbPath);
+      await inflateDaemonTrustAheadOfStore(daemonDbPath, folderRoot, FOLDER_STORAGE_ADAPTER_ID);
+      try {
+        fs.unlinkSync(syncStatePath);
+      } catch {
+        /* ignore */
+      }
+      setStorageCliDepsForTests({
+        resolveUnlockedDek: async () => ({ dek: DEK }),
+      });
+      const report = await runStorageDoctorCliJson();
+      assert.equal(report.ok, false);
+      assert.equal(report.logVerify.code, "log_rollback");
+    });
+
+    it("real CLI doctor does not report heads_unverified when only daemon.db has trusted heads", async () => {
+      priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      const daemonDbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-db-")), "daemon.db");
+      process.env.INFINITECONTEXT_DB_FILE = daemonDbPath;
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-daemon-ok-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-daemon-ok-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedLocalVault(localRoot);
+      await runStorageMigrateLocalToFolder({
+        scopeKey: "pr9-cli-daemon-heads",
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+      });
+      writeConfigFile({
+        baseUrl: "http://127.0.0.1:9",
+        storage: { backend: "folder", folder: { path: folderRoot }, deviceUuid: DEVICE_A },
+      });
+      await copyCliTrustIntoDaemonDb(syncStatePath, daemonDbPath);
+      try {
+        fs.unlinkSync(syncStatePath);
+      } catch {
+        /* ignore */
+      }
+      setStorageCliDepsForTests({
+        resolveUnlockedDek: async () => ({ dek: DEK }),
+      });
+      const report = await runStorageDoctorCliJson();
+      assert.equal(report.ok, true);
+      assert.notEqual(report.logVerify.status, "heads_unverified");
+    });
+  });
 });
+
+async function runStorageDoctorCliJson() {
+  /** @type {string[]} */
+  const lines = [];
+  const prior = console.log;
+  console.log = (value) => {
+    lines.push(String(value));
+    prior(value);
+  };
+  try {
+    const { runStorageCli } = await import("../../src/cli/storage-cli.mjs");
+    await runStorageCli("doctor", []);
+    const raw = lines.at(-1);
+    assert.ok(raw, "expected doctor JSON on stdout");
+    return JSON.parse(raw);
+  } finally {
+    console.log = prior;
+  }
+}
+
+async function copyCliTrustIntoDaemonDb(cliStatePath, daemonDbPath) {
+  const cli = createCliFileObjectStoreLocalState(cliStatePath).load();
+  fs.mkdirSync(path.dirname(daemonDbPath), { recursive: true, mode: 0o700 });
+  const daemon = createDaemonDbObjectStoreLocalState(daemonDbPath);
+  try {
+    await daemon.save(cli);
+  } finally {
+    daemon.close();
+  }
+}
+
+/**
+ * @param {string} daemonDbPath
+ * @param {string} storeRoot
+ * @param {string} backendId
+ */
+async function inflateDaemonTrustAheadOfStore(daemonDbPath, storeRoot, backendId) {
+  const daemon = createDaemonDbObjectStoreLocalState(daemonDbPath);
+  const state = daemon.load();
+  const devH = deriveDevH(DEK, DEVICE_A).toUpperCase();
+  state.trustedHeads[devH] = { seq: 8, digest: "f".repeat(64) };
+  const bindingKey = resolveObjectStoreTrustBindingKey(storeRoot, backendId);
+  state.manifestGenerationHighWaterByBindingKey = {
+    ...(state.manifestGenerationHighWaterByBindingKey ?? {}),
+    [bindingKey]: 99,
+  };
+  try {
+    await daemon.save(state);
+  } finally {
+    daemon.close();
+  }
+}
 
 async function seedLocalVault(localRoot, dek = DEK) {
   const adapter = createFilesystemStorageAdapter({ rootDir: localRoot });
@@ -632,10 +819,7 @@ async function inflateLocalTrustAheadOfStore(syncStatePath, storeRoot, backendId
   const state = localState.load();
   const devH = deriveDevH(DEK, DEVICE_A).toUpperCase();
   state.trustedHeads[devH] = { seq: 8, digest: "f".repeat(64) };
-  const bindingKey = resolveObjectStoreSyncBindingKey({}, process.env, {
-    rootDir: storeRoot,
-    backendId,
-  });
+  const bindingKey = resolveObjectStoreTrustBindingKey(storeRoot, backendId);
   state.manifestGenerationHighWaterByBindingKey = {
     ...(state.manifestGenerationHighWaterByBindingKey ?? {}),
     [bindingKey]: 99,

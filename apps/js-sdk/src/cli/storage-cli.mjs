@@ -16,6 +16,8 @@ import {
 import { canonicalDevH, deriveDevH } from "../../lib/storage/layout.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
 import { getStorageCliDepsForTests } from "../../lib/storage-cli-deps.mjs";
+import { resolveDaemonDbPathFromEnv } from "../../lib/object-store-sync-runtime.mjs";
+import { defaultObjectStoreSyncStatePath } from "../../lib/object-store-local-state-persist.mjs";
 
 /**
  * @param {string | undefined} subcommand
@@ -94,8 +96,10 @@ Environment:
         "../../lib/storage/storage-migrate-local-folder.mjs"
       );
       const scopeKey = `cli:${sourceRoot}:${destRoot}`;
+      const daemonDbPath = resolveDaemonDbPathFromEnv(process.env);
+      const cliStatePath = defaultObjectStoreSyncStatePath();
       if (reset) {
-        const cleared = resetStorageMigrate(scopeKey);
+        const cleared = resetStorageMigrate(scopeKey, { config, layoutPrefix: "accounts/local" });
         console.log(JSON.stringify({ reset: true, ...cleared }, null, 2));
         return;
       }
@@ -107,6 +111,8 @@ Environment:
         destRoot,
         deviceUuid,
         applyConfig,
+        cliStatePath,
+        daemonDbPath,
       });
       console.log(JSON.stringify(result, null, 2));
     });
@@ -197,6 +203,8 @@ Environment:
         dek: unlocked.dek,
         layoutPrefix: "accounts/local",
         deviceUuid,
+        cliStatePath: defaultObjectStoreSyncStatePath(),
+        daemonDbPath: resolveDaemonDbPathFromEnv(process.env),
       });
       console.log(JSON.stringify(report, null, 2));
       await adapter.close();

@@ -27,6 +27,19 @@ export function resolveStorageRootRealpathForBinding(rootPath) {
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ rootDir?: string, backendId?: string }} [options]
  */
+/**
+ * Binding key for vault trust / manifest high-water against a store root (migrate, doctor, trust audit).
+ *
+ * @param {string} storeRootDir
+ * @param {string} backendId e.g. `local-filesystem` or `folder`
+ */
+export function resolveObjectStoreTrustBindingKey(storeRootDir, backendId) {
+  return resolveObjectStoreSyncBindingKey({}, process.env, {
+    rootDir: storeRootDir,
+    backendId,
+  });
+}
+
 export function resolveObjectStoreSyncBindingKey(
   config = readConfigFile(),
   env = process.env,
