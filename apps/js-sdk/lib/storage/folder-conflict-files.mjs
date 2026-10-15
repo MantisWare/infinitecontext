@@ -107,6 +107,41 @@ export function listConflictAwareGenerationPaths(keyDir) {
  * @param {string} canonicalKeyForAad
  * @param {string} rootDir
  */
+/**
+ * @param {string} keyDir
+ * @param {string} canonicalKeyForAad
+ * @param {string} rootDir
+ */
+export function assertAllConflictAwareGenerationCopiesConsistent(keyDir, canonicalKeyForAad, rootDir) {
+  /** @type {Map<number, string[]>} */
+  const byGen = new Map();
+  let entries;
+  try {
+    entries = fs.readdirSync(keyDir);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw mapFsError(error, keyDir);
+  }
+  for (const name of entries) {
+    const gen = parseConflictAwareGenerationFileName(name);
+    if (gen === null) continue;
+    const fullPath = path.join(keyDir, name);
+    try {
+      if (fs.lstatSync(fullPath).isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    const list = byGen.get(gen) ?? [];
+    list.push(fullPath);
+    byGen.set(gen, list);
+  }
+  for (const paths of byGen.values()) {
+    assertGenerationCopyPathsConsistent(paths, canonicalKeyForAad, rootDir);
+  }
+}
+
 export function assertGenerationCopyPathsConsistent(paths, canonicalKeyForAad, rootDir) {
   if (paths.length <= 1) return;
   /** @type {string | null} */

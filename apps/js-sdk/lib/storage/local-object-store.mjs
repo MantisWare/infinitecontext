@@ -144,6 +144,10 @@ export async function createLocalObjectStore(options = {}) {
           env: options.env,
         })
       : null);
+  if (localState) {
+    const { maybeRebindPersistedObjectStoreState } = await import("../object-store-sync-state-rebind.mjs");
+    maybeRebindPersistedObjectStoreState(localState, options.config ?? {}, options.env);
+  }
   const transport = new ObjectStoreSyncTransport(
     adapter,
     options.dek && options.deviceUuid && localState

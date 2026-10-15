@@ -2,7 +2,10 @@ import process from "node:process";
 
 import { getUnlockedDek } from "../../lib/vault-session.mjs";
 import { readConfigFile, resolveBaseUrl } from "../../lib/client-config.mjs";
-import { configureObjectStoreSyncTransportIfNeeded } from "../../lib/sync-object-store-bootstrap.mjs";
+import {
+  configureObjectStoreSyncTransportIfNeeded,
+  resetObjectStoreBootstrapForTests,
+} from "../../lib/sync-object-store-bootstrap.mjs";
 import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs";
 import { isHostedStorageBackend } from "../../lib/sync-storage-backend.mjs";
 import {
@@ -100,6 +103,7 @@ Environment:
         const result = await repairFolderObjectStoreVault(ctx, { dryRun });
         console.log(JSON.stringify(result, null, 2));
         await store.close();
+        await resetObjectStoreBootstrapForTests();
       });
     }
     throw new Error("Usage: infinitecontext storage doctor --repair [--dry-run]");

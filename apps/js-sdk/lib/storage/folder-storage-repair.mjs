@@ -10,6 +10,7 @@ import {
 } from "./folder-on-disk-scan.mjs";
 import { canonicalizeConflictStorageKey, conflictSegmentToCanonical } from "./folder-conflict-copies.mjs";
 import { quarantineObjectsRelativePath } from "./folder-quarantine.mjs";
+import { conflictResolutionHintForStorageKey } from "./folder-copy-resolution-hint.mjs";
 import { ObjectStoreLogMissingError } from "../object-store-local-sync-state.mjs";
 
 const OBJECTS = "objects";
@@ -58,6 +59,12 @@ async function assertNoForkedStorageKeys(ctx) {
         await folderAdapter.listConflictGetCandidates.call(ctx.adapter, key);
       } catch (error) {
         if (error instanceof StorageError && error.code === "storage_fork") {
+          if (!error.message.includes("Resolve manually")) {
+            throw new StorageError(
+              `${error.message} ${conflictResolutionHintForStorageKey(key)}`,
+              "storage_fork",
+            );
+          }
           throw error;
         }
         throw error;

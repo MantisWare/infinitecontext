@@ -8,6 +8,9 @@ For **iCloud Drive or any desktop-synced directory**, set `storage.backend` to `
 
 - **Log segment GC and compaction/snapshot writes are disabled** on `folder` (and any backend without **`crossDeviceCas`**). Segments are never deleted; clients replay from **seq 0**. Forked snapshot copies are ignored when logs verify.
 - **No shared manifest LWW.** Sync coordination uses **per-device** `devices/<devH>.json.enc` contributions (owner-writable). The effective manifest is a deterministic **union / max** merge across device files. Lease locks are not relied on for correctness on folder.
+- **Conflict preflight** applies to **`log/` and `devices/`** on init/pull/push: file-level duplicate `.icgen` files use the same rules as segments (**`storage_fork`** vs **`corrupt_storage`**); device rows never silently disappear when a sidecar is unreadable.
+- **Backend switch:** when moving from **`backend=local`** to **`backend=folder`** (or changing folder roots), **`object-store-sync-state.json`** rebinding resets **`manifestGenerationHighWater`** for the new **`storageBindingKey`** so manifest load does not fail against a stale high-water from the old root.
+- **`storage doctor --repair`** refuses when copy folders differ and prints a **manual resolution hint** (device + seq); quarantine is **deduped** when an identical tree is already under `quarantine/`.
 - `infinitecontext config doctor` reports folder GC/manifest policy when `storage.backend=folder`.
 
 ## Layout

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, afterEach } from "node:test";
+import { describe, it, afterEach, before } from "node:test";
 
 import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
 import { objectStorePullSyncChanges, objectStorePushSyncMutations } from "../../lib/object-store-sync.mjs";
@@ -21,6 +21,11 @@ import {
 } from "../../lib/vault-session.mjs";
 import { normalizeVectorSyncCursor } from "../../lib/sync-cursor.mjs";
 import { resetObjectStoreBootstrapForTests } from "../../lib/sync-object-store-bootstrap.mjs";
+import {
+  clearStorageCliDepsForTests,
+  setStorageCliDepsForTests,
+} from "../../lib/storage-cli-deps.mjs";
+import { getUnlockedDek } from "../../lib/vault-session.mjs";
 
 const DEK = new Uint8Array(32).fill(33);
 const DEVICE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -55,6 +60,7 @@ describe("PR27 Q/C/T blocking (46861d9)", () => {
   afterEach(async () => {
     await resetObjectStoreBootstrapForTests();
     clearTestVaultContextProvider();
+    clearStorageCliDepsForTests();
   });
 
   describe("Q1 quarantine destination reuse", () => {
@@ -181,6 +187,10 @@ describe("PR27 Q/C/T blocking (46861d9)", () => {
   });
 
   describe("T1 storage CLI unlock seam", () => {
+    before(() => {
+      process.env.INFINITECONTEXT_TEST_NO_KEYTAR = "1";
+    });
+
     it("vault unlock fails fast without TTY when no passphrase flags", async () => {
       const { runVaultCli } = await import("../../src/cli/vault.mjs");
       setTestVaultContextProvider(() => ({
@@ -211,6 +221,9 @@ describe("PR27 Q/C/T blocking (46861d9)", () => {
         baseUrl: "http://127.0.0.1:9",
       }));
       await storeUnlockedDek(TEST_ACCOUNT_KEY, DEK, { ttlMs: 60_000 });
+      setStorageCliDepsForTests({
+        resolveUnlockedDek: (opts) => getUnlockedDek(opts),
+      });
       const adapter = createFolderStorageAdapter({ rootDir: root, placeholderTimeoutMs: 80 });
       await adapter.init();
       await objectStorePushSyncMutations(syncCtx(adapter, DEVICE_A), [

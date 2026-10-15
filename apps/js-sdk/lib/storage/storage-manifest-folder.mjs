@@ -232,7 +232,13 @@ export async function loadAllDeviceManifestContributions(adapter, dek, layoutPre
               );
         }
       }
-      if (bodies.length > 0 && parsedRows.length === 0) {
+      if (bodies.length === 0) {
+        throw new StorageError(
+          `Device manifest missing readable copy at ${row.key}`,
+          "corrupt_storage",
+        );
+      }
+      if (parsedRows.length === 0) {
         throw new StorageError(
           `Undecryptable device manifest contribution at ${row.key}`,
           "corrupt_storage",

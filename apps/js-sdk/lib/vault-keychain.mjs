@@ -3,6 +3,28 @@ import os from "node:os";
 import { vaultAgentClear, vaultAgentLoad, vaultAgentStore } from "./vault-agent.mjs";
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
+const KEYTAR_IO_TIMEOUT_MS = 2_000;
+
+/**
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} timeoutMs
+ */
+async function withKeytarTimeout(promise, timeoutMs = KEYTAR_IO_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("keytar timeout")), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /** @type {Buffer | null} */
 let memoryDek = null;
@@ -10,6 +32,9 @@ let memoryExpiresAt = 0;
 
 /** @returns {Promise<import('keytar') | null>} */
 async function loadKeytar() {
+  if (String(process.env.INFINITECONTEXT_TEST_NO_KEYTAR ?? "") === "1") {
+    return null;
+  }
   try {
     const dynamicImport = new Function("specifier", "return import(specifier)");
     const mod = await dynamicImport("keytar");
@@ -43,11 +68,14 @@ export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_T
       dekB64: Buffer.from(dekBytes).toString("base64"),
       expiresAt: new Date(memoryExpiresAt).toISOString(),
     });
-    try {
-      await keytar.setPassword("infinitecontext-vault", accountKey, payload);
-    } catch {
-      // In-memory cache remains authoritative for this process.
-    }
+    // Do not block unlock on OS keychain I/O; in-memory cache is authoritative for this process.
+    void withKeytarTimeout(
+      keytar.setPassword("infinitecontext-vault", accountKey, payload),
+    ).catch(() => {});
+    return;
+  }
+
+  if (String(process.env.INFINITECONTEXT_TEST_NO_KEYTAR ?? "") === "1") {
     return;
   }
 
@@ -62,7 +90,9 @@ export async function loadCachedDek(accountKey) {
   const keytar = await loadKeytar();
   if (keytar) {
     try {
-      const payload = await keytar.getPassword("infinitecontext-vault", accountKey);
+      const payload = await withKeytarTimeout(
+        keytar.getPassword("infinitecontext-vault", accountKey),
+      );
       if (!payload) return null;
       const parsed = JSON.parse(payload);
       if (Date.parse(String(parsed.expiresAt ?? 0)) <= Date.now()) return null;

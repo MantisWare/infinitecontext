@@ -83,6 +83,39 @@ function uniquifyQuarantineDest(dest) {
 }
 
 /**
+ * @param {string} quarantineRoot
+ * @param {string} src
+ * @returns {string | null}
+ */
+function findIdenticalTreeUnderQuarantine(quarantineRoot, src) {
+  if (!fs.existsSync(quarantineRoot)) return null;
+  /** @param {string} dir */
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return null;
+    }
+    for (const name of entries) {
+      const full = path.join(dir, name);
+      let st;
+      try {
+        st = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+      if (treesByteIdentical(src, full)) return full;
+      const nested = walk(full);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  return walk(quarantineRoot);
+}
+
+/**
  * Copy a relative path under `objects/` into quarantine, fsync, then remove source.
  * Idempotent when source is already absent.
  *
@@ -97,6 +130,11 @@ export function quarantineObjectsRelativePath(rootDir, relPath, quarantineRoot) 
     return false;
   }
   const normalizedRel = relPath.split(path.sep).join("/");
+  const existing = findIdenticalTreeUnderQuarantine(quarantineRoot, src);
+  if (existing) {
+    removeTree(src);
+    return true;
+  }
   let dest = path.join(quarantineRoot, normalizedRel);
   if (fs.existsSync(dest)) {
     if (treesByteIdentical(src, dest)) {

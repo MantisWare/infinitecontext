@@ -16,6 +16,9 @@ import {
   physicalKeyDirsForCanonicalKey,
   scanCanonicalKeysFromObjectsTree,
 } from "./folder-on-disk-scan.mjs";
+import { assertAllConflictAwareGenerationCopiesConsistent } from "./folder-conflict-files.mjs";
+import { conflictResolutionHintForStorageKey } from "./folder-copy-resolution-hint.mjs";
+import { FS_GEN_SUFFIX } from "./filesystem-object-file.mjs";
 import { STORAGE_CAPABILITIES, storageCapabilitySet } from "./types.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -36,6 +39,26 @@ export const FOLDER_HONEST_CAPABILITIES = storageCapabilitySet([
 /**
  * @param {import("./types.mjs").StorageGetResult[]} rows
  */
+/**
+ * @param {string} message
+ * @param {string} canonicalKey
+ */
+function storageForkError(message, canonicalKey) {
+  return new StorageError(
+    `${message} ${conflictResolutionHintForStorageKey(canonicalKey)}`,
+    "storage_fork",
+  );
+}
+
+/** @param {string} keyDir */
+function keyDirHasGenerationFiles(keyDir) {
+  try {
+    return fs.readdirSync(keyDir).some((name) => name.endsWith(FS_GEN_SUFFIX));
+  } catch {
+    return false;
+  }
+}
+
 function pickConsistentGetRow(rows) {
   if (!rows.length) return null;
   const first = rows[0];
@@ -139,6 +162,7 @@ export function createFolderStorageAdapter(options) {
         );
       }
       await materializePhysicalKeyDir(rootDir, row, placeholderTimeoutMs);
+      assertAllConflictAwareGenerationCopiesConsistent(row.keyDir, row.canonicalKey, rootDir);
       let latest;
       try {
         latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
@@ -164,7 +188,35 @@ export function createFolderStorageAdapter(options) {
       const tag = row.etag ?? "";
       if (!unique.has(tag)) unique.set(tag, row);
       else if (unique.get(tag)?.etag !== row.etag) {
-        throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
+        throw storageForkError("Conflicting sync copies for storage object.", canonical);
+      }
+    }
+    if (found.length === 0 && dirs.some((row) => keyDirHasGenerationFiles(row.keyDir))) {
+      for (const row of dirs) {
+        if (!keyDirHasGenerationFiles(row.keyDir)) continue;
+        let latest;
+        try {
+          latest = loadLatestObjectGenerationAtDir(rootDir, row.keyDir, row.canonicalKey);
+        } catch (error) {
+          if (error instanceof StorageError && error.code === "corrupt_storage") {
+            throw new StorageError(
+              `Undecryptable or foreign-key conflict copy for ${canonical}`,
+              "corrupt_storage",
+            );
+          }
+          throw error;
+        }
+        if (latest?.header.tombstone) continue;
+        if (latest && !latest.header.tombstone) {
+          throw new StorageError(
+            `Undecryptable or foreign-key conflict copy for ${canonical}`,
+            "corrupt_storage",
+          );
+        }
+        throw new StorageError(
+          `Undecryptable or foreign-key conflict copy for ${canonical}`,
+          "corrupt_storage",
+        );
       }
     }
     if (dirs.length > 1) {
@@ -188,7 +240,7 @@ export function createFolderStorageAdapter(options) {
         liveEtags.add(latest.header.etag ?? "");
       }
       if (liveEtags.size > 1) {
-        throw new StorageError("Conflicting sync copies for storage object", "storage_fork");
+        throw storageForkError("Conflicting sync copies for storage object.", canonical);
       }
       if (liveDirs > 0 && corruptDirs > 0) {
         throw new StorageError(
@@ -217,8 +269,8 @@ export function createFolderStorageAdapter(options) {
 
     async init() {
       await inner.init();
-      const { assertFolderLogSegmentFileCopiesClean } = await import("./folder-log-conflict-preflight.mjs");
-      await assertFolderLogSegmentFileCopiesClean(adapter);
+      const { assertFolderObjectFileCopiesClean } = await import("./folder-object-conflict-preflight.mjs");
+      await assertFolderObjectFileCopiesClean(adapter);
     },
 
     async close() {

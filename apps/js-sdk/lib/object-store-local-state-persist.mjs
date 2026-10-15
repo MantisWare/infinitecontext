@@ -89,6 +89,10 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
     appliedSnapshotEpoch: Number.isFinite(appliedSnapshotEpoch) ? appliedSnapshotEpoch : -1,
     bootstrapReplicaPendingAck: Boolean(record.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: Number(record.manifestGenerationHighWater ?? 0),
+    storageBindingKey:
+      typeof record.storageBindingKey === "string" && record.storageBindingKey
+        ? record.storageBindingKey
+        : undefined,
     verifiedManifestGeneration: Number.isFinite(Number(record.verifiedManifestGeneration))
       ? Number(record.verifiedManifestGeneration)
       : undefined,
@@ -135,6 +139,9 @@ export function serializeObjectStoreLocalSyncState(state) {
     bootstrapReplicaPendingAck: Boolean(state.bootstrapReplicaPendingAck),
     manifestGenerationHighWater: state.manifestGenerationHighWater ?? 0,
   };
+  if (state.storageBindingKey) {
+    out.storageBindingKey = state.storageBindingKey;
+  }
   if (state.verifiedManifestGeneration !== undefined && Number.isFinite(state.verifiedManifestGeneration)) {
     out.verifiedManifestGeneration = state.verifiedManifestGeneration;
   }

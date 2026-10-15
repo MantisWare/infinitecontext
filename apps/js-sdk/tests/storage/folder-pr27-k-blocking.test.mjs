@@ -89,7 +89,7 @@ describe("PR27 K-blocking regressions", () => {
     assert.ok(pull.changes.some((c) => c.payload?.metadata?.tag === "post-snap-fork"));
   });
 
-  it("K3: file-level .icgen.icloud placeholder throws evicted_placeholder on get", async () => {
+  it("K3: file-level .icgen.icloud placeholder throws evicted_placeholder on init preflight", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-k3-file-ph-"));
     const key = `${PREFIX}/ic-v1/log/${deriveDevH(DEK, DEVICE_A).toLowerCase()}/000000000001.enc`;
     const { keyDir } = objectKeyDirectory(root, key);
@@ -98,9 +98,8 @@ describe("PR27 K-blocking regressions", () => {
     fs.writeFileSync(genPath, sampleEncryptedObjectBytesForKey(key));
     fs.writeFileSync(icloudPlaceholderSiblingPath(genPath), Buffer.from("stub"));
     const adapter = createFolderStorageAdapter({ rootDir: root, placeholderTimeoutMs: 40 });
-    await adapter.init();
     await assert.rejects(
-      () => adapter.get(key),
+      () => adapter.init(),
       (err) => err instanceof StorageError && err.code === "evicted_placeholder",
     );
   });

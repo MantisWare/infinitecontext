@@ -705,10 +705,11 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   if (usesFolderMergedDeviceManifest(ctx.adapter)) {
-    const { assertFolderLogSegmentFileCopiesClean } = await import(
-      "./storage/folder-log-conflict-preflight.mjs"
+    const { assertFolderObjectFileCopiesClean, assertFolderCopyFolderDirsClean } = await import(
+      "./storage/folder-object-conflict-preflight.mjs"
     );
-    await assertFolderLogSegmentFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderObjectFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderCopyFolderDirsClean(ctx.adapter, ctx.layoutPrefix);
     await assertFolderManifestTrustedHeadsVerifiable(ctx, manifest);
   }
   assertDeviceNotRemoved(ctx, manifest);
@@ -869,10 +870,11 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
   let state = ctx.localState.load();
   const { usesFolderMergedDeviceManifest } = await import("./storage/storage-adapter-policy.mjs");
   if (usesFolderMergedDeviceManifest(ctx.adapter)) {
-    const { assertFolderLogSegmentFileCopiesClean } = await import(
-      "./storage/folder-log-conflict-preflight.mjs"
+    const { assertFolderObjectFileCopiesClean, assertFolderCopyFolderDirsClean } = await import(
+      "./storage/folder-object-conflict-preflight.mjs"
     );
-    await assertFolderLogSegmentFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderObjectFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+    await assertFolderCopyFolderDirsClean(ctx.adapter, ctx.layoutPrefix);
   }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   assertDeviceNotRemoved(ctx, manifest);
