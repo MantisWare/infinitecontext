@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { describe, it } from "node:test";
 
-import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { CreateBucketCommand, HeadBucketCommand, ListBucketsCommand, S3Client } from "@aws-sdk/client-s3";
 
 import { runStorageAdapterContractSuite, sampleEncryptedObjectBytesForKey } from "../../lib/storage/contract-suite.mjs";
 import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
@@ -26,23 +26,58 @@ export function resolveS3AdapterTestConfigFromEnv(env = process.env) {
 }
 
 const s3ConfigRaw = resolveS3AdapterTestConfigFromEnv();
-/** @type {{ bucket: string, prefix: string, region: string, endpoint?: string } | null} */
-let s3Config = null;
-if (s3ConfigRaw) {
+
+/**
+ * @param {{ bucket: string, prefix: string, region: string, endpoint?: string }} cfg
+ */
+async function ensureS3TestBackendReady(cfg) {
   const probeClient = new S3Client({
-    region: s3ConfigRaw.region,
-    endpoint: s3ConfigRaw.endpoint,
+    region: cfg.region,
+    endpoint: cfg.endpoint,
     forcePathStyle: true,
   });
   try {
-    await probeClient.send(new HeadBucketCommand({ Bucket: s3ConfigRaw.bucket }));
-    s3Config = s3ConfigRaw;
-  } catch {
-    if (process.env.IC_REQUIRE_MINIO === "1") {
-      throw new Error("IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await probeClient.send(new ListBucketsCommand({}));
+        break;
+      } catch (error) {
+        if (attempt === 19) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
     }
+    try {
+      await probeClient.send(new HeadBucketCommand({ Bucket: cfg.bucket }));
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "$metadata" in error
+          ? Number(/** @type {{ httpStatusCode?: number }} */ (error.$metadata).httpStatusCode)
+          : undefined;
+      const missing = status === 404 || (error && typeof error === "object" && error.name === "NotFound");
+      if (missing) {
+        await probeClient.send(new CreateBucketCommand({ Bucket: cfg.bucket }));
+      } else {
+        throw error;
+      }
+    }
+    return cfg;
   } finally {
     probeClient.destroy();
+  }
+}
+
+/** @type {{ bucket: string, prefix: string, region: string, endpoint?: string } | null} */
+let s3Config = null;
+if (s3ConfigRaw) {
+  try {
+    s3Config = await ensureS3TestBackendReady(s3ConfigRaw);
+  } catch (error) {
+    if (process.env.IC_REQUIRE_MINIO === "1") {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable (${detail})`);
+    }
   }
 }
 

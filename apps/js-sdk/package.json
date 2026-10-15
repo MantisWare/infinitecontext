@@ -103,7 +103,6 @@
         "@infinitecontext/core": "workspace:*",
         "@infinitecontext/parsers": "workspace:*",
         "@infinitecontext/sync": "workspace:*",
-        "s3rver": "^3.7.1",
         "tsdown": "^0.20.3",
         "tsx": "^4.20.5",
         "typescript": "^5.9.3"
