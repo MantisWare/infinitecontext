@@ -11,7 +11,10 @@ import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-ada
 import { createFolderStorageAdapter } from "../../lib/storage/folder-adapter.mjs";
 import { initFolderStorageRoot } from "../../lib/storage/storage-init.mjs";
 import {
+  cleanupMigrationTempCopyFiles,
   loadStorageMigrateState,
+  migrationCopyFileWithFsync,
+  MIGRATION_COPY_TMP_BASENAME_PREFIX,
   resetStorageMigrate,
   runStorageMigrateLocalToFolder,
   saveStorageMigrateState,
@@ -230,6 +233,47 @@ describe("Phase 4.5 storage CLI (#9)", () => {
           }),
         (err) => err instanceof StorageError && /identity changed/i.test(String(err.message)),
       );
+    });
+
+    it("N5: atomic copy leaves no migration temp files and resumes after stray temps", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-atomic-src-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-atomic-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedLocalVault(localRoot);
+      const srcFile = listObjectFiles(localRoot).find((p) => p.endsWith(".icgen"));
+      assert.ok(srcFile);
+      const sk = `${scopeKey}-atomic`;
+      await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+      });
+      const destRel = path.relative(localRoot, srcFile);
+      const destPath = path.join(folderRoot, destRel);
+      const strayTmp = path.join(
+        path.dirname(destPath),
+        `${MIGRATION_COPY_TMP_BASENAME_PREFIX}9999-deadbeef.tmp`,
+      );
+      fs.copyFileSync(srcFile, strayTmp);
+      await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+      });
+      assert.ok(fs.existsSync(destPath));
+      const tempsLeft = listObjectFiles(folderRoot).filter((p) =>
+        path.basename(p).startsWith(MIGRATION_COPY_TMP_BASENAME_PREFIX),
+      );
+      assert.deepEqual(tempsLeft, []);
+      assert.equal(cleanupMigrationTempCopyFiles(folderRoot), 0);
     });
 
     it("storage migrate --reset removes only files recorded in migration state", async () => {

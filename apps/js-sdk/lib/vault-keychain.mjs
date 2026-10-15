@@ -77,6 +77,11 @@ export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_T
       keytar.setPassword("infinitecontext-vault", accountKey, payload),
     );
     if (stored !== null) {
+      try {
+        await vaultAgentStore(accountKey, dekBytes, { ttlMs });
+      } catch {
+        /* keychain is primary; agent backup is best-effort */
+      }
       return;
     }
   }

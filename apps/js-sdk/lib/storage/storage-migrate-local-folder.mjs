@@ -19,6 +19,9 @@ import {
 
 const OBJECTS = "objects";
 
+/** Migration copy temp files: `<dir>/.ic-migrate-copy.<pid>-<hex>.tmp` */
+export const MIGRATION_COPY_TMP_BASENAME_PREFIX = ".ic-migrate-copy.";
+
 /**
  * @param {string} filePath
  */
@@ -31,11 +34,88 @@ function fileContentFingerprint(filePath) {
 }
 
 /**
+ * @param {string} dirPath
+ */
+function fsyncDirectory(dirPath) {
+  const fd = fs.openSync(dirPath, "r");
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * @param {string} destDir
+ */
+function migrationCopyTempPath(destDir) {
+  return path.join(
+    destDir,
+    `${MIGRATION_COPY_TMP_BASENAME_PREFIX}${process.pid}-${crypto.randomBytes(4).toString("hex")}.tmp`,
+  );
+}
+
+/**
+ * @param {string} src
+ * @param {string} dest
+ */
+function atomicCopySourceToDestinationPath(src, dest) {
+  const destDir = path.dirname(dest);
+  fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  const tmp = migrationCopyTempPath(destDir);
+  try {
+    fs.copyFileSync(src, tmp);
+    const fd = fs.openSync(tmp, "r");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fs.renameSync(tmp, dest);
+    fsyncDirectory(destDir);
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* temp removed by rename or never created */
+    }
+  }
+}
+
+/**
+ * @param {string} destRoot
+ */
+export function cleanupMigrationTempCopyFiles(destRoot) {
+  const objects = path.join(destRoot, OBJECTS);
+  if (!fs.existsSync(objects)) return 0;
+  let removed = 0;
+  const walk = (cursor) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(cursor, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      const full = path.join(cursor, ent.name);
+      if (ent.isDirectory()) {
+        walk(full);
+      } else if (ent.isFile()) {
+        const base = ent.name;
+        if (base.startsWith(MIGRATION_COPY_TMP_BASENAME_PREFIX) && base.endsWith(".tmp")) {
+          fs.unlinkSync(full);
+          removed += 1;
+        }
+      }
+    }
+  };
+  walk(objects);
+  return removed;
+}
+
+/**
  * @param {string} src
  * @param {string} dest
  * @param {{ recorded?: { size: number, hash: string } | null }} [options]
  */
-function migrationCopyFileWithFsync(src, dest, options = {}) {
+export function migrationCopyFileWithFsync(src, dest, options = {}) {
   fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
   const srcFp = fileContentFingerprint(src);
   if (fs.existsSync(dest)) {
@@ -45,10 +125,7 @@ function migrationCopyFileWithFsync(src, dest, options = {}) {
     }
     const recorded = options.recorded;
     if (recorded && destFp.hash === recorded.hash && destFp.size === recorded.size) {
-      fs.copyFileSync(src, dest);
-      const fd = fs.openSync(dest, "r");
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
+      atomicCopySourceToDestinationPath(src, dest);
       return srcFp;
     }
     throw new StorageError(
@@ -56,10 +133,7 @@ function migrationCopyFileWithFsync(src, dest, options = {}) {
       "invalid_argument",
     );
   }
-  fs.copyFileSync(src, dest);
-  const fd = fs.openSync(dest, "r");
-  fs.fsyncSync(fd);
-  fs.closeSync(fd);
+  atomicCopySourceToDestinationPath(src, dest);
   return srcFp;
 }
 
@@ -82,6 +156,10 @@ function listRegularFilesRecursive(dir) {
       if (ent.isDirectory()) {
         walk(full);
       } else if (ent.isFile()) {
+        const base = ent.name;
+        if (base.startsWith(MIGRATION_COPY_TMP_BASENAME_PREFIX) && base.endsWith(".tmp")) {
+          continue;
+        }
         out.push(full);
       }
     }
@@ -410,6 +488,8 @@ export async function runStorageMigrateLocalToFolder(options) {
   }
 
   let state = loadStorageMigrateState(scopeKey);
+  initFolderStorageRoot(destRoot);
+  cleanupMigrationTempCopyFiles(destRoot);
   await assertMigrationDestinationPrecheck({
     destRoot,
     vaultId,
@@ -417,8 +497,6 @@ export async function runStorageMigrateLocalToFolder(options) {
     layoutPrefix: options.layoutPrefix,
     resumeState: state,
   });
-
-  initFolderStorageRoot(destRoot);
 
   if (!state || state.sourceRoot !== sourceRoot || state.destRoot !== destRoot || state.vaultId !== vaultId) {
     state = {
