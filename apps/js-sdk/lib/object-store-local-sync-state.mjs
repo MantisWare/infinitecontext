@@ -21,6 +21,7 @@ import {
  * @property {boolean} [bootstrapReplicaPendingAck] bootstrap delivered to client but manifest ack deferred
  * @property {import('./sync-cursor.mjs').VectorSyncCursor} [snapshotCompactedThrough] floor covered by applied snapshot
  * @property {number} [manifestGenerationHighWater] last trusted manifest generation seen locally
+ * @property {object} [pendingPullDeliveryApply] deferred cursor/trust until confirmPullDelivery
  */
 
 /** @returns {ObjectStoreLocalSyncState} */
@@ -121,6 +122,14 @@ export class ObjectStoreLogForkError extends Error {
     super(message);
     this.name = "ObjectStoreLogForkError";
     this.code = "log_fork";
+  }
+}
+
+export class ObjectStoreLogMissingError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ObjectStoreLogMissingError";
+    this.code = "log_missing";
   }
 }
 

@@ -348,7 +348,9 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
     if (typeof syncTransport.confirmPullDelivery === "function") {
       await syncTransport.confirmPullDelivery();
     }
-    if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
+    if (vectorPull) {
+      since = readObjectStoreSyncVectorCursor();
+    } else if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
       since = lastPage.next_since;
     }
     await writeCursor(since);

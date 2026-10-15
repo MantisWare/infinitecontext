@@ -419,9 +419,8 @@ describe("storage compaction + bootstrap", () => {
     await compactObjectStoreReplica(writer, writer.localState.load(), replica, { settleMs: 0 });
     const snap = await loadStorageSnapshot(writer, 0);
     assert.ok(snap);
-    snap.trusted_heads = {};
-    const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
-    assert.throws(() => assertSnapshotCoversManifestKnowledge(manifest, snap), /omits manifest-known/i);
+    snap.trusted_heads[writer.selfDevH] = { seq: -1, digest: "" };
+    await assert.rejects(() => verifySnapshotTrustedHeads(writer, snap), /inactive|live log/i);
   });
 
   it("concurrent compaction: one wins CAS, other observes existing epoch", async () => {

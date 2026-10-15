@@ -103,6 +103,16 @@ export function hydrateObjectStoreLocalSyncState(raw, label = "object store sync
       hydrated.pendingBootstrapReplica = pending;
     }
   }
+  if (Object.prototype.hasOwnProperty.call(record, "pendingPullDeliveryApply")) {
+    const pendingApply = record.pendingPullDeliveryApply;
+    if (
+      pendingApply &&
+      typeof pendingApply === "object" &&
+      !Array.isArray(pendingApply)
+    ) {
+      hydrated.pendingPullDeliveryApply = pendingApply;
+    }
+  }
   return hydrated;
 }
 
@@ -127,6 +137,9 @@ export function serializeObjectStoreLocalSyncState(state) {
   }
   if (Object.prototype.hasOwnProperty.call(state, "pendingBootstrapReplica")) {
     out.pendingBootstrapReplica = state.pendingBootstrapReplica;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "pendingPullDeliveryApply")) {
+    out.pendingPullDeliveryApply = state.pendingPullDeliveryApply;
   }
   return out;
 }
@@ -214,6 +227,13 @@ export function mergeObjectStoreLocalSyncState(persisted, incoming) {
       persisted.manifestGenerationHighWater ?? 0,
       incoming.manifestGenerationHighWater,
     );
+  }
+  if (incoming.pendingPullDeliveryApply !== undefined) {
+    if (incoming.pendingPullDeliveryApply === null) {
+      delete persisted.pendingPullDeliveryApply;
+    } else {
+      persisted.pendingPullDeliveryApply = incoming.pendingPullDeliveryApply;
+    }
   }
 }
 

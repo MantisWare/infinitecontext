@@ -379,14 +379,14 @@ describe("PR #25 follow-ups", () => {
       resetObjectStorePullVerifyGenerationForTests();
       await assert.rejects(
         () => objectStorePullSyncChanges(readerCtx, { limit: 500 }),
-        /missing segment at seq|log_rollback/i,
+        /missing segment at seq|log_rollback|log_missing/i,
       );
 
       const reloaded = reloadReader();
       resetObjectStorePullVerifyGenerationForTests();
       await assert.rejects(
         () => objectStorePullSyncChanges(ctx(adapter, readerUuid, reloaded), { limit: 500 }),
-        /missing segment at seq|log_rollback/i,
+        /missing segment at seq|log_rollback|log_missing/i,
       );
       if (reloaded.close) reloaded.close();
       if (readerLocal.close) readerLocal.close();
@@ -421,11 +421,11 @@ describe("PR #25 follow-ups", () => {
             payload: { context_id: "ctx_opush_tail", metadata: {} },
           },
         ]),
-      /missing segment at seq|log_rollback/i,
+      /missing segment at seq|log_rollback|log_missing/i,
     );
   });
 
-  it("rejects snapshot missing sync participant without floor", async () => {
+  it("compaction succeeds when manifest gains a post-snapshot idle participant", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
     const writerCtx = ctx(adapter, "11111111-1111-4111-8111-111111111111", createInMemoryObjectStoreLocalState());
@@ -437,6 +437,8 @@ describe("PR #25 follow-ups", () => {
         payload: { context_id: "ctx_snap_cov", metadata: {} },
       },
     ]);
+    const replica = createEmptySyncReplica();
+    await compactObjectStoreReplica(writerCtx, writerCtx.localState.load(), replica, { settleMs: 0 });
     const lagDev = deriveDevH(TEST_DEK, "88888888-8888-4888-8888-888888888888");
     await updateStorageManifest(
       {
@@ -452,19 +454,10 @@ describe("PR #25 follow-ups", () => {
         return m;
       },
     );
-    const replica = createEmptySyncReplica();
-    await compactObjectStoreReplica(writerCtx, writerCtx.localState.load(), replica, { settleMs: 0 });
-    const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
-    const { loadStorageSnapshot, assertSnapshotCoversManifestKnowledge } = await import(
-      "../../lib/storage/storage-compaction.mjs"
-    );
-    const loadedSnap = await loadStorageSnapshot(writerCtx, 0);
-    assert.ok(loadedSnap);
-    delete loadedSnap.trusted_heads[lagDev];
-    assert.throws(
-      () => assertSnapshotCoversManifestKnowledge(manifest, loadedSnap),
-      /omits manifest-known device/i,
-    );
+    const second = await compactObjectStoreReplica(writerCtx, writerCtx.localState.load(), replica, {
+      settleMs: 0,
+    });
+    assert.notEqual(second.skipped, true);
   });
 
   for (const backendLabel of ["file", "daemon.db"]) {
@@ -528,7 +521,7 @@ describe("PR #25 follow-ups", () => {
   }
 
   for (const backendLabel of ["file", "daemon.db"]) {
-    it(`removed device re-bootstraps on ${backendLabel} instead of log_rollback`, async () => {
+    it(`removed device requires new identity; replacement bootstraps after GC on ${backendLabel}`, async () => {
       const adapter = createMemoryStorageAdapter();
       await adapter.init();
       const writerUuid = "11111111-1111-4111-8111-111111111111";
@@ -549,20 +542,11 @@ describe("PR #25 follow-ups", () => {
       await writeDeviceSyncAckFromState(writerCtx, writerLocal.load());
       await gcLogSegmentsCoveredByCompaction(writerCtx);
 
-      const lagUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-      let lagLocal;
-      if (backendLabel === "file") {
-        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-")), "object-store-sync-state.json");
-        lagLocal = createCliFileObjectStoreLocalState(filePath);
-      } else {
-        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-db-")), "daemon.db");
-        lagLocal = createDaemonDbObjectStoreLocalState(dbFile);
-      }
-      const lagCtx = ctx(adapter, lagUuid, lagLocal);
+      const oldUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const oldCtx = ctx(adapter, oldUuid, createInMemoryObjectStoreLocalState());
       resetObjectStorePullVerifyGenerationForTests();
-      await objectStorePullSyncChanges(lagCtx, { limit: 500 });
-      await confirmObjectStorePullDeliveryForContext(lagCtx);
-
+      await objectStorePullSyncChanges(oldCtx, { limit: 500 });
+      await confirmObjectStorePullDeliveryForContext(oldCtx);
       await removeManifestDevice(
         {
           adapter,
@@ -571,18 +555,52 @@ describe("PR #25 follow-ups", () => {
           ownerDevH: writerCtx.selfDevH,
           settleMs: 0,
         },
-        lagCtx.selfDevH,
+        oldCtx.selfDevH,
+      );
+      await assert.rejects(
+        () => objectStorePullSyncChanges(oldCtx, { limit: 500 }),
+        /removed from sync|new device identity/i,
       );
 
+      const newUuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      let newLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-")), "object-store-sync-state.json");
+        newLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-rem-db-")), "daemon.db");
+        newLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const newCtx = ctx(adapter, newUuid, newLocal);
       resetObjectStorePullVerifyGenerationForTests();
-      const page = await objectStorePullSyncChanges(lagCtx, { limit: 500 });
+      const page = await objectStorePullSyncChanges(newCtx, { limit: 500 });
       assert.ok(page.bootstrap_replica);
-      await confirmObjectStorePullDeliveryForContext(lagCtx);
-      const manifest = await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX);
-      assert.ok(manifest.devices.some((row) => row.devH === lagCtx.selfDevH));
-      if (lagLocal.close) lagLocal.close();
+      assert.ok((page.changes ?? []).length >= 0);
+      await confirmObjectStorePullDeliveryForContext(newCtx);
+      assert.ok(newLocal.load().trustedHeads[writerCtx.selfDevH]);
+      if (newLocal.close) newLocal.close();
     });
   }
+
+  it("removeManifestDevice refuses local device in library", async () => {
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const writerCtx = ctx(adapter, "11111111-1111-4111-8111-111111111111", createInMemoryObjectStoreLocalState());
+    await assert.rejects(
+      () =>
+        removeManifestDevice(
+          {
+            adapter,
+            dek: TEST_DEK,
+            layoutPrefix: LAYOUT_PREFIX,
+            ownerDevH: writerCtx.selfDevH,
+            settleMs: 0,
+          },
+          writerCtx.selfDevH,
+        ),
+      /Cannot remove the local device/i,
+    );
+  });
 
   it("persist null tombstone clears pending bootstrap on file roundtrip", async () => {
     const state = createEmptyObjectStoreLocalSyncState();

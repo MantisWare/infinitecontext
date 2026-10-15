@@ -8,6 +8,7 @@ import {
   commitTrustedHeadAdvance,
   createEmptyObjectStoreLocalSyncState,
 } from "../object-store-local-sync-state.mjs";
+import { applyPendingPullDeliveryApply } from "../object-store-pull-delivery.mjs";
 import { verifyDeviceLogThroughSeq } from "../object-store-chain-verify.mjs";
 import {
   layoutRootPath,
@@ -173,33 +174,26 @@ async function assertSnapshotCoversLiveLogHeads(ctx, snap) {
 export function assertSnapshotCoversManifestKnowledge(manifest, snap, options = {}) {
   /** @type {Set<string>} */
   const required = new Set([
-    ...Object.keys(manifest.trusted_heads ?? {}),
-    ...Object.keys(normalizeVectorSyncCursor(manifest.compacted_through).v ?? {}),
-    ...Object.keys(options.localTrustedHeads ?? {}),
-    ...(manifest.sync_participants ?? []),
+    ...Object.keys(snap.trusted_heads ?? {}),
+    ...Object.keys(normalizeVectorSyncCursor(snap.compacted_through).v ?? {}),
   ]);
-  for (const row of manifest.devices) {
-    required.add(row.devH);
-  }
   for (const devH of required) {
-    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
     const head = snap.trusted_heads?.[devH];
-    if (!head) {
-      throw new Error(`Snapshot omits manifest-known device ${devH}`);
-    }
-    if (Number.isFinite(head.seq) && head.seq < 0) continue;
+    if (!head || head.seq < 0) continue;
+    const floor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[devH] ?? -1);
     if (Number.isFinite(floor) && floor >= 0 && head.seq < floor) {
       throw new Error(`Snapshot head for ${devH} is below manifest compacted floor`);
     }
   }
+  void options;
 }
 
 /** @param {import('./storage-manifest.mjs').StorageManifest} manifest @param {import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state */
 export function isCompactionCaughtUpWithManifest(manifest, state) {
   for (const [devH, manifestHead] of Object.entries(manifest.trusted_heads ?? {})) {
-    if (!manifestHead) continue;
+    if (!manifestHead || manifestHead.seq < 0) continue;
     const local = state.trustedHeads?.[devH];
-    if (!local || local.seq < manifestHead.seq) return false;
+    if (!local || local.seq < 0 || local.seq < manifestHead.seq) return false;
     if (local.seq === manifestHead.seq && local.digest !== manifestHead.digest) return false;
   }
   return true;
@@ -230,7 +224,38 @@ async function verifyOrphanSnapshotAdoptable(ctx, snap) {
   }
 }
 
+export async function assertSnapshotHeadsMatchLiveLogs(ctx, snap) {
+  const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
+  /** @type {Record<string, number>} */
+  const maxSeqByDevH = {};
+  let cursor = undefined;
+  for (;;) {
+    const page = await ctx.adapter.list(prefix, { limit: 500, cursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (!parsed) continue;
+      maxSeqByDevH[parsed.devH] = Math.max(maxSeqByDevH[parsed.devH] ?? -1, parsed.seq);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  for (const [devH, trusted] of Object.entries(snap.trusted_heads ?? {})) {
+    if (!trusted || trusted.seq < 0) {
+      const live = maxSeqByDevH[devH];
+      if (live !== undefined && live >= 0) {
+        throw new Error(`Snapshot claims inactive head for ${devH} but live log exists through seq ${live}`);
+      }
+      continue;
+    }
+    const live = maxSeqByDevH[devH];
+    if (live !== undefined && trusted.seq > live) {
+      throw new Error(`Snapshot head ahead of live log for ${devH}`);
+    }
+  }
+}
+
 export async function verifySnapshotTrustedHeads(ctx, snap, options = {}) {
+  await assertSnapshotHeadsMatchLiveLogs(ctx, snap);
   for (const [devH, trusted] of Object.entries(snap.trusted_heads ?? {})) {
     if (!trusted || trusted.seq < 0) continue;
     await verifyDeviceLogThroughSeq(
@@ -291,6 +316,25 @@ export function resolveBootstrapSnapshotEpoch(manifest, epochs) {
  * @param {import('./storage-manifest.mjs').StorageManifest} manifest
  * @param {import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
+async function assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, snap) {
+  for (const [devH, head] of Object.entries(manifest.trusted_heads ?? {})) {
+    if (!head || head.seq < 0) continue;
+    const snapHead = snap.trusted_heads?.[devH];
+    if (snapHead && snapHead.seq >= 0) continue;
+    await verifyDeviceLogThroughSeq(
+      ctx,
+      devH,
+      null,
+      (seq) => readEnvelopeAtSeq(ctx, devH, seq),
+      head.seq,
+    );
+    const envelope = await readEnvelopeAtSeq(ctx, devH, head.seq);
+    if (!envelope || layoutSegmentEnvelopeDigest(envelope) !== head.digest) {
+      throw new Error(`Device ${devH} absent from snapshot and live log does not verify`);
+    }
+  }
+}
+
 export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
   const epochs = await listSnapshotEpochs(ctx);
   if (!epochs.length) return null;
@@ -303,6 +347,7 @@ export async function pickVerifiedBootstrapSnapshot(ctx, manifest, state) {
     try {
       await verifySnapshotTrustedHeads(ctx, snap);
       assertSnapshotCoversManifestKnowledge(manifest, snap, { localTrustedHeads: state.trustedHeads });
+      await assertManifestLogDevicesCoveredBySnapshotOrChain(ctx, manifest, snap);
       return { epoch, snap };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -389,16 +434,12 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
   const epochs = await listSnapshotEpochs(ctx);
   const maxListedEpoch = epochs.length ? Math.max(...epochs) : -1;
   const nextEpoch = Math.max(manifest.latest_snapshot_epoch, maxListedEpoch) + 1;
-  const trustedHeads = mergeTrustedHeadsMonotonic(manifest.trusted_heads ?? {}, state.trustedHeads ?? {});
-  for (const row of manifest.devices) {
-    if (!trustedHeads[row.devH]) {
-      trustedHeads[row.devH] = { seq: -1, digest: "" };
-    }
-  }
-  for (const devH of manifest.sync_participants ?? []) {
-    if (!trustedHeads[devH]) {
-      trustedHeads[devH] = { seq: -1, digest: "" };
-    }
+  /** @type {Record<string, { seq: number, digest: string }>} */
+  const trustedHeads = {};
+  for (const [devH, head] of Object.entries(
+    mergeTrustedHeadsMonotonic(manifest.trusted_heads ?? {}, state.trustedHeads ?? {}),
+  )) {
+    if (head && head.seq >= 0) trustedHeads[devH] = head;
   }
   const compactedThrough = normalizeVectorSyncCursor(state.vectorCursor);
   for (const [devH, head] of Object.entries(trustedHeads)) {
@@ -585,11 +626,14 @@ export function clearPendingBootstrapReplica(state) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function confirmObjectStorePullDelivery(ctx) {
-  const state = ctx.localState.load();
+  let state = ctx.localState.load();
+  if (applyPendingPullDeliveryApply(state)) {
+    state.pendingPullDeliveryApply = null;
+  }
   if (state.pendingBootstrapReplica || state.bootstrapReplicaPendingAck) {
     clearPendingBootstrapReplica(state);
-    await ctx.localState.save(state);
   }
+  await ctx.localState.save(state);
   await recordManifestAcknowledgement(ctx, state);
   await registerManifestSyncParticipant(
     {

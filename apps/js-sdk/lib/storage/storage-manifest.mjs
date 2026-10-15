@@ -278,10 +278,14 @@ export function upsertManifestDeviceAck(manifest, devH, acknowledgedSeq, acknowl
 export async function registerManifestSyncParticipant(ctx, devH) {
   const canon = devH.toUpperCase();
   return updateStorageManifest(ctx, (manifest) => {
+    if ((manifest.removed_devices ?? []).includes(canon)) {
+      throw new Error(
+        `Device ${canon} was removed from sync; register a new device identity to continue`,
+      );
+    }
     const participants = new Set(manifest.sync_participants ?? []);
     participants.add(canon);
     manifest.sync_participants = [...participants];
-    manifest.removed_devices = (manifest.removed_devices ?? []).filter((id) => id !== canon);
     let row = manifest.devices.find((d) => d.devH === canon);
     if (!row) {
       row = { devH: canon, last_seq: 0, acknowledged_seq: 0 };
@@ -304,6 +308,10 @@ export function isManifestDeviceRecentlyActive(row, nowMs = Date.now()) {
 
 export async function removeManifestDevice(ctx, devH) {
   const canon = devH.toUpperCase();
+  const owner = String(ctx.ownerDevH ?? "").toUpperCase();
+  if (owner && canon === owner) {
+    throw new Error("Cannot remove the local device from manifest participation");
+  }
   return updateStorageManifest(ctx, (manifest) => {
     manifest.devices = manifest.devices.filter((row) => row.devH !== canon);
     manifest.sync_participants = (manifest.sync_participants ?? []).filter((id) => id !== canon);

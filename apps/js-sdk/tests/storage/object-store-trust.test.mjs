@@ -8,6 +8,7 @@ import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import {
   createInMemoryObjectStoreLocalState,
   ObjectStoreLogForkError,
+  ObjectStoreLogMissingError,
   ObjectStoreLogRollbackError,
 } from "../../lib/object-store-local-sync-state.mjs";
 import { createCliFileObjectStoreLocalState } from "../../lib/object-store-local-state-persist.mjs";
@@ -183,7 +184,10 @@ describe("object store trusted head PoC", () => {
 
     await assert.rejects(
       () => restarted.pullSyncChanges({ since: normalizeVectorSyncCursor(0), limit: 5 }),
-      (err) => err instanceof ObjectStoreLogRollbackError || err.name === "ObjectStoreLogRollbackError",
+      (err) =>
+        err instanceof ObjectStoreLogRollbackError ||
+        err instanceof ObjectStoreLogMissingError ||
+        err.name === "ObjectStoreLogRollbackError",
     );
   });
 });
