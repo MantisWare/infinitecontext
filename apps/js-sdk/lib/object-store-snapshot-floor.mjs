@@ -13,8 +13,12 @@ import {
 import { snapEncRelativePath } from "./storage/layout.mjs";
 import { layoutSegmentEnvelopeDigest } from "./storage/layout.mjs";
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
-import { sanitizeSyncReplicaForPersist } from "./sync-replica-state.mjs";
+import { hydrateSyncReplica, sanitizeSyncReplicaForPersist } from "./sync-replica-state.mjs";
 import { effectiveVectorCursorForPull } from "./object-store-pull-delivery.mjs";
+import { mergeableFromMutation } from "./object-store-merge.mjs";
+import { applySyncChangeToReplica } from "./sync-replica-apply.mjs";
+import { decryptLogSegment } from "./storage/layout.mjs";
+import { serializeMutationHlc } from "./object-store-hlc.mjs";
 
 /**
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
@@ -240,6 +244,50 @@ export function anchorTrustedHeadsFromCoveringSnapshot(state, snap, manifest) {
  * @returns {Promise<boolean>} true when state was updated
  */
 /**
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {unknown} bootstrapPlain
+ * @param {(devH: string, seq: number) => Promise<import('./ic-crypto.mjs').AeadEnvelope | null>} readEnvelopeAtSeq
+ */
+async function mergeSelfPushedLogIntoBootstrapReplica(ctx, state, bootstrapPlain, readEnvelopeAtSeq) {
+  const replica = hydrateSyncReplica(bootstrapPlain);
+  const selfHead = state.trustedHeads[ctx.selfDevH];
+  if (!selfHead || selfHead.seq < 0) return sanitizeSyncReplicaForPersist(replica);
+  for (let seq = 0; seq <= selfHead.seq; seq += 1) {
+    const envelope = await readEnvelopeAtSeq(ctx.selfDevH, seq);
+    if (!envelope) continue;
+    const record = decryptLogSegment(ctx.dek, ctx.selfDevH, seq, envelope);
+    record.mutations.forEach((mutation, index) => {
+      if (!mutation || typeof mutation !== "object") return;
+      const item = mergeableFromMutation(
+        mutation,
+        ctx.selfDevH,
+        seq,
+        index,
+        record.dev,
+        record.created_at,
+      );
+      const m = item.mutation;
+      applySyncChangeToReplica(
+        replica,
+        {
+          op: m.op,
+          context_id: m.context_id ?? null,
+          client_id: m.client_id,
+          payload: m.payload,
+          hlc: serializeMutationHlc(item.hlcTuple),
+          source_dev_h: item.devH,
+          source_seq: item.seq,
+          source_index: item.index,
+        },
+        () => {},
+      );
+    });
+  }
+  return sanitizeSyncReplicaForPersist(replica);
+}
+
+/**
  * Device pushed (or pulled partially) while vector cursor is below manifest compacted floor:
  * deliver snapshot bootstrap + defer cursor advance until confirm (invariant 1).
  *
@@ -267,8 +315,13 @@ export async function bootstrapVerifiedSnapshotFloorCatchUp(ctx, state, manifest
     normalizeVectorSyncCursor(state.snapshotCompactedThrough),
     normalizeVectorSyncCursor(manifest.compacted_through),
   );
-  state.vectorCursor = normalizeVectorSyncCursor(manifest.compacted_through);
-  state.pendingBootstrapReplica = sanitizeSyncReplicaForPersist(snap.replica);
+  state.vectorCursor = maxVectorSyncCursor(state.vectorCursor, manifest.compacted_through);
+  state.pendingBootstrapReplica = await mergeSelfPushedLogIntoBootstrapReplica(
+    ctx,
+    state,
+    sanitizeSyncReplicaForPersist(snap.replica),
+    readEnvelopeAtSeq,
+  );
   state.bootstrapReplicaPendingAck = true;
   return true;
 }

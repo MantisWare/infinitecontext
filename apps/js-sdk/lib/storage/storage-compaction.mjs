@@ -372,7 +372,7 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
   for (const [devH, head] of Object.entries(snap.trusted_heads ?? {})) {
     if (head && head.seq >= 0) advanceVectorCursorDevH(bootCursor, devH, head.seq);
   }
-  state.vectorCursor = bootCursor;
+  state.vectorCursor = maxVectorSyncCursor(state.vectorCursor, bootCursor);
   state.snapshotCompactedThrough = normalizeVectorSyncCursor(snap.compacted_through);
   state.appliedSnapshotEpoch = epoch;
   state.verifiedManifestGeneration = manifest.manifest_generation;

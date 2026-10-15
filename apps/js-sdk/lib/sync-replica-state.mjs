@@ -190,6 +190,50 @@ export function sanitizeSyncReplicaForPersist(replica) {
   return out;
 }
 
+/**
+ * Merge a verified snapshot bootstrap into existing local replica state without
+ * dropping rows that exist only on this device.
+ *
+ * @param {ReturnType<typeof createEmptySyncReplica> | null | undefined} local
+ * @param {unknown} bootstrapPlain
+ */
+export function mergeBootstrapReplicaIntoLocal(local, bootstrapPlain) {
+  const bootstrap = hydrateSyncReplica(bootstrapPlain);
+  if (!local) return bootstrap;
+  const hasLocal =
+    Object.keys(local.contexts ?? {}).length > 0 ||
+    Object.keys(local.messages ?? {}).length > 0 ||
+    (local.sync_conflicts ?? []).length > 0 ||
+    Object.keys(local._message_mutations ?? {}).length > 0;
+  if (!hasLocal) return bootstrap;
+  const merged = hydrateSyncReplica(bootstrapPlain);
+  for (const [id, row] of Object.entries(local.contexts ?? {})) {
+    if (merged.contexts[id] === undefined) {
+      merged.contexts[id] = structuredClone(row);
+    }
+  }
+  for (const [id, row] of Object.entries(local.messages ?? {})) {
+    if (merged.messages[id] === undefined) {
+      merged.messages[id] = structuredClone(row);
+    }
+  }
+  for (const row of local.sync_conflicts ?? []) {
+    const id = String(row?.id ?? "");
+    if (!id) continue;
+    if (!merged.sync_conflicts.some((existing) => String(existing?.id ?? "") === id)) {
+      merged.sync_conflicts.push(structuredClone(row));
+    }
+  }
+  for (const [messageId, entries] of Object.entries(local._message_mutations ?? {})) {
+    if (!merged._message_mutations[messageId]) {
+      merged._message_mutations[messageId] = structuredClone(entries);
+    }
+  }
+  rebuildMutationLogIndex(merged);
+  validateMessageMutationLog(merged);
+  return merged;
+}
+
 /** @param {unknown} err */
 export function wrapReplicaJsonParseError(err) {
   if (err instanceof ObjectStoreSyncStateError) throw err;

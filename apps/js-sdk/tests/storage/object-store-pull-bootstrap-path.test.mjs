@@ -22,7 +22,11 @@ import {
 } from "../../lib/object-store-sync.mjs";
 import { pullAndApplySync, createCliSyncStore } from "../../lib/sync-engine.mjs";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync-replica-apply.mjs";
-import { hydrateSyncReplica } from "../../lib/sync-replica-state.mjs";
+import {
+  hydrateSyncReplica,
+  mergeBootstrapReplicaIntoLocal,
+  sanitizeSyncReplicaForPersist,
+} from "../../lib/sync-replica-state.mjs";
 import { fullSnapshot, syncChangeFromMergeable } from "../helpers/object-store-replica-convergence.mjs";
 import { scenarioConcurrentUpdates, scenarioThreeUpdates } from "./object-store-replica-scenarios.mjs";
 import { sortMergeableMutations } from "../../lib/object-store-merge.mjs";
@@ -417,6 +421,66 @@ describe("object store pull bootstrap via pullAndApplySync", () => {
       store.clearReplicaCache();
       assert.equal(fullSnapshot(store.loadSyncReplica()), expected);
     }
+  });
+
+  it("pullAndApplySync merges bootstrap replica with pre-existing local replica rows", async () => {
+    const sorted = sortMergeableMutations(scenarioThreeUpdates());
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    const writerUuid = "11111111-1111-4111-8111-111111111111";
+    const writerLocal = createInMemoryObjectStoreLocalState();
+    await pushMergeablesInPlan(adapter, sorted);
+    await syncWriterLocalFromStore(adapter, writerUuid, writerLocal);
+    const compactorReplica = createEmptySyncReplica();
+    for (const item of sorted) {
+      applySyncChangeToReplica(compactorReplica, syncChangeFromMergeable(item), () => {});
+    }
+    await compactObjectStoreReplica(
+      {
+        adapter,
+        dek: TEST_DEK,
+        layoutPrefix: LAYOUT_PREFIX,
+        selfDevH: deriveDevH(TEST_DEK, writerUuid),
+        deviceUuid: writerUuid,
+        localState: writerLocal,
+      },
+      writerLocal.load(),
+      compactorReplica,
+      { settleMs: 0 },
+    );
+    const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-merge-boot-"));
+    process.env.HOME = cliDir;
+    fs.mkdirSync(path.join(cliDir, ".infinitecontext"), { recursive: true });
+    fs.writeFileSync(path.join(cliDir, ".infinitecontext", "sync-replica.json"), "{}\n");
+    const store = createCliSyncStore();
+    store.flushSyncReplica(
+      hydrateSyncReplica({
+        contexts: { ctx_local_only: { context_id: "ctx_local_only", metadata: { local: true } } },
+        messages: {},
+        sync_conflicts: [],
+      }),
+    );
+    const mergedUnit = mergeBootstrapReplicaIntoLocal(
+      store.loadSyncReplica(),
+      sanitizeSyncReplicaForPersist(compactorReplica),
+    );
+    assert.ok(mergedUnit.contexts?.ctx_local_only, "mergeBootstrapReplicaIntoLocal keeps local-only rows");
+    const joinUuid = crypto.randomUUID();
+    const newDeviceT = transport(adapter, joinUuid);
+    await newDeviceT.pushSyncMutations([
+      {
+        client_id: "merge_boot_push",
+        op: "context_create",
+        context_id: "ctx_merge_boot_push",
+        payload: { context_id: "ctx_merge_boot_push", metadata: {} },
+      },
+    ]);
+    resetObjectStorePullVerifyGenerationForTests();
+    await pullAndApplySync({ store, transport: newDeviceT });
+    const replica = store.loadSyncReplica();
+    assert.ok(replica.contexts?.ctx_local_only, "local-only context must survive bootstrap merge");
+    assert.ok(replica.contexts?.ctx_merge_boot_push, "pre-pull push must appear in replica");
+    assert.ok(Object.keys(replica.contexts ?? {}).length >= 2);
   });
 
   it("random new-device histories with push-before-first-pull converge (50 trials)", async () => {
