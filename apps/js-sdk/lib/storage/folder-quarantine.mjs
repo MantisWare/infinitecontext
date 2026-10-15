@@ -4,6 +4,27 @@ import path from "node:path";
 const OBJECTS = "objects";
 
 /**
+ * @param {string} a
+ * @param {string} b
+ */
+function treesByteIdentical(a, b) {
+  const stA = fs.lstatSync(a);
+  const stB = fs.lstatSync(b);
+  if (stA.isDirectory() !== stB.isDirectory()) return false;
+  if (stA.isFile()) {
+    return fs.readFileSync(a).equals(fs.readFileSync(b));
+  }
+  const namesA = fs.readdirSync(a).sort();
+  const namesB = fs.readdirSync(b).sort();
+  if (namesA.length !== namesB.length) return false;
+  for (let i = 0; i < namesA.length; i += 1) {
+    if (namesA[i] !== namesB[i]) return false;
+    if (!treesByteIdentical(path.join(a, namesA[i]), path.join(b, namesB[i]))) return false;
+  }
+  return true;
+}
+
+/**
  * Recursively copy `src` to `dest`, fsync files and directories on the way up.
  * @param {string} src
  * @param {string} dest
@@ -53,6 +74,15 @@ function removeTree(target) {
 }
 
 /**
+ * @param {string} dest
+ */
+function uniquifyQuarantineDest(dest) {
+  const stamp = `${Date.now()}-${process.pid}`;
+  const leaf = path.basename(dest);
+  return path.join(path.dirname(dest), `${leaf}.quarantine-${stamp}`);
+}
+
+/**
  * Copy a relative path under `objects/` into quarantine, fsync, then remove source.
  * Idempotent when source is already absent.
  *
@@ -66,9 +96,14 @@ export function quarantineObjectsRelativePath(rootDir, relPath, quarantineRoot) 
   if (!fs.existsSync(src)) {
     return false;
   }
-  const dest = path.join(quarantineRoot, relPath.split(path.sep).join("/"));
+  const normalizedRel = relPath.split(path.sep).join("/");
+  let dest = path.join(quarantineRoot, normalizedRel);
   if (fs.existsSync(dest)) {
-    return false;
+    if (treesByteIdentical(src, dest)) {
+      removeTree(src);
+      return true;
+    }
+    dest = uniquifyQuarantineDest(dest);
   }
   copyTreeWithFsync(src, dest);
   removeTree(src);

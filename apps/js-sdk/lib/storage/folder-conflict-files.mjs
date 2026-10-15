@@ -111,9 +111,25 @@ export function assertGenerationCopyPathsConsistent(paths, canonicalKeyForAad, r
   if (paths.length <= 1) return;
   /** @type {string | null} */
   let digest = null;
+  let readable = 0;
+  let unreadable = 0;
   for (const filePath of paths) {
-    const decoded = readObjectFileNoFollow(filePath, canonicalKeyForAad, rootDir);
-    if (!decoded) continue;
+    /** @type {{ header: import("./filesystem-object-file.mjs").StoredObjectHeader, body: Uint8Array } | null} */
+    let decoded = null;
+    try {
+      decoded = readObjectFileNoFollow(filePath, canonicalKeyForAad, rootDir);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "corrupt_storage") {
+        unreadable += 1;
+        continue;
+      }
+      throw error;
+    }
+    if (!decoded) {
+      unreadable += 1;
+      continue;
+    }
+    readable += 1;
     const tag = `${decoded.header.etag}:${decoded.header.size}`;
     if (digest === null) {
       digest = tag;
@@ -123,6 +139,18 @@ export function assertGenerationCopyPathsConsistent(paths, canonicalKeyForAad, r
         "storage_fork",
       );
     }
+  }
+  if (readable > 0 && unreadable > 0) {
+    throw new StorageError(
+      `Undecryptable or foreign-key conflict copy for ${canonicalKeyForAad}`,
+      "corrupt_storage",
+    );
+  }
+  if (readable === 0 && unreadable > 0) {
+    throw new StorageError(
+      `Undecryptable or foreign-key conflict copy for ${canonicalKeyForAad}`,
+      "corrupt_storage",
+    );
   }
 }
 

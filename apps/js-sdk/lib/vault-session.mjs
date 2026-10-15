@@ -24,7 +24,22 @@ import { fetchCryptoState, patchCryptoWraps, uploadCryptoInit } from "./vault-ap
 export const DATA_LOSS_WARNING =
   "If you lose BOTH your vault passphrase and your recovery key, your encrypted context data is permanently unrecoverable. InfiniteContext cannot reset or restore it.";
 
+/** @type {((opts: { baseUrl: string }) => Promise<{ me: { id: string, email?: string }, crypto: Record<string, unknown>, accountKey: string, baseUrl: string }>) | null} */
+let testVaultContextProvider = null;
+
+/** @param {typeof testVaultContextProvider} provider */
+export function setTestVaultContextProvider(provider) {
+  testVaultContextProvider = provider;
+}
+
+export function clearTestVaultContextProvider() {
+  testVaultContextProvider = null;
+}
+
 export async function getVaultContext({ baseUrl }) {
+  if (testVaultContextProvider) {
+    return testVaultContextProvider({ baseUrl });
+  }
   const me = await import("./vault-api.mjs").then((m) => m.fetchMe({ baseUrl }));
   const crypto = await fetchCryptoState({ baseUrl });
   const accountKey = vaultAccountKey({ userPublicId: me.id, email: me.email });

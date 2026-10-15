@@ -29,6 +29,11 @@ function baseUrlFromArgs(argv) {
 }
 
 async function promptHidden(question) {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "Vault passphrase required but stdin is not a TTY. Use --passphrase-stdin, --passphrase-file=PATH, or set INFINITECONTEXT_VAULT_PASSPHRASE for this session.",
+    );
+  }
   return new Promise((resolve, reject) => {
     process.stdout.write(question);
     process.stdin.setRawMode(true);

@@ -705,6 +705,10 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { assertFolderLogSegmentFileCopiesClean } = await import(
+      "./storage/folder-log-conflict-preflight.mjs"
+    );
+    await assertFolderLogSegmentFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
     await assertFolderManifestTrustedHeadsVerifiable(ctx, manifest);
   }
   assertDeviceNotRemoved(ctx, manifest);
@@ -863,6 +867,13 @@ function resolveSelfNextSeq(state, selfDevH) {
 export async function objectStorePushSyncMutations(ctx, mutations) {
   const batch = Array.isArray(mutations) ? mutations : [];
   let state = ctx.localState.load();
+  const { usesFolderMergedDeviceManifest } = await import("./storage/storage-adapter-policy.mjs");
+  if (usesFolderMergedDeviceManifest(ctx.adapter)) {
+    const { assertFolderLogSegmentFileCopiesClean } = await import(
+      "./storage/folder-log-conflict-preflight.mjs"
+    );
+    await assertFolderLogSegmentFileCopiesClean(ctx.adapter, ctx.layoutPrefix);
+  }
   const manifest = await loadStorageManifestForSync(ctx.adapter, ctx.dek, ctx.layoutPrefix, state);
   assertDeviceNotRemoved(ctx, manifest);
   await registerManifestSyncParticipant(

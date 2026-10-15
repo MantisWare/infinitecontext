@@ -43,7 +43,11 @@ export async function storeUnlockedDek(accountKey, dekBytes, { ttlMs = DEFAULT_T
       dekB64: Buffer.from(dekBytes).toString("base64"),
       expiresAt: new Date(memoryExpiresAt).toISOString(),
     });
-    await keytar.setPassword("infinitecontext-vault", accountKey, payload);
+    try {
+      await keytar.setPassword("infinitecontext-vault", accountKey, payload);
+    } catch {
+      // In-memory cache remains authoritative for this process.
+    }
     return;
   }
 

@@ -33,6 +33,10 @@ import { wrapDeviceSyncAckPlain } from "../../lib/storage/storage-device-sync-ac
 import { assertLocalObjectStoreRootNotSynced } from "../../lib/storage/sync-root-guard.mjs";
 import { normalizeVectorSyncCursor } from "../../lib/sync-cursor.mjs";
 import { resetObjectStoreBootstrapForTests } from "../../lib/sync-object-store-bootstrap.mjs";
+import {
+  clearStorageCliDepsForTests,
+  setStorageCliDepsForTests,
+} from "../../lib/storage-cli-deps.mjs";
 
 const DEK = new Uint8Array(32).fill(21);
 const DEVICE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -65,7 +69,7 @@ async function seedThreeSegmentLog(writer) {
 describe("PR27 R-blocking (7792d1b)", () => {
   afterEach(async () => {
     await resetObjectStoreBootstrapForTests();
-    delete process.env.INFINITECONTEXT_TEST_UNLOCKED_DEK_B64;
+    clearStorageCliDepsForTests();
   });
 
   it("R1: repair runs without scanCanonicalKeysFromObjectsTree ReferenceError", async () => {
@@ -113,7 +117,15 @@ describe("PR27 R-blocking (7792d1b)", () => {
     const conflictDir = path.join(path.dirname(keyDir), `${path.basename(keyDir)} 2`);
     fs.mkdirSync(conflictDir, { recursive: true, mode: 0o700 });
     fs.cpSync(keyDir, conflictDir, { recursive: true });
-    process.env.INFINITECONTEXT_TEST_UNLOCKED_DEK_B64 = Buffer.from(DEK).toString("base64");
+    setStorageCliDepsForTests({
+      resolveUnlockedDek: async () => ({
+        dek: DEK,
+        accountKey: "test-acct",
+        crypto: { initialized: true, dek_version: 1 },
+        dekVersion: 1,
+        userPublicId: "test",
+      }),
+    });
     const { runStorageCli } = await import("../../src/cli/storage-cli.mjs");
     await runStorageCli("doctor", ["--repair"]);
     assert.equal(fs.existsSync(conflictDir), false);

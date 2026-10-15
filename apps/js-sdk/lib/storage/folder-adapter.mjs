@@ -217,6 +217,8 @@ export function createFolderStorageAdapter(options) {
 
     async init() {
       await inner.init();
+      const { assertFolderLogSegmentFileCopiesClean } = await import("./folder-log-conflict-preflight.mjs");
+      await assertFolderLogSegmentFileCopiesClean(adapter);
     },
 
     async close() {

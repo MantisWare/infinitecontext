@@ -33,20 +33,10 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
   if (isHostedStorageBackend(config)) return null;
 
   const baseUrl = options.baseUrl ?? resolveBaseUrl({ config, env: options.env });
-  const env = options.env ?? process.env;
-  const testDekB64 = String(env.INFINITECONTEXT_TEST_UNLOCKED_DEK_B64 ?? "").trim();
   const unlocked =
     typeof options.resolveUnlockedDek === "function"
       ? await options.resolveUnlockedDek({ baseUrl })
-      : testDekB64
-        ? {
-            dek: new Uint8Array(Buffer.from(testDekB64, "base64")),
-            accountKey: "test",
-            crypto: { initialized: true, dek_version: 1 },
-            dekVersion: 1,
-            userPublicId: "test",
-          }
-        : await getUnlockedDek({ baseUrl });
+      : await getUnlockedDek({ baseUrl });
   const dek = unlocked?.dek;
   if (!dek) {
     throw new Error("Vault unlock required for local object store sync");

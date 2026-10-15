@@ -12,8 +12,14 @@ import {
 } from "../../lib/storage/storage-manifest.mjs";
 import { canonicalDevH, deriveDevH } from "../../lib/storage/layout.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
+import { getStorageCliDepsForTests } from "../../lib/storage-cli-deps.mjs";
 
-export async function runStorageCli(subcommand, args) {
+/**
+ * @param {string | undefined} subcommand
+ * @param {string[]} args
+ * @param {import("../../lib/storage-cli-deps.mjs").StorageCliDeps} [deps]
+ */
+export async function runStorageCli(subcommand, args, deps = getStorageCliDepsForTests() ?? undefined) {
   const baseUrl = resolveBaseUrl();
   const cmd = String(subcommand ?? "help").toLowerCase();
 
@@ -53,17 +59,13 @@ Environment:
         if (isHostedStorageBackend(config)) {
           throw new Error("storage doctor --repair requires local object store sync");
         }
-        await configureObjectStoreSyncTransportIfNeeded({ mode: "cli", baseUrl });
-        const testDekB64 = String(process.env.INFINITECONTEXT_TEST_UNLOCKED_DEK_B64 ?? "").trim();
-        const unlocked = testDekB64
-          ? {
-              dek: new Uint8Array(Buffer.from(testDekB64, "base64")),
-              accountKey: "test",
-              crypto: { initialized: true, dek_version: 1 },
-              dekVersion: 1,
-              userPublicId: "test",
-            }
-          : await getUnlockedDek({ baseUrl });
+        const resolveUnlockedDek = deps?.resolveUnlockedDek ?? ((opts) => getUnlockedDek(opts));
+        await configureObjectStoreSyncTransportIfNeeded({
+          mode: "cli",
+          baseUrl,
+          resolveUnlockedDek,
+        });
+        const unlocked = await resolveUnlockedDek({ baseUrl });
         if (!unlocked?.dek) throw new Error("Vault unlock required");
         const storage = config.storage;
         const backend =
