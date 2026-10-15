@@ -156,6 +156,36 @@ function mirrorBackingForContractTests(adapter) {
     await adapter.close();
   });
 
+  it("createS3ObjectStore round-trips a sealed vault object", async () => {
+    const { createS3ObjectStore } = await import("../../lib/storage/s3-object-store.mjs");
+    const { encryptVaultPlaintextForStoragePut } = await import("../../lib/storage/encrypt-storage-object.mjs");
+    assert.ok(s3Config);
+    const dek = new Uint8Array(32).fill(41);
+    const deviceUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const prefix = `${s3Config.prefix}/e2e-${randomBytes(4).toString("hex")}`;
+    const store = await createS3ObjectStore({
+      config: {
+        storage: {
+          backend: "s3",
+          s3: { bucket: s3Config.bucket, prefix, region: s3Config.region, endpoint: s3Config.endpoint },
+        },
+      },
+      env: process.env,
+      dek,
+      deviceUuid,
+      layoutPrefix: "accounts/local",
+      sync: { persist: false },
+    });
+    assert.ok(store.bindingKey.includes("s3:"));
+    assert.equal(store.adapter.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
+    const objectKey = "accounts/local/ic-v1/e2e/ping.enc";
+    const sealed = encryptVaultPlaintextForStoragePut(dek, objectKey, { ping: "s3-e2e" });
+    await store.transport.putObject(objectKey, sealed);
+    const got = await store.adapter.get(objectKey);
+    assert.ok(got?.body?.length);
+    await store.close();
+  });
+
   it("maps failed If-Match to PreconditionFailedError", async () => {
     const { createS3StorageAdapter } = await import("../../lib/storage/s3-adapter.mjs");
     assert.ok(s3Config);

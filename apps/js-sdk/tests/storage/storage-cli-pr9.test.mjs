@@ -39,6 +39,8 @@ import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs
 import { deriveDevH, logSegmentRelativePath } from "../../lib/storage/layout.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
 import { StorageError } from "../../lib/storage/errors.mjs";
+import { loadFolderMergedManifest } from "../../lib/storage/storage-manifest-folder.mjs";
+import { computeFolderStoreIdentity } from "../../lib/storage/storage-vault-trust-audit.mjs";
 import { assertLocalObjectStoreRootNotSynced } from "../../lib/storage/sync-root-guard.mjs";
 const DEK = new Uint8Array(32).fill(61);
 const DEVICE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -258,6 +260,60 @@ describe("Phase 4.5 storage CLI (#9)", () => {
         cliStatePath: syncStatePath,
       });
       assert.equal(again.phase, "verified");
+    });
+
+    it("N4: aborts with 0 files written when destination is swapped mid-copy", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-src-"));
+      const localRootB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-srcb-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedLocalVault(localRoot);
+      await seedLocalVault(localRootB, DEK, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      const sk = `${scopeKey}-swap-mid`;
+      const first = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 1,
+      });
+      assert.equal(first.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state);
+      if (!state.destStoreIdentity) {
+        const auditAdapter = createFolderStorageAdapter({
+          rootDir: folderRoot,
+          placeholderTimeoutMs: 80,
+          auditReadOnly: true,
+        });
+        await auditAdapter.init();
+        const manifest = await loadFolderMergedManifest(auditAdapter, DEK, PREFIX);
+        state.destStoreIdentity = computeFolderStoreIdentity(manifest);
+        saveStorageMigrateState(sk, state);
+        await auditAdapter.close();
+      }
+
+      await assert.rejects(
+        () =>
+          runStorageMigrateLocalToFolder({
+            scopeKey: sk,
+            dek: DEK,
+            layoutPrefix: PREFIX,
+            sourceRoot: localRoot,
+            destRoot: folderRoot,
+            deviceUuid: DEVICE_A,
+            cliStatePath: syncStatePath,
+            testAfterDestIdentityCheck: () => {
+              copyObjectsTree(localRootB, folderRoot);
+            },
+          }),
+        (err) => err instanceof StorageError && /identity changed/i.test(String(err.message)),
+      );
+      const after = loadStorageMigrateState(sk);
+      assert.equal(after?.copiedRelativePaths?.length, state.copiedRelativePaths?.length);
     });
 
     it("refuses resume when destination vault identity changed", async () => {
@@ -892,7 +948,7 @@ async function inflateDaemonTrustAheadOfStore(daemonDbPath, storeRoot, backendId
   }
 }
 
-async function seedLocalVault(localRoot, dek = DEK) {
+async function seedLocalVault(localRoot, dek = DEK, deviceUuid = DEVICE_A) {
   const adapter = createFilesystemStorageAdapter({ rootDir: localRoot });
   await adapter.init();
   const localState = createCliFileObjectStoreLocalState(
@@ -903,8 +959,8 @@ async function seedLocalVault(localRoot, dek = DEK) {
       adapter,
       dek,
       layoutPrefix: PREFIX,
-      selfDevH: deriveDevH(dek, DEVICE_A),
-      deviceUuid: DEVICE_A,
+      selfDevH: deriveDevH(dek, deviceUuid),
+      deviceUuid,
       localState,
     },
     [
@@ -952,4 +1008,37 @@ function listObjectFiles(storeRoot) {
   };
   walk(objects);
   return out;
+}
+
+/** @param {string} storeRoot @param {string} layoutPrefix */
+/** @param {string} sourceRoot @param {string} destRoot */
+function copyObjectsTree(sourceRoot, destRoot) {
+  const src = path.join(sourceRoot, "objects");
+  const dst = path.join(destRoot, "objects");
+  const walk = (relDir) => {
+    const srcDir = path.join(src, relDir);
+    for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      const rel = path.join(relDir, ent.name);
+      const srcPath = path.join(src, rel);
+      const dstPath = path.join(dst, rel);
+      if (ent.isDirectory()) {
+        fs.mkdirSync(dstPath, { recursive: true, mode: 0o700 });
+        walk(rel);
+      } else if (ent.isFile()) {
+        fs.mkdirSync(path.dirname(dstPath), { recursive: true, mode: 0o700 });
+        fs.copyFileSync(srcPath, dstPath);
+      }
+    }
+  };
+  walk("");
+}
+
+function findManifestRelativePath(storeRoot, layoutPrefix) {
+  const suffix = `objects/${layoutPrefix}/ic-v1/manifest.json.enc`;
+  const direct = path.join(storeRoot, suffix);
+  if (fs.existsSync(direct)) {
+    return suffix;
+  }
+  const hit = listObjectFiles(storeRoot).find((p) => p.endsWith(`${path.sep}manifest.json.enc`));
+  return hit ? path.relative(storeRoot, hit) : null;
 }

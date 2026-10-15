@@ -21,7 +21,11 @@ import {
   RateLimitedError,
   StorageError,
 } from "./errors.mjs";
-import { probeS3CrossDeviceCas } from "./s3-cas-probe.mjs";
+import { probeCrossDeviceCas } from "./storage-cas-probe.mjs";
+import {
+  assertStorageDeletePreconditionsSupported,
+  assertStoragePutPreconditionsSupported,
+} from "./storage-put-preconditions.mjs";
 import { S3_OBJECT_STORE_BACKEND_ID } from "./s3-config.mjs";
 import { STORAGE_CAPABILITIES, assertNotAborted, storageCapabilitySet } from "./types.mjs";
 
@@ -76,6 +80,7 @@ function s3IfMatchValue(ifMatch) {
  *   id?: string,
  *   maxObjectBytes?: number,
  *   client?: import("@aws-sdk/client-s3").S3Client,
+ *   casProbe?: (adapter: import("./types.mjs").StorageAdapter) => Promise<boolean>,
  * }} options
  */
 export function createS3StorageAdapter(options) {
@@ -93,17 +98,17 @@ export function createS3StorageAdapter(options) {
       forcePathStyle: Boolean(options.endpoint),
     });
 
+  const runCasProbe = options.casProbe ?? probeCrossDeviceCas;
+
   /** @type {import("./types.mjs").StorageCapability[]} */
-  let capabilityList = [
+  const baseCapabilities = [
     STORAGE_CAPABILITIES.get,
     STORAGE_CAPABILITIES.head,
     STORAGE_CAPABILITIES.put,
     STORAGE_CAPABILITIES.list,
     STORAGE_CAPABILITIES.delete,
-    STORAGE_CAPABILITIES.conditionalCreate,
-    STORAGE_CAPABILITIES.conditionalReplace,
-    STORAGE_CAPABILITIES.strongListAfterWrite,
   ];
+  let capabilityList = [...baseCapabilities];
 
   /** @param {string} logicalKey */
   const toObjectKey = (logicalKey) => {
@@ -137,11 +142,17 @@ export function createS3StorageAdapter(options) {
           throw createMapped ?? new StorageError("S3 bucket unavailable", "invalid_argument");
         }
       }
-      const casOk = await probeS3CrossDeviceCas(adapter);
-      if (casOk) {
-        capabilityList = [...capabilityList, STORAGE_CAPABILITIES.crossDeviceCas];
-        adapter.capabilities = storageCapabilitySet(capabilityList);
-      }
+      const casOk = await runCasProbe(adapter);
+      capabilityList = casOk
+        ? [
+            ...baseCapabilities,
+            STORAGE_CAPABILITIES.conditionalCreate,
+            STORAGE_CAPABILITIES.conditionalReplace,
+            STORAGE_CAPABILITIES.strongListAfterWrite,
+            STORAGE_CAPABILITIES.crossDeviceCas,
+          ]
+        : [...baseCapabilities];
+      adapter.capabilities = storageCapabilitySet(capabilityList);
     },
 
     async close() {
@@ -184,6 +195,7 @@ export function createS3StorageAdapter(options) {
 
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
+      assertStoragePutPreconditionsSupported(adapter, putOptions);
       const canonical = assertCanonicalStorageObjectKey(key);
       assertStorageCiphertext(body, { objectKey: canonical });
       scanStorageObjectForLeaks(canonical, body);
@@ -276,6 +288,7 @@ export function createS3StorageAdapter(options) {
 
     async delete(key, deleteOptions = {}) {
       assertNotAborted(deleteOptions.signal);
+      assertStorageDeletePreconditionsSupported(adapter, deleteOptions);
       const objectKey = toObjectKey(key);
       if (deleteOptions.ifMatch !== undefined) {
         const current = await adapter.head(key, deleteOptions);

@@ -1,3 +1,4 @@
+import { resolveObjectStoreSyncBindingKey } from "../object-store-sync-binding.mjs";
 import { createProductionObjectStoreLocalState } from "../object-store-sync-runtime.mjs";
 import { ObjectStoreSyncTransport } from "./object-store-sync-transport.mjs";
 import { createS3StorageAdapter } from "./s3-adapter.mjs";
@@ -41,15 +42,16 @@ export async function createS3ObjectStore(options) {
 
   if (localState) {
     const { maybeRebindPersistedObjectStoreState } = await import("../object-store-sync-state-rebind.mjs");
-    const bindingKey = resolveObjectStoreSyncBindingKey(config, env, {
-      backendId: S3_OBJECT_STORE_BACKEND_ID,
-      rootDir: `${s3.bucket}/${s3.prefix}`,
-    });
     await maybeRebindPersistedObjectStoreState(localState, config, env, {
       rootDir: `/${s3.bucket}/${s3.prefix}`,
       backendId: S3_OBJECT_STORE_BACKEND_ID,
     });
   }
+
+  const bindingKey = resolveObjectStoreSyncBindingKey(config, env, {
+    backendId: S3_OBJECT_STORE_BACKEND_ID,
+    rootDir: `/${s3.bucket}/${s3.prefix}`,
+  });
 
   const transport = new ObjectStoreSyncTransport(
     adapter,
@@ -66,6 +68,7 @@ export async function createS3ObjectStore(options) {
   return {
     bucket: s3.bucket,
     prefix: s3.prefix,
+    bindingKey,
     adapter,
     transport,
     localState,

@@ -230,9 +230,6 @@ async function recordAndAssertMigrationDestinationIdentity(params) {
     return;
   }
   const recorded = params.state.destStoreIdentity ? String(params.state.destStoreIdentity) : null;
-  if (!recorded && !params.allowRecord) {
-    return;
-  }
   const adapter = createFolderStorageAdapter({
     rootDir: params.destRoot,
     placeholderTimeoutMs: 80,
@@ -604,6 +601,7 @@ export function resetStorageMigrate(scopeKey, options = {}) {
  *   maxCopyFiles?: number,
  *   applyConfig?: boolean,
  *   afterInitialSnapshot?: () => void,
+ *   testAfterDestIdentityCheck?: (ctx: { destRoot: string, state: Record<string, unknown> }) => void | Promise<void>,
  *   cliStatePath?: string,
  *   daemonDbPath?: string,
  * }} options
@@ -643,15 +641,18 @@ export async function runStorageMigrateLocalToFolder(options) {
     saveStorageMigrateState(scopeKey, state);
   }
 
-  if (state.destStoreIdentity) {
+  if (objectsTreeHasRegularFiles(destRoot)) {
     await recordAndAssertMigrationDestinationIdentity({
       scopeKey,
       state,
       destRoot,
       dek: options.dek,
       layoutPrefix: options.layoutPrefix,
-      allowRecord: false,
+      allowRecord: !state.destStoreIdentity,
     });
+  }
+  if (typeof options.testAfterDestIdentityCheck === "function") {
+    await options.testAfterDestIdentityCheck({ destRoot, state });
   }
 
   /** @type {Record<string, { size: number, hash: string }>} */
@@ -669,19 +670,15 @@ export async function runStorageMigrateLocalToFolder(options) {
   const assertDestinationStableBeforeDestWrite = async () => {
     const isFirstDestWriteThisRun = destWritesThisRun === 0;
     destWritesThisRun += 1;
-    if (isFirstDestWriteThisRun) {
-      if (!objectsTreeHasRegularFiles(destRoot)) {
-        /* empty destination — first copy needs no identity */
-      } else if (state.destStoreIdentity) {
-        await recordAndAssertMigrationDestinationIdentity({
-          scopeKey,
-          state,
-          destRoot,
-          dek: options.dek,
-          layoutPrefix: options.layoutPrefix,
-          allowRecord: false,
-        });
-      }
+    if (isFirstDestWriteThisRun && objectsTreeHasRegularFiles(destRoot)) {
+      await recordAndAssertMigrationDestinationIdentity({
+        scopeKey,
+        state,
+        destRoot,
+        dek: options.dek,
+        layoutPrefix: options.layoutPrefix,
+        allowRecord: !state.destStoreIdentity,
+      });
     }
     const checkIdentity =
       Boolean(state.destStoreIdentity) &&
@@ -740,6 +737,7 @@ export async function runStorageMigrateLocalToFolder(options) {
     return {
       phase: "copying",
       copiedCount: copiedSet.size,
+      writtenThisRun: copiedThisRun,
       pending: allSrcFiles.length - copiedSet.size,
     };
   }
@@ -778,6 +776,7 @@ export async function runStorageMigrateLocalToFolder(options) {
     return {
       phase: "config_applied",
       copiedCount: copiedSet.size,
+      writtenThisRun: copiedThisRun,
       verified: true,
       configApplied: true,
     };
@@ -793,6 +792,7 @@ export async function runStorageMigrateLocalToFolder(options) {
   return {
     phase: state.configApplied ? "config_applied" : "verified",
     copiedCount: copiedSet.size,
+    writtenThisRun: copiedThisRun,
     verified: true,
     configApplied: Boolean(state.configApplied),
   };

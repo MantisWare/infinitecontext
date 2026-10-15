@@ -78,11 +78,14 @@ jobs:
           node --check apps/js-sdk/lib/storage/index.mjs
           node --check apps/js-sdk/lib/storage/s3-config.mjs
           node --check apps/js-sdk/lib/storage/s3-cas-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-put-preconditions.mjs
           node --check apps/js-sdk/lib/storage/s3-adapter.mjs
           node --check apps/js-sdk/lib/storage/s3-object-store.mjs
 
       - name: Storage adapter contract tests
-        run: node --test --test-concurrency=1 apps/js-sdk/tests/storage/*.test.mjs
+        working-directory: apps/js-sdk
+        run: node --test --test-concurrency=1 tests/storage/*.test.mjs
 
       - name: Secret store keyring (Secret Service via dbus-run-session)
         run: |

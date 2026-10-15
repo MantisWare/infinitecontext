@@ -8,7 +8,7 @@ Remote ciphertext object storage using the **`StorageAdapter`** contract over **
 
 2. **Conditional writes are real.** `put` maps `ifNoneMatch: "*"` → S3 **If-None-Match: \*** (create-only). `ifMatch` → **If-Match** with the stored ETag. Failed preconditions surface as **`PreconditionFailedError`** (HTTP 412), never silent overwrite.
 
-3. **`crossDeviceCas` is probed, not assumed.** On `init()`, the adapter runs a private probe object (create-only, then matching `If-Match`, then wrong `If-Match` must 412). **`crossDeviceCas`** is advertised **only** when the probe succeeds. If the endpoint ignores preconditions, the adapter still supports get/put/list/delete but **must not** advertise **`crossDeviceCas`**.
+3. **`crossDeviceCas` is probed, not assumed.** On `init()`, the adapter runs a private probe object: create-only (`If-None-Match: *`), **duplicate create must 412**, matching `If-Match` replace, wrong `If-Match` must 412. Endpoints that honour **`If-Match`** but ignore **`If-None-Match`** on existing keys **fail** the probe. **`crossDeviceCas`**, **`conditionalCreate`**, **`conditionalReplace`**, and **`strongListAfterWrite`** are advertised **only** when the probe succeeds. If the probe fails, the adapter exposes only get/head/put/list/delete and **rejects** any put/delete with preconditions (**fail closed**, no silent overwrite via ignored headers).
 
 4. **GC / compaction follow capability policy.** When **`crossDeviceCas`** is absent, **`storage-adapter-policy`** disables log GC and shared-manifest compaction (same as **`folder`**). Clients replay logs from **seq 0**; manifest coordination uses per-device contributions only when the merged-manifest path is selected by adapter policy.
 
