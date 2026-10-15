@@ -106,6 +106,7 @@ async function writeStatusJson(cfg, stats, state, runtime) {
       captureAgents: cfg.captureAgents,
       projectPaths: cfg.projectPaths,
     },
+    sync: runtime.sync ?? { state: "ok" },
   };
   const tmp = STATUS_FILE + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2) + "\n", "utf8");
@@ -176,6 +177,51 @@ async function loadAccountSyncModules(log) {
   }
 }
 
+async function loadObjectStoreBootstrapModule() {
+  try {
+    return await import("infinitecontext/lib/sync-object-store-bootstrap.mjs");
+  } catch {
+    const sdkLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../js-sdk/lib");
+    return import(pathToFileURL(path.join(sdkLib, "sync-object-store-bootstrap.mjs")).href);
+  }
+}
+
+/**
+ * @param {object} params
+ * @param {boolean} params.accountSyncLoaded
+ * @param {Record<string, unknown>} params.runtimeConfig
+ * @param {(message: string, details?: unknown) => void} params.log
+ * @param {() => Promise<{ configureObjectStoreSyncTransportIfNeeded: Function }>} [params.loadBootstrapModule]
+ * @param {{ mode?: string, baseUrl?: string, dbPath?: string }} [params.bootstrapOptions]
+ */
+export async function configureDaemonObjectStoreSyncTransport({
+  accountSyncLoaded,
+  runtimeConfig,
+  log,
+  loadBootstrapModule = loadObjectStoreBootstrapModule,
+  bootstrapOptions = {},
+}) {
+  if (!accountSyncLoaded) return;
+  const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
+  const hostedBackend = !storageBackend || storageBackend === "hosted";
+  try {
+    const { configureObjectStoreSyncTransportIfNeeded } = await loadBootstrapModule();
+    await configureObjectStoreSyncTransportIfNeeded({
+      mode: "daemon",
+      ...bootstrapOptions,
+      config: runtimeConfig,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!hostedBackend) {
+      throw new Error(
+        `Local object store sync is required for storage.backend=${String(runtimeConfig?.storage?.backend ?? "local")} but bootstrap failed: ${detail}`,
+      );
+    }
+    log("warn", "Local object store sync transport not configured", { error: detail });
+  }
+}
+
 // ── exported boot function ──────────────────────────────────────
 
 export async function daemonBoot({
@@ -183,6 +229,7 @@ export async function daemonBoot({
   resolveDbPath,
   createInfiniteContextClient,
   assertSyncAuth,
+  loadObjectStoreBootstrapModule: loadBootstrapModule = loadObjectStoreBootstrapModule,
 }) {
   if (typeof createInfiniteContextClient !== "function" || typeof assertSyncAuth !== "function") {
     throw new Error(
@@ -242,6 +289,7 @@ export async function daemonBoot({
     daemonRunning: false,
     lockHandle: null,
     projectPathCache: new Map(),
+    sync: { state: "ok" },
   };
 
   // ── stdio guards ──
@@ -1191,6 +1239,18 @@ export async function daemonBoot({
     const accountSync = useAccountSync ? await loadAccountSyncModules(log) : null;
     const syncEngine = accountSync?.syncEngine ?? null;
 
+    if (accountSync) {
+      const runtimeConfig = await readConfigJson();
+      await configureDaemonObjectStoreSyncTransport({
+        accountSyncLoaded: true,
+        runtimeConfig,
+        log,
+        loadBootstrapModule: loadBootstrapModule,
+        bootstrapOptions: { baseUrl: cfg.baseUrl, dbPath: cfg.dbFile },
+      });
+      await store.initObjectStoreReplica();
+    }
+
     // connectivity check
     try {
       if (accountSync?.fetchSyncStatus) {
@@ -1268,8 +1328,17 @@ export async function daemonBoot({
             setCursor: (value) => store.setSyncPullCursor(value),
           });
           await syncEngine.flushSyncOutbox({ baseUrl: cfg.baseUrl, log });
+          runtime.sync = { state: "ok", updatedAt: new Date().toISOString() };
         } catch (error) {
           bumpStat("errors");
+          const code = /** @type {{ code?: string }} */ (error)?.code;
+          if (code === "corrupt_state") {
+            runtime.sync = {
+              state: "corrupt_state",
+              message: error instanceof Error ? error.message : String(error),
+              updatedAt: new Date().toISOString(),
+            };
+          }
           log("warn", "Sync pull/push cycle failed", errorDetails(error));
         }
       }

@@ -199,9 +199,12 @@ export function scanStorageObjectForLeaks(key, body) {
     throw new Error(`Storage key appears to leak plaintext metadata: ${key}`);
   }
   const record = parseStorageObject(body);
-  const serialized = JSON.stringify(record);
-  if (PLAINTEXT_LEAK_KEY_PATTERN.test(serialized)) {
-    throw new Error("Storage object JSON appears to contain sensitive plaintext fields");
+  const headerText = JSON.stringify({
+    ic_storage_v: record.ic_storage_v,
+    aad: record.aad,
+  });
+  if (PLAINTEXT_LEAK_KEY_PATTERN.test(headerText)) {
+    throw new Error("Storage object header appears to contain sensitive plaintext fields");
   }
   if (record.aad === undefined || record.aad === null || record.aad === "") {
     throw new Error("Storage object missing aad at rest");

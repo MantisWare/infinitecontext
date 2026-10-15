@@ -1,8 +1,25 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
 import { generateClientNodeId } from "./ic-crypto.mjs";
+import { snapshotVectorCursor } from "./object-store-delete-stale.mjs";
+import {
+  createCliFileObjectStoreLocalState,
+  defaultObjectStoreSyncStatePath,
+} from "./object-store-local-state-persist.mjs";
+import { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
+import { ObjectStoreSyncStateError } from "./object-store-state-errors.mjs";
+import { isObjectStoreSyncChange } from "./sync-replica-daemon-store.mjs";
+import {
+  hydrateSyncReplica,
+  sanitizeSyncReplicaForPersist,
+  wrapReplicaJsonParseError,
+} from "./sync-replica-state.mjs";
+import { normalizeVectorSyncCursor, vectorCursorHeadSum } from "./sync-cursor.mjs";
+
+export { applySyncChangeToReplica, createEmptySyncReplica } from "./sync-replica-apply.mjs";
 import { getDefaultSyncTransport } from "./sync-transport.mjs";
 import "./hosted-sync-transport.mjs";
 
@@ -19,9 +36,21 @@ function readJsonFile(filePath, fallback) {
   }
 }
 
+function readSyncReplicaFile() {
+  if (!fs.existsSync(SYNC_REPLICA_FILE)) {
+    return createEmptySyncReplica();
+  }
+  try {
+    const text = fs.readFileSync(SYNC_REPLICA_FILE, "utf8");
+    return hydrateSyncReplica(JSON.parse(text));
+  } catch (err) {
+    wrapReplicaJsonParseError(err);
+  }
+}
+
 function writeJsonFile(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmp, filePath);
 }
@@ -60,15 +89,28 @@ function writeSyncState(state) {
 
 function readCliSyncState() {
   const state = readJsonFile(SYNC_CLI_STATE_FILE, { cursor: 0 });
-  return { cursor: Number(state.cursor ?? 0) };
+  const raw = state.cursor;
+  if (raw && typeof raw === "object" && raw.kind === "vector") {
+    return { cursor: normalizeVectorSyncCursor(raw) };
+  }
+  return { cursor: Number(raw ?? 0) };
 }
 
 function writeCliSyncState(state) {
-  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(state.cursor ?? 0) });
+  const cursor = state.cursor;
+  if (cursor && typeof cursor === "object" && cursor.kind === "vector") {
+    writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: normalizeVectorSyncCursor(cursor) });
+    return;
+  }
+  writeJsonFile(SYNC_CLI_STATE_FILE, { cursor: Number(cursor ?? 0) });
 }
 
 export function getSyncCursor() {
-  return readCliSyncState().cursor;
+  const cursor = readCliSyncState().cursor;
+  if (cursor && typeof cursor === "object") {
+    return cursor;
+  }
+  return Number(cursor ?? 0);
 }
 
 export function readLocalSyncState() {
@@ -159,100 +201,42 @@ export async function flushSyncOutbox({ baseUrl, log, transport } = {}) {
 }
 
 function readReplica() {
-  return readJsonFile(SYNC_REPLICA_FILE, { contexts: {}, messages: {} });
+  return readSyncReplicaFile();
+}
+
+/** Vector cursor from dedicated object-store sync state (not sync-cli-state.json). */
+export function readObjectStoreSyncVectorCursor() {
+  const backend = createCliFileObjectStoreLocalState(defaultObjectStoreSyncStatePath());
+  return normalizeVectorSyncCursor(backend.load().vectorCursor);
+}
+
+/** Snapshot for message_delete planning (carried on outbox mutations). */
+export function snapshotObjectStoreBaseVector() {
+  return snapshotVectorCursor(readObjectStoreSyncVectorCursor());
 }
 
 function writeReplica(replica) {
-  writeJsonFile(SYNC_REPLICA_FILE, replica);
+  writeJsonFile(SYNC_REPLICA_FILE, sanitizeSyncReplicaForPersist(replica));
 }
 
 /** Lightweight on-disk replica for `infinitecontext sync pull` (no daemon.db). */
 export function createCliSyncStore() {
   return {
+    loadSyncReplica() {
+      return readReplica();
+    },
+    flushSyncReplica(replica) {
+      writeReplica(replica);
+    },
     applySyncChange(change) {
-      applySyncChangeToReplica(readReplica(), change, () => {});
+      const replica = readReplica();
+      applySyncChangeToReplica(replica, change, () => {});
+      writeReplica(replica);
     },
     flushReplica(replica) {
       writeReplica(replica);
     },
   };
-}
-
-export function applySyncChangeToReplica(replica, change, persist) {
-  if (!change || typeof change !== "object") return;
-  const op = String(change.op ?? "");
-  const contextId = change.context_id ? String(change.context_id) : "";
-  const payload = change.payload && typeof change.payload === "object" ? change.payload : {};
-  const sequence = Number(change.sequence ?? 0);
-
-  if (op === "context_create" || op === "context_fork" || op === "context_metadata") {
-    const meta = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : payload;
-    const id = String(payload.context_id ?? contextId ?? "");
-    if (id) {
-      replica.contexts[id] = { metadata: meta, sequence, deleted: false };
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "context_delete") {
-    const id = String(payload.context_id ?? contextId ?? "");
-    if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
-    persist(replica);
-    return;
-  }
-
-  if (op === "contexts_delete_many") {
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    for (const row of results) {
-      if (row?.deleted !== true) continue;
-      const id = String(row?.id ?? row?.context_id ?? "");
-      if (id) replica.contexts[id] = { ...(replica.contexts[id] ?? {}), deleted: true, sequence };
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "message_append") {
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-      if (!clientNodeId) continue;
-      replica.messages[String(clientNodeId)] = {
-        context_id: String(payload.context_id ?? contextId),
-        payload: row,
-        sequence,
-      };
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "message_delete") {
-    const deletedIds = Array.isArray(payload.deleted_client_ids) ? payload.deleted_client_ids : [];
-    for (const id of deletedIds) {
-      if (id) delete replica.messages[String(id)];
-    }
-    persist(replica);
-    return;
-  }
-
-  if (op === "message_update") {
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    for (const row of rows) {
-      if (!row || typeof row !== "object") continue;
-      const clientNodeId = row.metadata?.ic_client_node_id ?? row.id;
-      if (!clientNodeId) continue;
-      replica.messages[String(clientNodeId)] = {
-        context_id: String(payload.context_id ?? contextId),
-        payload: row,
-        sequence,
-        op,
-      };
-    }
-    persist(replica);
-  }
 }
 
 export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCursor, transport } = {}) {
@@ -264,30 +248,56 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
       writeCliSyncState({ cursor: value });
     });
 
-  let since = Number(readCursor() ?? 0);
+  let since = readCursor() ?? 0;
+  if (typeof since !== "object") {
+    since = Number(since ?? 0);
+  }
   let total = 0;
   let hasMore = true;
   let lastPage = null;
 
-  const replica = store?.flushReplica ? readReplica() : null;
+  /** @type {ReturnType<typeof createEmptySyncReplica> | null} */
+  let daemonReplica = null;
+  const objectStoreReplicaPull = Boolean(store?.objectStoreReplicaPullEnabled);
+  if (store?.loadSyncReplica && store?.flushSyncReplica) {
+    try {
+      daemonReplica = store.loadSyncReplica();
+    } catch (err) {
+      if (err instanceof ObjectStoreSyncStateError && err.code === "corrupt_state") {
+        throw err;
+      }
+      daemonReplica = null;
+    }
+  }
+  const daemonReplicaMode = daemonReplica !== null;
+  const legacyReplicaMode = !daemonReplicaMode && store?.flushReplica;
+  const cliReplica = legacyReplicaMode ? readReplica() : null;
   const persistReplica = () => {
-    if (replica && store?.flushReplica) store.flushReplica(replica);
+    if (daemonReplica && daemonReplicaMode) store.flushSyncReplica(daemonReplica);
+    else if (cliReplica && legacyReplicaMode) store.flushReplica(cliReplica);
   };
 
   while (hasMore) {
     lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
     for (const change of lastPage.changes ?? []) {
-      if (store?.applySyncChange) {
-        if (replica) {
-          applySyncChangeToReplica(replica, change, () => {});
-        } else {
+      if (store?.applySyncChange || daemonReplica || cliReplica) {
+        if (daemonReplica && objectStoreReplicaPull && isObjectStoreSyncChange(change)) {
+          applySyncChangeToReplica(daemonReplica, change, () => {});
+        } else if (cliReplica) {
+          applySyncChangeToReplica(cliReplica, change, () => {});
+        } else if (store?.applySyncChange) {
           store.applySyncChange(change);
         }
       }
-      since = change.sequence;
+      if (typeof since === "number") {
+        since = change.sequence;
+      }
       total += 1;
     }
-    if (replica) persistReplica();
+    if (daemonReplica || cliReplica) persistReplica();
+    if (lastPage?.next_since !== undefined && lastPage?.next_since !== null) {
+      since = lastPage.next_since;
+    }
     writeCursor(since);
     hasMore = Boolean(lastPage.has_more);
     if ((lastPage.changes ?? []).length === 0) break;
@@ -304,12 +314,15 @@ function pageConflicts(page) {
   return Array.isArray(page?.conflicts) ? page.conflicts.length : 0;
 }
 
-export function resolveDeleteBaseSequence({ explicitBaseSequence } = {}) {
+export function resolveDeleteBaseSequence({ explicitBaseSequence, localCursor } = {}) {
   if (typeof explicitBaseSequence === "number" && Number.isFinite(explicitBaseSequence)) {
     return explicitBaseSequence;
   }
-  const local = getSyncCursor();
-  if (local > 0) return local;
+  const local = localCursor ?? getSyncCursor();
+  if (typeof local === "number" && local > 0) return local;
+  if (local && typeof local === "object" && local.kind === "vector") {
+    return normalizeVectorSyncCursor(local);
+  }
   return null;
 }
 
@@ -330,9 +343,33 @@ export function mutationForMessageAppend(contextId, messages) {
   };
 }
 
-export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence } = {}) {
+export function mutationForMessageUpdate(contextId, messages, { base_vector: baseVector } = {}) {
+  const base_vector = baseVector
+    ? snapshotVectorCursor(normalizeVectorSyncCursor(baseVector))
+    : snapshotObjectStoreBaseVector();
+  return {
+    client_id: generateClientNodeId(),
+    op: "message_update",
+    context_id: contextId,
+    base_vector,
+    payload: { messages, base_vector },
+  };
+}
+
+export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSequence, base_vector: baseVector } = {}) {
   const idList = Array.isArray(ids) ? ids : [ids];
-  const base_sequence = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence });
+  const base_vector = baseVector
+    ? snapshotVectorCursor(normalizeVectorSyncCursor(baseVector))
+    : snapshotObjectStoreBaseVector();
+  const resolvedBase = resolveDeleteBaseSequence({ explicitBaseSequence: baseSequence, localCursor: base_vector });
+  let base_sequence;
+  if (typeof resolvedBase === "number" && Number.isFinite(resolvedBase)) {
+    base_sequence = resolvedBase;
+  } else if (resolvedBase && typeof resolvedBase === "object" && resolvedBase.kind === "vector") {
+    base_sequence = vectorCursorHeadSum(resolvedBase);
+  } else {
+    base_sequence = vectorCursorHeadSum(base_vector);
+  }
   if (base_sequence === null || !Number.isFinite(base_sequence)) {
     throw new Error(
       "base_sequence is required for message_delete — run sync pull or pass base_sequence from the last GET /contexts read",
@@ -343,7 +380,8 @@ export function mutationForMessageDelete(contextId, ids, { base_sequence: baseSe
     op: "message_delete",
     context_id: contextId,
     base_sequence,
-    payload: { ids: idList },
+    base_vector,
+    payload: { ids: idList, base_vector },
   };
 }
 

@@ -220,6 +220,7 @@ const UPDATE_PROMPT_OPTIONS = [
 
 const ui = {
   daemonOnline: false,
+  syncState: { state: "ok" },
   currentVersion: readTuiVersion(),
   updateAvailable: "",
   updatePrompt: {
@@ -372,6 +373,17 @@ function applyDaemonStatus(status) {
   if (status.config) {
     if (status.config.bootstrapMode) cfg.bootstrapMode = status.config.bootstrapMode;
     if (status.config.claudeIncludeSubagents !== undefined) cfg.claudeIncludeSubagents = Boolean(status.config.claudeIncludeSubagents);
+  }
+
+  if (status.sync && typeof status.sync === "object") {
+    const nextState = String(status.sync.state ?? "ok");
+    if (ui.syncState.state !== nextState || ui.syncState.message !== status.sync.message) {
+      ui.syncState = {
+        state: nextState,
+        message: status.sync.message ? String(status.sync.message) : "",
+      };
+      markDirty();
+    }
   }
 
   // update online clients count (just show 1 if daemon is running)
@@ -1657,6 +1669,7 @@ function buildUiSnapshot() {
       sourceNames: ui.bootstrap.sourceNames,
       note: ui.bootstrap.note,
     },
+    sync: ui.syncState,
   };
 
   runtime.lastSnapshot = snapshot;

@@ -4,7 +4,8 @@
   "type": "module",
   "imports": {
     "#parsers": "@infinitecontext/parsers",
-    "#parsers/utils": "@infinitecontext/parsers/utils"
+    "#parsers/utils": "@infinitecontext/parsers/utils",
+    "#sync-cursor": "./src/sync-cursor-shim.mjs"
   },
   "scripts": {
     "pack:standalone": "node scripts/pack-from-staging.mjs",
@@ -29,6 +30,7 @@
     "./Spinner": "./src/Spinner.mjs"
   },
   "dependencies": {
+    "@infinitecontext/sync-cursor": "workspace:*",
     "@infinitecontext/parsers": "workspace:*",
     "@mishieck/ink-titled-box": "^0.4.2",
     "dotenv": "^17.2.3",

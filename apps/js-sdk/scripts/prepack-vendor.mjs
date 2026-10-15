@@ -44,11 +44,21 @@ rimraf(vendorRoot);
 copyDir(path.join(repoRoot, "apps/sync/src"), path.join(vendorRoot, "sync"));
 copyDir(path.join(repoRoot, "packages/parsers/src"), path.join(vendorRoot, "parsers"));
 
+const syncCursorDest = path.join(vendorRoot, "sync", "sync-cursor-bundle");
+fs.rmSync(syncCursorDest, { recursive: true, force: true });
+copyDir(path.join(repoRoot, "packages/sync-cursor/src"), syncCursorDest);
+fs.writeFileSync(
+  path.join(vendorRoot, "sync", "sync-cursor-shim.mjs"),
+  'export * from "./sync-cursor-bundle/index.mjs";\n',
+);
+
 walkMjs(path.join(vendorRoot, "sync"), (file) => {
   patchFile(file, [
     ['from "#parsers/utils"', 'from "../parsers/utils.mjs"'],
     ['from "#parsers"', 'from "../parsers/index.mjs"'],
+    ['from "#sync-cursor"', 'from "./sync-cursor-shim.mjs"'],
     ["@infinitecontext/parsers", "../parsers/index.mjs"],
+    ["@infinitecontext/sync-cursor", "./sync-cursor-shim.mjs"],
   ]);
 });
 

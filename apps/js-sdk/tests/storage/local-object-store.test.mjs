@@ -35,6 +35,52 @@ describe("local object store (PR 5)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it("createLocalObjectStore wires persisted ObjectStoreSyncTransport for daemon mode", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-local-store-daemon-"));
+    const dbPath = path.join(rootDir, "daemon.db");
+    const dek = new Uint8Array(32).fill(7);
+    const deviceUuid = "44444444-4444-4444-8444-444444444444";
+    const store = await createLocalObjectStore({
+      rootDir,
+      dek,
+      deviceUuid,
+      sync: { mode: "daemon", dbPath, persist: true },
+    });
+    assert.equal(typeof store.transport.pushSyncMutations, "function");
+    await store.close();
+    assert.ok(fs.existsSync(dbPath));
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("honors config.storage.rootDir outside HOME for shared store", async () => {
+    const sharedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-shared-store-outside-home-"));
+    const homeA = fs.mkdtempSync(path.join(os.tmpdir(), "ic-home-a-"));
+    const homeB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-home-b-"));
+    const dek = new Uint8Array(32).fill(5);
+    const config = { storage: { backend: "local-filesystem", rootDir: sharedRoot } };
+    const storeA = await createLocalObjectStore({
+      config,
+      env: { ...process.env, HOME: homeA },
+      dek,
+      deviceUuid: "66666666-6666-4666-8666-666666666666",
+      sync: { mode: "cli", persist: false },
+    });
+    const storeB = await createLocalObjectStore({
+      config,
+      env: { ...process.env, HOME: homeB },
+      dek,
+      deviceUuid: "77777777-7777-4777-8777-777777777777",
+      sync: { mode: "cli", persist: false },
+    });
+    assert.equal(path.resolve(storeA.rootDir), path.resolve(sharedRoot));
+    assert.equal(path.resolve(storeB.rootDir), path.resolve(sharedRoot));
+    await storeA.close();
+    await storeB.close();
+    fs.rmSync(sharedRoot, { recursive: true, force: true });
+    fs.rmSync(homeA, { recursive: true, force: true });
+    fs.rmSync(homeB, { recursive: true, force: true });
+  });
+
   it("createLocalObjectStore returns sealed transport over filesystem adapter", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-local-store-open-"));
     const dek = new Uint8Array(32).fill(9);

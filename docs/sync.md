@@ -87,7 +87,7 @@ Device list/revoke uses `/auth/devices` (revoking invalidates refresh tokens for
 
 ## Local replica
 
-The sync daemon pulls each cycle into `daemon.db` tables `sync_context_meta` and `sync_message_nodes`. `message_delete` change payloads carry `deleted_client_ids` only (not a full context snapshot). Conflict UI is Phase 5; conflicts are exposed in API/CLI JSON only.
+The sync daemon pulls each cycle into `daemon.db`. **Hosted** sync uses `sync_context_meta` and `sync_message_nodes` (hard deletes on `message_delete`). **Local object store** sync persists the pull replica in `sync_replica_state` (LWW/tombstones via `applySyncChangeToReplica`). `message_delete` change payloads carry `deleted_client_ids` only (not a full context snapshot). Conflict UI is Phase 5; conflicts are exposed in API/CLI JSON only.
 
 ## Migration
 

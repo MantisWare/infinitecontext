@@ -154,6 +154,9 @@ importers:
       '@infinitecontext/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
+      '@infinitecontext/sync-cursor':
+        specifier: workspace:*
+        version: link:../../packages/sync-cursor
       '@mishieck/ink-titled-box':
         specifier: ^0.4.2
         version: 0.4.2(ink@6.7.0(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
@@ -271,6 +274,8 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/sync-cursor: {}
 
 packages:
 

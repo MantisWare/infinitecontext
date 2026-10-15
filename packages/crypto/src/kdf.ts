@@ -20,17 +20,37 @@ export function serializeKdfParams(): VaultKdfParams {
     };
 }
 
-export async function deriveVaultKek(passphrase: string, salt: Uint8Array): Promise<Uint8Array> {
+/** Upper bound on memorySizeKiB × iterations (65536×3 profile = 196608). */
+/** 4× default profile cost (65536 KiB × 3 iterations). */
+export const VAULT_KDF_MAX_COST_PRODUCT = 786_432;
+
+export function assertVaultKdfCostWithinCap(params: VaultKdfParams): void {
+    const product = params.memorySizeKiB * params.iterations;
+    if (!Number.isSafeInteger(product) || product > VAULT_KDF_MAX_COST_PRODUCT) {
+        throw new Error('vault.json kdf memorySizeKiB × iterations exceeds allowed cost cap');
+    }
+}
+
+export async function deriveVaultKekWithParams(
+    passphrase: string,
+    salt: Uint8Array,
+    kdfParams: VaultKdfParams = VAULT_KDF_PARAMS,
+): Promise<Uint8Array> {
+    assertVaultKdfCostWithinCap(kdfParams);
     const hash = await argon2id({
         password: passphrase,
         salt,
-        parallelism: VAULT_KDF_PARAMS.parallelism,
-        iterations: VAULT_KDF_PARAMS.iterations,
-        memorySize: VAULT_KDF_PARAMS.memorySizeKiB,
-        hashLength: VAULT_KDF_PARAMS.hashLength,
+        parallelism: kdfParams.parallelism,
+        iterations: kdfParams.iterations,
+        memorySize: kdfParams.memorySizeKiB,
+        hashLength: kdfParams.hashLength,
         outputType: 'binary',
     });
     return hash instanceof Uint8Array ? hash : new Uint8Array(hash);
+}
+
+export async function deriveVaultKek(passphrase: string, salt: Uint8Array): Promise<Uint8Array> {
+    return deriveVaultKekWithParams(passphrase, salt, VAULT_KDF_PARAMS);
 }
 
 /** Recovery key material is used directly as a 256-bit KEK (high entropy). */

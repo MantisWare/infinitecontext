@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 import {
@@ -105,6 +106,52 @@ function cmdPath() {
   console.log(defaultConfigPath());
 }
 
+async function checkLocalSyncReplicaFiles() {
+  const home = infinitecontextHome();
+  const { hydrateSyncReplica, wrapReplicaJsonParseError } = await import("../../lib/sync-replica-state.mjs");
+  const { ObjectStoreSyncStateError } = await import("../../lib/object-store-state-errors.mjs");
+  const { DatabaseSync } = await import("node:sqlite");
+
+  /** @param {string} label @param {() => void} load */
+  function tryLoad(label, load) {
+    try {
+      load();
+      console.log(`✓ ${label}`);
+    } catch (error) {
+      const corrupt =
+        error instanceof ObjectStoreSyncStateError && error.code === "corrupt_state";
+      console.log(`✗ ${label}${corrupt ? " (corrupt_state)" : ""}: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+  }
+
+  const cliReplicaPath = path.join(home, "sync-replica.json");
+  if (fs.existsSync(cliReplicaPath)) {
+    tryLoad("CLI sync replica (~/.infinitecontext/sync-replica.json)", () => {
+      try {
+        hydrateSyncReplica(JSON.parse(fs.readFileSync(cliReplicaPath, "utf8")));
+      } catch (err) {
+        wrapReplicaJsonParseError(err);
+      }
+    });
+  }
+
+  const dbPath = path.join(home, "daemon.db");
+  if (fs.existsSync(dbPath)) {
+    tryLoad("daemon.db sync_replica_state", () => {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const row = db.prepare("SELECT replica_json FROM sync_replica_state WHERE id = 1").get();
+        if (row?.replica_json) {
+          hydrateSyncReplica(JSON.parse(String(row.replica_json)));
+        }
+      } finally {
+        db.close();
+      }
+    });
+  }
+}
+
 async function cmdDoctor() {
   let baseUrl;
   try {
@@ -144,26 +191,24 @@ async function cmdDoctor() {
     });
     console.log(res.ok ? "✓ API key auth (/contexts)" : `✗ API key auth (${res.status})`);
     if (!res.ok) process.exitCode = 1;
-    return;
-  }
-
-  if (hasSessionCredentials()) {
+  } else if (hasSessionCredentials()) {
     const session = await getValidAccessToken({ baseUrl });
     if (!session?.accessToken) {
       console.log("✗ Account session expired — run `infinitecontext login`");
       process.exitCode = 1;
-      return;
+    } else {
+      const res = await fetch(`${baseUrl}/contexts?limit=1`, {
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+      });
+      console.log(res.ok ? "✓ Account session auth (/contexts)" : `✗ Account session auth (${res.status})`);
+      if (!res.ok) process.exitCode = 1;
     }
-    const res = await fetch(`${baseUrl}/contexts?limit=1`, {
-      headers: { Authorization: `Bearer ${session.accessToken}` },
-    });
-    console.log(res.ok ? "✓ Account session auth (/contexts)" : `✗ Account session auth (${res.status})`);
-    if (!res.ok) process.exitCode = 1;
-    return;
+  } else {
+    console.log("○ No API key or account session configured — run `infinitecontext login` or set apiKey");
+    process.exitCode = 1;
   }
 
-  console.log("○ No API key or account session configured — run `infinitecontext login` or set apiKey");
-  process.exitCode = 1;
+  await checkLocalSyncReplicaFiles();
 }
 
 export async function runConfigCli(argv = process.argv.slice(3)) {
