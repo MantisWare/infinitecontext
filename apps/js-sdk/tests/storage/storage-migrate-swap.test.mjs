@@ -10,6 +10,7 @@ import { objectStorePushSyncMutations } from "../../lib/object-store-sync.mjs";
 import { StorageError } from "../../lib/storage/errors.mjs";
 import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-adapter.mjs";
 import { initFolderStorageRoot } from "../../lib/storage/storage-init.mjs";
+import { MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE } from "../../lib/storage/storage-migrate-dest-path-guard.mjs";
 import {
   loadStorageMigrateState,
   runStorageMigrateLocalToFolder,
@@ -71,6 +72,39 @@ function copyObjectsTree(sourceRoot, destRoot) {
   walk("");
 }
 
+function listSourceObjectRelPaths(sourceRoot) {
+  const srcObjects = path.join(sourceRoot, "objects");
+  /** @type {string[]} */
+  const out = [];
+  const walk = (cursor, rel) => {
+    for (const ent of fs.readdirSync(cursor, { withFileTypes: true })) {
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      const full = path.join(cursor, ent.name);
+      if (ent.isDirectory()) {
+        walk(full, childRel);
+      } else if (ent.isFile()) {
+        out.push(`objects/${childRel}`.replace(/\\/g, "/"));
+      }
+    }
+  };
+  walk(srcObjects, "");
+  return out.sort();
+}
+
+function countRegularFilesUnder(dir) {
+  if (!fs.existsSync(dir)) return 0;
+  let n = 0;
+  const walk = (cursor) => {
+    for (const ent of fs.readdirSync(cursor, { withFileTypes: true })) {
+      const full = path.join(cursor, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (ent.isFile()) n += 1;
+    }
+  };
+  walk(dir);
+  return n;
+}
+
 describe("storage migrate mid-run destination swap", () => {
   for (let n = 1; n <= 23; n += 1) {
     it(`fresh run: foreign swap before destination write ${n} performs 0 further writes`, async () => {
@@ -115,4 +149,243 @@ describe("storage migrate mid-run destination swap", () => {
       }
     });
   }
+
+  it("same-key swap: one foreign object at an existing relative path aborts before extra writes", async () => {
+    const scopeKey = "migrate-swap-same-key";
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-swap-sk-src-"));
+    const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-swap-sk-fr-"));
+    const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-swap-sk-d-"));
+    initFolderStorageRoot(folderRoot);
+    const { syncStatePath } = await seedLocalVault(localRoot, DEVICE_A);
+    await seedLocalVault(foreignRoot, DEVICE_B);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+
+    const partial = await runStorageMigrateLocalToFolder({
+      scopeKey,
+      dek: DEK,
+      layoutPrefix: PREFIX,
+      sourceRoot: localRoot,
+      destRoot: folderRoot,
+      deviceUuid: DEVICE_A,
+      cliStatePath: syncStatePath,
+      maxCopyFiles: 4,
+    });
+    assert.equal(partial.phase, "copying");
+    const state = loadStorageMigrateState(scopeKey);
+    const copied = state?.copiedRelativePaths ?? [];
+    assert.ok(copied.length >= 2);
+    const swapRel = copied[1];
+    const copiedBefore = copied.length;
+    const foreignPaths = listSourceObjectRelPaths(foreignRoot);
+    assert.ok(foreignPaths.length, "foreign vault should have objects");
+    const donorRel = foreignPaths[0];
+    const swapDestPath = path.join(folderRoot, swapRel);
+    fs.mkdirSync(path.dirname(swapDestPath), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(path.join(foreignRoot, donorRel), swapDestPath);
+
+    await assert.rejects(
+      () =>
+        runStorageMigrateLocalToFolder({
+          scopeKey,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          sourceRoot: localRoot,
+          destRoot: folderRoot,
+          deviceUuid: DEVICE_A,
+          cliStatePath: syncStatePath,
+        }),
+      (err) =>
+        err instanceof StorageError &&
+        (/identity changed|Destination vault identity|refuses to overwrite/i.test(String(err.message))),
+    );
+
+    const after = loadStorageMigrateState(scopeKey);
+    assert.equal(after?.copiedRelativePaths?.length ?? 0, copiedBefore);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+  });
+});
+
+describe("storage migrate destination symlink attacks", () => {
+  it("refuses a device directory replaced by a symlink to outside the destination", async () => {
+    const scopeKey = "migrate-symlink-dir";
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-dir-src-"));
+    const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-dir-d-"));
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-out-"));
+    initFolderStorageRoot(folderRoot);
+    const { syncStatePath } = await seedLocalVault(localRoot, DEVICE_A);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+
+    const outsideBefore = countRegularFilesUnder(outsideRoot);
+
+    const partial = await runStorageMigrateLocalToFolder({
+      scopeKey,
+      dek: DEK,
+      layoutPrefix: PREFIX,
+      sourceRoot: localRoot,
+      destRoot: folderRoot,
+      deviceUuid: DEVICE_A,
+      cliStatePath: syncStatePath,
+      maxCopyFiles: 4,
+    });
+    assert.equal(partial.phase, "copying");
+    const migrateState = loadStorageMigrateState(scopeKey);
+    const copiedSet = new Set(migrateState?.copiedRelativePaths ?? []);
+    const allRel = listSourceObjectRelPaths(localRoot);
+    const nextRel = allRel.find((rel) => !copiedSet.has(rel));
+    assert.ok(nextRel, "expected a pending source object for symlink dir attack");
+    const attackDir = path.join(folderRoot, path.dirname(nextRel));
+    fs.mkdirSync(path.dirname(attackDir), { recursive: true, mode: 0o700 });
+    if (fs.existsSync(attackDir)) {
+      fs.rmSync(attackDir, { recursive: true, force: true });
+    }
+    fs.symlinkSync(outsideRoot, attackDir, "dir");
+
+    await assert.rejects(
+      () =>
+        runStorageMigrateLocalToFolder({
+          scopeKey,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          sourceRoot: localRoot,
+          destRoot: folderRoot,
+          deviceUuid: DEVICE_A,
+          cliStatePath: syncStatePath,
+        }),
+      (err) =>
+        err instanceof StorageError &&
+        String(err.message).includes(MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE),
+    );
+
+    assert.equal(countRegularFilesUnder(outsideRoot), outsideBefore);
+    const after = loadStorageMigrateState(scopeKey);
+    assert.notEqual(after?.verified, true);
+    assert.notEqual(after?.phase, "verified");
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("refuses a copied destination file replaced by a symlink to the source (fingerprint bypass)", async () => {
+    const scopeKey = "migrate-symlink-file";
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-file-src-"));
+    const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-file-d-"));
+    initFolderStorageRoot(folderRoot);
+    const { syncStatePath } = await seedLocalVault(localRoot, DEVICE_A);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+
+    const partial = await runStorageMigrateLocalToFolder({
+      scopeKey,
+      dek: DEK,
+      layoutPrefix: PREFIX,
+      sourceRoot: localRoot,
+      destRoot: folderRoot,
+      deviceUuid: DEVICE_A,
+      cliStatePath: syncStatePath,
+      maxCopyFiles: 6,
+    });
+    assert.equal(partial.phase, "copying");
+    const state = loadStorageMigrateState(scopeKey);
+    const copied = state?.copiedRelativePaths ?? [];
+    assert.ok(copied.length >= 2);
+    const victimRel = copied[0];
+    const destFile = path.join(folderRoot, victimRel);
+    const srcFile = path.join(localRoot, victimRel);
+    fs.unlinkSync(destFile);
+    fs.symlinkSync(srcFile, destFile);
+
+    await assert.rejects(
+      () =>
+        runStorageMigrateLocalToFolder({
+          scopeKey,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          sourceRoot: localRoot,
+          destRoot: folderRoot,
+          deviceUuid: DEVICE_A,
+          cliStatePath: syncStatePath,
+        }),
+      (err) =>
+        err instanceof StorageError &&
+        String(err.message).includes(MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE),
+    );
+
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("refuses a symlinked file at an uncopied path before verify", async () => {
+    const scopeKey = "migrate-symlink-uncopied";
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-unc-src-"));
+    const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-unc-d-"));
+    initFolderStorageRoot(folderRoot);
+    const { syncStatePath } = await seedLocalVault(localRoot, DEVICE_A);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+
+    const allRel = listSourceObjectRelPaths(localRoot);
+    const partial = await runStorageMigrateLocalToFolder({
+      scopeKey,
+      dek: DEK,
+      layoutPrefix: PREFIX,
+      sourceRoot: localRoot,
+      destRoot: folderRoot,
+      deviceUuid: DEVICE_A,
+      cliStatePath: syncStatePath,
+      maxCopyFiles: 3,
+    });
+    assert.equal(partial.phase, "copying");
+    const state = loadStorageMigrateState(scopeKey);
+    const copied = new Set(state?.copiedRelativePaths ?? []);
+    const uncopiedRel = allRel.find((rel) => !copied.has(rel));
+    assert.ok(uncopiedRel, "expected an uncopied relative path");
+    const trapPath = path.join(folderRoot, uncopiedRel);
+    fs.mkdirSync(path.dirname(trapPath), { recursive: true, mode: 0o700 });
+    fs.symlinkSync(path.join(localRoot, uncopiedRel), trapPath);
+
+    await assert.rejects(
+      () =>
+        runStorageMigrateLocalToFolder({
+          scopeKey,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          sourceRoot: localRoot,
+          destRoot: folderRoot,
+          deviceUuid: DEVICE_A,
+          cliStatePath: syncStatePath,
+        }),
+      (err) =>
+        err instanceof StorageError &&
+        String(err.message).includes(MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE),
+    );
+
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+  });
 });

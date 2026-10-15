@@ -21,6 +21,7 @@ import {
   RateLimitedError,
   StorageError,
 } from "./errors.mjs";
+import { probeCrossDeviceCasConcurrency } from "./storage-cas-concurrency-probe.mjs";
 import { probeCrossDeviceCas } from "./storage-cas-probe.mjs";
 import {
   assertStorageDeletePreconditionsSupported,
@@ -81,6 +82,9 @@ function s3IfMatchValue(ifMatch) {
  *   maxObjectBytes?: number,
  *   client?: import("@aws-sdk/client-s3").S3Client,
  *   casProbe?: (adapter: import("./types.mjs").StorageAdapter) => Promise<boolean>,
+ *   casConcurrencyProbe?: (
+ *     adapter: import("./types.mjs").StorageAdapter,
+ *   ) => Promise<boolean>,
  * }} options
  */
 export function createS3StorageAdapter(options) {
@@ -99,6 +103,7 @@ export function createS3StorageAdapter(options) {
     });
 
   const runCasProbe = options.casProbe ?? probeCrossDeviceCas;
+  const runCasConcurrencyProbe = options.casConcurrencyProbe ?? probeCrossDeviceCasConcurrency;
 
   /** @type {import("./types.mjs").StorageCapability[]} */
   const baseCapabilities = [
@@ -146,7 +151,14 @@ export function createS3StorageAdapter(options) {
       casProbeActive = true;
       let casOk = false;
       try {
-        casOk = await runCasProbe(adapter);
+        const basicOk = await runCasProbe(adapter);
+        const raceRounds = Number(process.env.IC_S3_CAS_RACE_ROUNDS ?? "200");
+        const raceOk =
+          basicOk &&
+          (await runCasConcurrencyProbe(adapter, {
+            rounds: Number.isFinite(raceRounds) && raceRounds > 0 ? raceRounds : 200,
+          }));
+        casOk = basicOk && raceOk;
       } finally {
         casProbeActive = false;
       }

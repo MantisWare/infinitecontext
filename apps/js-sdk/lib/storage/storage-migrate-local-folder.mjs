@@ -26,6 +26,12 @@ import {
   auditVaultStoreTrust,
   computeFolderStoreIdentity,
 } from "./storage-vault-trust-audit.mjs";
+import {
+  assertMigrationDestWriteTargetSafe,
+  assertMigrationDestinationTreeSafe,
+  MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE,
+  migrationDestFileFingerprint,
+} from "./storage-migrate-dest-path-guard.mjs";
 
 const OBJECTS = "objects";
 
@@ -41,6 +47,14 @@ function fileContentFingerprint(filePath) {
     size: body.length,
     hash: crypto.createHash("sha256").update(body).digest("hex"),
   };
+}
+
+/**
+ * @param {string} destRoot
+ * @param {string} absPath
+ */
+function destFileContentFingerprint(destRoot, absPath) {
+  return migrationDestFileFingerprint(destRoot, absPath);
 }
 
 /**
@@ -69,9 +83,11 @@ function migrationCopyTempPath(destDir) {
  * @param {string} src
  * @param {string} dest
  */
-function atomicCopySourceToDestinationPath(src, dest) {
+function atomicCopySourceToDestinationPath(src, dest, destRoot) {
+  assertMigrationDestWriteTargetSafe(destRoot, dest);
   const destDir = path.dirname(dest);
   fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  assertMigrationDestWriteTargetSafe(destRoot, destDir);
   const tmp = migrationCopyTempPath(destDir);
   try {
     fs.copyFileSync(src, tmp);
@@ -126,16 +142,33 @@ export function cleanupMigrationTempCopyFiles(destRoot) {
  * @param {{ recorded?: { size: number, hash: string } | null }} [options]
  */
 export function migrationCopyFileWithFsync(src, dest, options = {}) {
-  fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+  const destRoot = options.destRoot ? path.resolve(String(options.destRoot)) : null;
+  if (!destRoot) {
+    throw new StorageError("Migration copy requires destRoot for destination path checks", "invalid_argument");
+  }
+  assertMigrationDestWriteTargetSafe(destRoot, dest);
+  const destDir = path.dirname(dest);
+  fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  assertMigrationDestWriteTargetSafe(destRoot, destDir);
+  assertMigrationDestWriteTargetSafe(destRoot, dest);
   const srcFp = fileContentFingerprint(src);
-  if (fs.existsSync(dest)) {
-    const destFp = fileContentFingerprint(dest);
+  let destExists = false;
+  try {
+    fs.lstatSync(dest);
+    destExists = true;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+  if (destExists) {
+    const destFp = destFileContentFingerprint(destRoot, dest);
     if (srcFp.hash === destFp.hash && srcFp.size === destFp.size) {
       return srcFp;
     }
     const recorded = options.recorded;
     if (recorded && destFp.hash === recorded.hash && destFp.size === recorded.size) {
-      atomicCopySourceToDestinationPath(src, dest);
+      atomicCopySourceToDestinationPath(src, dest, destRoot);
       return srcFp;
     }
     throw new StorageError(
@@ -143,7 +176,7 @@ export function migrationCopyFileWithFsync(src, dest, options = {}) {
       "invalid_argument",
     );
   }
-  atomicCopySourceToDestinationPath(src, dest);
+  atomicCopySourceToDestinationPath(src, dest, destRoot);
   return srcFp;
 }
 
@@ -217,6 +250,7 @@ function folderIdentityAllowsResumeRefresh(recorded, identity) {
  * @param {Record<string, unknown>} state
  */
 export function migrationDestinationMatchesRecordedFingerprints(destRoot, state) {
+  assertMigrationDestinationTreeSafe(destRoot);
   const fingerprints =
     state.fileFingerprints && typeof state.fileFingerprints === "object"
       ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
@@ -239,7 +273,7 @@ export function migrationDestinationMatchesRecordedFingerprints(destRoot, state)
     if (!copiedPaths.has(rel)) {
       return false;
     }
-    const fp = fileContentFingerprint(path.join(destRoot, rel));
+    const fp = destFileContentFingerprint(destRoot, path.join(destRoot, rel));
     const recorded = fingerprints[rel];
     if (!recorded || recorded.hash !== fp.hash || recorded.size !== fp.size) {
       return false;
@@ -255,6 +289,7 @@ export function migrationDestinationMatchesRecordedFingerprints(destRoot, state)
  * @returns {number} count of newly adopted paths
  */
 export function adoptSourceIdenticalMigrationDestinationFiles(sourceRoot, destRoot, state) {
+  assertMigrationDestinationTreeSafe(destRoot);
   const copiedPaths = new Set(
     Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
   );
@@ -278,7 +313,7 @@ export function adoptSourceIdenticalMigrationDestinationFiles(sourceRoot, destRo
       continue;
     }
     const srcFp = fileContentFingerprint(srcPath);
-    const destFp = fileContentFingerprint(abs);
+    const destFp = destFileContentFingerprint(destRoot, abs);
     if (srcFp.hash !== destFp.hash || srcFp.size !== destFp.size) {
       continue;
     }
@@ -304,6 +339,7 @@ const MIGRATION_DESTINATION_FOREIGN_MESSAGE =
  * @param {Record<string, unknown>} state
  */
 export function assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, state) {
+  assertMigrationDestinationTreeSafe(destRoot);
   const copiedPaths = new Set(
     Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
   );
@@ -327,7 +363,7 @@ export function assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, stat
       throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
     }
     const srcFp = fileContentFingerprint(srcPath);
-    const destFp = fileContentFingerprint(path.join(destRoot, rel));
+    const destFp = destFileContentFingerprint(destRoot, path.join(destRoot, rel));
     if (srcFp.hash !== destFp.hash || srcFp.size !== destFp.size) {
       throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
     }
@@ -341,7 +377,7 @@ export function assertMigrationDestinationOursOrThrow(sourceRoot, destRoot, stat
       ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
       : {};
   for (const rel of relFiles) {
-    const destFp = fileContentFingerprint(path.join(destRoot, rel));
+    const destFp = destFileContentFingerprint(destRoot, path.join(destRoot, rel));
     const recorded = fpsAfter[rel];
     if (!copiedAfterAdopt.has(rel) || !recorded) {
       throw new StorageError(MIGRATION_DESTINATION_FOREIGN_MESSAGE, "invalid_argument");
@@ -573,6 +609,9 @@ const MIGRATION_DEST_IDENTITY_CHECK_EVERY_N = 8;
 
 async function assertMigrationDestinationPrecheck(params) {
   cleanupMigrationTempCopyFiles(params.destRoot);
+  if (objectsTreeHasRegularFiles(params.destRoot)) {
+    assertMigrationDestinationTreeSafe(params.destRoot);
+  }
   if (!objectsTreeHasRegularFiles(params.destRoot)) {
     return;
   }
@@ -659,7 +698,10 @@ function mirrorSourceSnapshotToDestination(sourceRoot, destRoot, sourceSnapshot,
         "invalid_argument",
       );
     }
-    migrationCopyFileWithFsync(srcPath, destPath, { recorded: recordedByRel[relFromSrcRoot] ?? null });
+    migrationCopyFileWithFsync(srcPath, destPath, {
+      destRoot,
+      recorded: recordedByRel[relFromSrcRoot] ?? null,
+    });
   }
 }
 
@@ -765,6 +807,7 @@ export async function verifyDestinationFolderVaultLogs(options) {
  */
 export async function runMigrationFinalPass(options) {
   await assertSourceVaultTrustBeforeFinalize(options);
+  assertMigrationDestinationTreeSafe(options.destRoot);
   const snapshotStart = buildSourceObjectsSnapshot(options.sourceRoot);
   if (typeof options.afterInitialSnapshot === "function") {
     options.afterInitialSnapshot();
@@ -789,7 +832,7 @@ export async function runMigrationFinalPass(options) {
         "invalid_argument",
       );
     }
-    const destFp = fileContentFingerprint(destPath);
+    const destFp = destFileContentFingerprint(options.destRoot, destPath);
     if (destFp.hash !== fpEnd.hash || destFp.size !== fpEnd.size) {
       throw new StorageError(
         `Migration destination does not match source for ${rel} after final pass`,
@@ -1070,7 +1113,7 @@ export async function runStorageMigrateLocalToFolder(options) {
       if (recorded && (recorded.hash !== current.hash || recorded.size !== current.size)) {
         await assertDestinationStableBeforeDestWrite();
         const destPath = path.join(destRoot, relFromSrcRoot);
-        migrationCopyFileWithFsync(abs, destPath, { recorded });
+        migrationCopyFileWithFsync(abs, destPath, { destRoot, recorded });
         fileFingerprints[relFromSrcRoot] = current;
         state.fileFingerprints = fileFingerprints;
         state.verified = false;
@@ -1083,6 +1126,7 @@ export async function runStorageMigrateLocalToFolder(options) {
     await assertDestinationStableBeforeDestWrite();
     const destPath = path.join(destRoot, relFromSrcRoot);
     const fp = migrationCopyFileWithFsync(abs, destPath, {
+      destRoot,
       recorded: fileFingerprints[relFromSrcRoot] ?? null,
     });
     copiedThisRun += 1;

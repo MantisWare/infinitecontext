@@ -9,6 +9,19 @@ on:
 jobs:
   storage-tests:
     runs-on: ubuntu-latest
+    services:
+      minio:
+        image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
@@ -26,20 +39,16 @@ jobs:
         with:
           node-version: 22
 
-      - name: Start MinIO (S3-compatible)
+      - name: Wait for MinIO (service container)
         run: |
-          curl -fsSL "https://github.com/minio/minio/releases/download/RELEASE.2024-11-07T00-52-20Z/minio.linux-amd64.RELEASE.2024-11-07T00-52-20Z" -o /tmp/minio
-          chmod +x /tmp/minio
-          mkdir -p /tmp/minio-data
-          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 &
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:9000/minio/health/live; then
-              echo "MinIO ready"
+              echo "MinIO ready (minio/minio:RELEASE.2024-11-07T00-52-20Z)"
               exit 0
             fi
             sleep 1
           done
-          echo "MinIO failed to start"
+          echo "MinIO failed health check"
           exit 1
 
       - run: pnpm install --frozen-lockfile
@@ -79,13 +88,23 @@ jobs:
           node --check apps/js-sdk/lib/storage/s3-config.mjs
           node --check apps/js-sdk/lib/storage/s3-cas-probe.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-concurrency-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-migrate-dest-path-guard.mjs
           node --check apps/js-sdk/lib/storage/storage-put-preconditions.mjs
           node --check apps/js-sdk/lib/storage/s3-adapter.mjs
           node --check apps/js-sdk/lib/storage/s3-object-store.mjs
 
       - name: Storage adapter contract tests
         working-directory: apps/js-sdk
+        env:
+          IC_S3_CAS_RACE_ROUNDS: "200"
         run: node --test --test-concurrency=1 tests/storage/*.test.mjs
+
+      - name: S3 conditional-write race probe (200 rounds, MinIO)
+        working-directory: apps/js-sdk
+        env:
+          IC_S3_CAS_RACE_ROUNDS: "200"
+        run: node --test --test-concurrency=1 tests/storage/s3-cas-concurrency-ci.test.mjs 2>&1 | tee /tmp/ic-s3-cas-race.log && grep -q "IC_S3_CAS_RACE_CI:" /tmp/ic-s3-cas-race.log
 
       - name: Secret store keyring (Secret Service via dbus-run-session)
         run: |
