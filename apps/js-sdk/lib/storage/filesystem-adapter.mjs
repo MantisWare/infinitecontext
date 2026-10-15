@@ -76,11 +76,12 @@ function readLiveObject(rootDir, key) {
 /**
  * Local directory storage for ciphertext objects (dev, tests, synced-folder backends).
  *
- * @param {{ rootDir: string, id?: string, maxObjectBytes?: number, exposeInternalsForTests?: boolean }} options
+ * @param {{ rootDir: string, id?: string, maxObjectBytes?: number, exposeInternalsForTests?: boolean, auditReadOnly?: boolean }} options
  * @returns {StorageAdapter & { exposeInternalsForTests?: () => import("./contract-suite.mjs").StorageBackingSnapshot, removeCorruptGeneration?: (key: string, gen: number) => void }}
  */
 export function createFilesystemStorageAdapter(options) {
   const rootDir = path.resolve(options.rootDir);
+  const auditReadOnly = options.auditReadOnly === true;
   const maxObjectBytes = options.maxObjectBytes ?? 64 * 1024 * 1024;
 
   /** @type {StorageAdapter} */
@@ -102,6 +103,9 @@ export function createFilesystemStorageAdapter(options) {
 
     async init() {
       try {
+        if (auditReadOnly) {
+          return;
+        }
         ensurePrivateDir(rootDir);
         assertHardLinkCommitSupported(rootDir);
         rejectSymlinkInStoreRoot(rootDir);

@@ -127,15 +127,18 @@ async function materializePhysicalKeyDir(rootDir, row, placeholderTimeoutMs) {
  *   maxObjectBytes?: number,
  *   exposeInternalsForTests?: boolean,
  *   placeholderTimeoutMs?: number,
+ *   auditReadOnly?: boolean,
  * }} options
  */
 export function createFolderStorageAdapter(options) {
   const rootDir = path.resolve(options.rootDir);
+  const auditReadOnly = options.auditReadOnly === true;
   const inner = createFilesystemStorageAdapter({
     rootDir,
     id: `${options.id ?? FOLDER_STORAGE_ADAPTER_ID}-inner`,
     maxObjectBytes: options.maxObjectBytes,
     exposeInternalsForTests: options.exposeInternalsForTests,
+    auditReadOnly: options.auditReadOnly,
   });
   const placeholderTimeoutMs = options.placeholderTimeoutMs ?? 15_000;
   const objectsRoot = path.join(rootDir, "objects");
@@ -276,6 +279,9 @@ export function createFolderStorageAdapter(options) {
 
     async init() {
       await inner.init();
+      if (auditReadOnly) {
+        return;
+      }
       const { assertFolderObjectFileCopiesClean } = await import("./folder-object-conflict-preflight.mjs");
       await assertFolderObjectFileCopiesClean(adapter);
     },

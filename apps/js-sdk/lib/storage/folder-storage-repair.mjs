@@ -77,7 +77,37 @@ async function assertNoForkedStorageKeys(ctx) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {import('./storage-manifest.mjs').StorageManifest} manifest
  */
-async function assertRepairLogPreconditions(ctx, manifest) {
+/**
+ * Chain-only log verify (seq 0 → head) without owner-written trusted head hints.
+ *
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ */
+export async function verifyFolderDeviceLogsChainOnly(ctx, manifest) {
+  for (const row of manifest.devices) {
+    const headSeq = row.last_seq ?? -1;
+    if (headSeq < 0) continue;
+    const devH = row.devH;
+    const readEnvelopeAtSeq = async (seq) => {
+      const key = logSegmentRelativePath(ctx.layoutPrefix, devH, seq);
+      const row = await ctx.adapter.get(key);
+      if (!row?.body) return null;
+      const { decryptVaultStorageObjectPlaintext } = await import("./storage-object-move.mjs");
+      const plain = decryptVaultStorageObjectPlaintext(ctx.dek, key, row.body);
+      return plain?.ic_layout_segment_envelope_v1 ?? null;
+    };
+    try {
+      await verifyDeviceLogThroughSeq(ctx, devH, undefined, readEnvelopeAtSeq, headSeq);
+    } catch (error) {
+      if (error instanceof ObjectStoreLogMissingError) {
+        throw new StorageError(error.message, "storage_fork");
+      }
+      throw error;
+    }
+  }
+}
+
+export async function verifyFolderDeviceLogsForManifest(ctx, manifest) {
   for (const row of manifest.devices) {
     const head = manifest.trusted_heads?.[row.devH];
     const headSeq = head?.seq ?? row.last_seq ?? -1;
@@ -112,7 +142,7 @@ export async function repairFolderObjectStoreVault(ctx, options = {}) {
   const { loadFolderMergedManifest } = await import("./storage-manifest-folder.mjs");
   const manifest = await loadFolderMergedManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   await assertNoForkedStorageKeys(ctx);
-  await assertRepairLogPreconditions(ctx, manifest);
+  await verifyFolderDeviceLogsForManifest(ctx, manifest);
 
   const objectsRoot = path.join(rootDir, OBJECTS);
   const quarantineRoot = path.join(rootDir, QUARANTINE, "repair");

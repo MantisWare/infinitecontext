@@ -7,10 +7,16 @@ import {
  * @param {{ load: () => import("./object-store-local-sync-state.mjs").ObjectStoreLocalSyncState, save: (s: import("./object-store-local-sync-state.mjs").ObjectStoreLocalSyncState) => void | Promise<void> } | null | undefined} localState
  * @param {Record<string, unknown>} [config]
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ rootDir?: string, backendId?: string }} [options]
  */
-export async function maybeRebindPersistedObjectStoreState(localState, config = {}, env = process.env) {
+export async function maybeRebindPersistedObjectStoreState(
+  localState,
+  config = {},
+  env = process.env,
+  options = {},
+) {
   if (!localState) return;
-  const bindingKey = resolveObjectStoreSyncBindingKey(config, env);
+  const bindingKey = resolveObjectStoreSyncBindingKey(config, env, options);
   const loaded = localState.load();
   const rebound = rebindObjectStoreSyncStateForBackend(loaded, bindingKey);
   const mapChanged =

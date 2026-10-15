@@ -42,13 +42,23 @@ function assertObjectKeyFileCopiesClean(rootDir, key) {
  * @param {string} lowerKey
  * @param {string | null} layoutPrefix
  */
-function keyMatchesPreflightScope(lowerKey, layoutPrefix) {
+/**
+ * @param {string} lowerKey
+ * @param {string | null} layoutPrefix
+ * @param {{ includeManifest?: boolean }} [scopeOptions]
+ */
+function keyMatchesPreflightScope(lowerKey, layoutPrefix, scopeOptions = {}) {
   if (layoutPrefix) {
     const devicesPrefix = `${layoutRootPath(layoutPrefix)}/devices/`.toLowerCase();
     const logPrefix = `${layoutRootPath(layoutPrefix)}/log/`.toLowerCase();
-    return lowerKey.startsWith(devicesPrefix) || lowerKey.startsWith(logPrefix);
+    const manifestKey = `${layoutRootPath(layoutPrefix)}/manifest.json.enc`.toLowerCase();
+    if (lowerKey.startsWith(devicesPrefix) || lowerKey.startsWith(logPrefix)) return true;
+    if (scopeOptions.includeManifest && lowerKey === manifestKey) return true;
+    return false;
   }
-  return lowerKey.includes("/ic-v1/devices/") || lowerKey.includes("/ic-v1/log/");
+  if (lowerKey.includes("/ic-v1/devices/") || lowerKey.includes("/ic-v1/log/")) return true;
+  if (scopeOptions.includeManifest && lowerKey.endsWith("/ic-v1/manifest.json.enc")) return true;
+  return false;
 }
 
 /**
@@ -56,15 +66,16 @@ function keyMatchesPreflightScope(lowerKey, layoutPrefix) {
  *
  * @param {import("./types.mjs").StorageAdapter} adapter
  * @param {string} [layoutPrefix]
+ * @param {{ includeManifest?: boolean }} [options]
  */
-export async function assertFolderObjectFileCopiesClean(adapter, layoutPrefix = null) {
+export async function assertFolderObjectFileCopiesClean(adapter, layoutPrefix = null, options = {}) {
   const folder = /** @type {{ rootDir?: string }} */ (adapter);
   const rootDir = folder.rootDir;
   if (!rootDir) return;
   const objectsRoot = path.join(rootDir, "objects");
   for (const key of scanCanonicalKeysFromObjectsTree(objectsRoot)) {
     const lower = key.toLowerCase();
-    if (!keyMatchesPreflightScope(lower, layoutPrefix)) continue;
+    if (!keyMatchesPreflightScope(lower, layoutPrefix, options)) continue;
     assertObjectKeyFileCopiesClean(rootDir, key);
   }
 }

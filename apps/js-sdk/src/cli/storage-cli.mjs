@@ -16,6 +16,7 @@ import {
 import { canonicalDevH, deriveDevH } from "../../lib/storage/layout.mjs";
 import { formatSyncCliError } from "../../lib/sync-errors.mjs";
 import { getStorageCliDepsForTests } from "../../lib/storage-cli-deps.mjs";
+import { defaultObjectStoreSyncStatePath } from "../../lib/object-store-local-state-persist.mjs";
 
 /**
  * @param {string | undefined} subcommand
@@ -44,7 +45,9 @@ export async function runStorageCli(subcommand, args, deps = getStorageCliDepsFo
     console.log(`Usage: infinitecontext storage <command>
 
 Commands:
-  doctor --repair [--dry-run]         Quarantine forked snap/ + conflict copies after log verify
+  init <folderPath>                 Create folder store skeleton (objects/)
+  doctor [--repair] [--dry-run]     Audit folder vault; optional quarantine repair
+  migrate [--to <folder>] [--apply-config] [--reset]  Resumable local → folder copy + trust verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 
 Environment:
@@ -53,8 +56,71 @@ Environment:
     return;
   }
 
+  if (cmd === "init") {
+    const folderPath = args[0];
+    if (!folderPath) throw new Error("Usage: infinitecontext storage init <folderPath>");
+    return run(async () => {
+      const { initFolderStorageRoot } = await import("../../lib/storage/storage-init.mjs");
+      const result = initFolderStorageRoot(folderPath);
+      console.log(JSON.stringify(result, null, 2));
+    });
+  }
+
+  if (cmd === "migrate") {
+    const applyConfig = args.includes("--apply-config");
+    const reset = args.includes("--reset");
+    return run(async () => {
+      const config = readConfigFile();
+      if (isHostedStorageBackend(config)) {
+        throw new Error("storage migrate requires local object store sync");
+      }
+      const resolveUnlockedDek = deps?.resolveUnlockedDek ?? ((opts) => getUnlockedDek(opts));
+      const unlocked = await resolveUnlockedDek({ baseUrl });
+      if (!unlocked?.dek) throw new Error("Vault unlock required");
+      const storage = config.storage;
+      const deviceUuid =
+        storage && typeof storage === "object" && !Array.isArray(storage)
+          ? String(/** @type {Record<string, unknown>} */ (storage).deviceUuid ?? "")
+          : "";
+      const path = await import("node:path");
+      const { resolveLocalObjectStoreRootDir } = await import("../../lib/storage/local-object-store.mjs");
+      const { resolveFolderObjectStoreRootDir } = await import("../../lib/storage/folder-object-store.mjs");
+      const sourceRoot = resolveLocalObjectStoreRootDir({ config });
+      const toIdx = args.indexOf("--to");
+      const destRoot =
+        toIdx >= 0 && args[toIdx + 1]
+          ? path.resolve(String(args[toIdx + 1]))
+          : resolveFolderObjectStoreRootDir(config);
+      const { runStorageMigrateLocalToFolder, resetStorageMigrate } = await import(
+        "../../lib/storage/storage-migrate-local-folder.mjs"
+      );
+      const scopeKey = `cli:${sourceRoot}:${destRoot}`;
+      const cliStatePath = defaultObjectStoreSyncStatePath();
+      if (reset) {
+        const cleared = resetStorageMigrate(scopeKey, {
+          config,
+          layoutPrefix: "accounts/local",
+          env: process.env,
+        });
+        console.log(JSON.stringify({ reset: true, ...cleared }, null, 2));
+        return;
+      }
+      const result = await runStorageMigrateLocalToFolder({
+        scopeKey,
+        dek: unlocked.dek,
+        layoutPrefix: "accounts/local",
+        sourceRoot,
+        destRoot,
+        deviceUuid,
+        applyConfig,
+        cliStatePath,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    });
+  }
+
   if (cmd === "doctor") {
-    const action = String(args[0] ?? "help").toLowerCase();
+    const action = String(args[0] ?? "").toLowerCase();
     if (action === "--repair" || action === "repair") {
       const dryRun = args.includes("--dry-run");
       return run(async () => {
@@ -106,7 +172,43 @@ Environment:
         await resetObjectStoreBootstrapForTests();
       });
     }
-    throw new Error("Usage: infinitecontext storage doctor --repair [--dry-run]");
+    return run(async () => {
+      const config = readConfigFile();
+      if (isHostedStorageBackend(config)) {
+        throw new Error("storage doctor requires local object store sync");
+      }
+      const resolveUnlockedDek = deps?.resolveUnlockedDek ?? ((opts) => getUnlockedDek(opts));
+      const unlocked = await resolveUnlockedDek({ baseUrl });
+      if (!unlocked?.dek) throw new Error("Vault unlock required");
+      const storage = config.storage;
+      const backend =
+        storage && typeof storage === "object" && !Array.isArray(storage)
+          ? String(/** @type {Record<string, unknown>} */ (storage).backend ?? "")
+          : "";
+      if (backend !== "folder") {
+        throw new Error("storage doctor audit requires storage.backend=folder");
+      }
+      const deviceUuid =
+        storage && typeof storage === "object" && !Array.isArray(storage)
+          ? String(/** @type {Record<string, unknown>} */ (storage).deviceUuid ?? "")
+          : "";
+      const { resolveFolderObjectStoreRootDir } = await import(
+        "../../lib/storage/folder-object-store.mjs"
+      );
+      const { createFolderStorageAdapter } = await import("../../lib/storage/folder-adapter.mjs");
+      const rootDir = resolveFolderObjectStoreRootDir(config);
+      const adapter = createFolderStorageAdapter({ rootDir, auditReadOnly: true });
+      const { auditFolderObjectStoreVault } = await import("../../lib/storage/storage-doctor.mjs");
+      const report = await auditFolderObjectStoreVault({
+        adapter,
+        dek: unlocked.dek,
+        layoutPrefix: "accounts/local",
+        deviceUuid,
+        cliStatePath: defaultObjectStoreSyncStatePath(),
+      });
+      console.log(JSON.stringify(report, null, 2));
+      await adapter.close();
+    });
   }
 
   if (cmd === "devices") {
