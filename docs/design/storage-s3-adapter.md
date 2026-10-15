@@ -16,7 +16,7 @@ Remote ciphertext object storage using the **`StorageAdapter`** contract over **
 
 6. **List consistency.** `list` uses `ListObjectsV2` under `prefix + logicalKey`. Pagination honors `limit` and `cursor` (S3 continuation / start-after). Returned **`etag`** and **`size`** come from S3 object metadata.
 
-7. **Binding key.** `storageBindingKey` for sync state high-water is `s3:<bucket>:<prefix>` (normalized, no secrets), via `resolveObjectStoreSyncBindingKey`.
+7. **Binding key.** `storageBindingKey` for sync state high-water is **`s3:<bucket>:<prefix>`** (bucket and prefix normalized, no trailing slash on prefix; no secrets), via `resolveObjectStoreSyncBindingKey` when `storage.backend=s3`.
 
 ## Configuration
 

@@ -32,6 +32,25 @@ describe("probeCrossDeviceCas", () => {
     await inner.close();
   });
 
+  it("deletes the probe object when the probe fails", async () => {
+    const inner = createMemoryStorageAdapter();
+    await inner.init();
+    const adapter = {
+      ...inner,
+      async put(key, body, opts) {
+        if (opts?.ifNoneMatch === "*" && (await inner.head(key))) {
+          return inner.put(key, body, {});
+        }
+        return inner.put(key, body, opts);
+      },
+      capabilities: inner.capabilities,
+    };
+    assert.equal(await probeCrossDeviceCas(adapter), false);
+    const listed = await inner.list("ic-cas-probe");
+    assert.equal(listed.objects.length, 0);
+    await inner.close();
+  });
+
   it("returns false when If-Match is ignored", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();

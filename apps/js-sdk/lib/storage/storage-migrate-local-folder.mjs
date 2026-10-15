@@ -183,6 +183,67 @@ function objectsTreeHasRegularFiles(rootDir) {
 }
 
 /**
+ * Destination contains only files this migration copied (fingerprints match state).
+ * @param {string} destRoot
+ * @param {Record<string, unknown>} state
+ */
+/**
+ * @param {string} recorded
+ * @param {string} identity
+ */
+function folderIdentityAllowsResumeRefresh(recorded, identity) {
+  const [recGen, recDevs = ""] = String(recorded).split(":");
+  const [idGen, idDevs = ""] = String(identity).split(":");
+  if (recGen !== idGen) {
+    return false;
+  }
+  const recSet = new Set(recDevs.split(",").filter(Boolean));
+  const idSet = new Set(idDevs.split(",").filter(Boolean));
+  for (const dev of recSet) {
+    if (!idSet.has(dev)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @param {string} destRoot
+ * @param {Record<string, unknown>} state
+ */
+export function migrationDestinationMatchesRecordedFingerprints(destRoot, state) {
+  const fingerprints =
+    state.fileFingerprints && typeof state.fileFingerprints === "object"
+      ? /** @type {Record<string, { size: number, hash: string }>} */ (state.fileFingerprints)
+      : {};
+  const copiedPaths = new Set(
+    Array.isArray(state.copiedRelativePaths) ? state.copiedRelativePaths.map(String) : [],
+  );
+  if (copiedPaths.size === 0) {
+    return false;
+  }
+  const objects = path.join(destRoot, OBJECTS);
+  if (!fs.existsSync(objects)) {
+    return false;
+  }
+  const relFiles = listRegularFilesRecursive(objects).map((abs) => path.relative(destRoot, abs));
+  if (relFiles.length === 0) {
+    return false;
+  }
+  for (const rel of relFiles) {
+    if (!copiedPaths.has(rel)) {
+      return false;
+    }
+    const fp = fileContentFingerprint(path.join(destRoot, rel));
+    const recorded = fingerprints[rel];
+    if (!recorded || recorded.hash !== fp.hash || recorded.size !== fp.size) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * @param {{
  *   destRoot: string,
  *   vaultId: string,
@@ -225,11 +286,16 @@ export function isMigrationResetProtectedRelativePath(relFromStoreRoot, layoutPr
  * }} params
  */
 async function recordAndAssertMigrationDestinationIdentity(params) {
+  cleanupMigrationTempCopyFiles(params.destRoot);
   const objects = path.join(params.destRoot, OBJECTS);
   if (!fs.existsSync(objects) || !objectsTreeHasRegularFiles(params.destRoot)) {
     return;
   }
   const recorded = params.state.destStoreIdentity ? String(params.state.destStoreIdentity) : null;
+  const oursByFingerprint = migrationDestinationMatchesRecordedFingerprints(
+    params.destRoot,
+    params.state,
+  );
   const adapter = createFolderStorageAdapter({
     rootDir: params.destRoot,
     placeholderTimeoutMs: 80,
@@ -239,6 +305,25 @@ async function recordAndAssertMigrationDestinationIdentity(params) {
     await adapter.init();
     const manifest = await loadFolderMergedManifest(adapter, params.dek, params.layoutPrefix);
     const identity = computeFolderStoreIdentity(manifest);
+    if (oursByFingerprint) {
+      if (!recorded && params.allowRecord) {
+        params.state.destStoreIdentity = identity;
+        saveStorageMigrateState(params.scopeKey, params.state);
+      } else if (
+        recorded &&
+        recorded !== identity &&
+        folderIdentityAllowsResumeRefresh(recorded, identity)
+      ) {
+        params.state.destStoreIdentity = identity;
+        saveStorageMigrateState(params.scopeKey, params.state);
+      } else if (recorded && recorded !== identity) {
+        throw new StorageError(
+          "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`",
+          "invalid_argument",
+        );
+      }
+      return;
+    }
     if (recorded && recorded !== identity) {
       throw new StorageError(
         "Destination vault identity changed since migration started; use an empty folder or `storage migrate --reset`",
@@ -273,7 +358,16 @@ function activeConfigPointsAtMigrationDest(config, destRoot, env = process.env) 
 const MIGRATION_DEST_IDENTITY_CHECK_EVERY_N = 8;
 
 async function assertMigrationDestinationPrecheck(params) {
+  cleanupMigrationTempCopyFiles(params.destRoot);
   if (!objectsTreeHasRegularFiles(params.destRoot)) {
+    return;
+  }
+  const resume = params.resumeState;
+  if (
+    resume &&
+    resume.vaultId === params.vaultId &&
+    migrationDestinationMatchesRecordedFingerprints(params.destRoot, resume)
+  ) {
     return;
   }
   const adapter = createFolderStorageAdapter({
@@ -283,7 +377,6 @@ async function assertMigrationDestinationPrecheck(params) {
   });
   try {
     await adapter.init();
-    const resume = params.resumeState;
     if (resume && resume.vaultId === params.vaultId) {
       if (resume.destStoreIdentity) {
         const manifest = await loadFolderMergedManifest(adapter, params.dek, params.layoutPrefix);

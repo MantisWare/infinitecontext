@@ -176,7 +176,8 @@ function mirrorBackingForContractTests(adapter) {
       layoutPrefix: "accounts/local",
       sync: { persist: false },
     });
-    assert.ok(store.bindingKey.includes("s3:"));
+    assert.match(store.bindingKey, /^s3:[^:]+:[^:]+$/);
+    assert.ok(store.bindingKey.startsWith(`s3:${s3Config.bucket}:`));
     assert.equal(store.adapter.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
     const objectKey = "accounts/local/ic-v1/e2e/ping.enc";
     const sealed = encryptVaultPlaintextForStoragePut(dek, objectKey, { ping: "s3-e2e" });

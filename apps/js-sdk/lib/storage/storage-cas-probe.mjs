@@ -34,13 +34,14 @@ export async function probeCrossDeviceCas(adapter) {
     if (!rejectedWrongMatch) {
       return false;
     }
-    try {
-      await adapter.delete(probeKey);
-    } catch {
-      /* best-effort cleanup */
-    }
     return true;
   } catch {
     return false;
+  } finally {
+    try {
+      await adapter.delete(probeKey);
+    } catch {
+      /* best-effort cleanup even when probe fails */
+    }
   }
 }

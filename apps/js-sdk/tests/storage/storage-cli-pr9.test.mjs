@@ -282,19 +282,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       });
       assert.equal(first.phase, "copying");
       const state = loadStorageMigrateState(sk);
-      assert.ok(state);
-      if (!state.destStoreIdentity) {
-        const auditAdapter = createFolderStorageAdapter({
-          rootDir: folderRoot,
-          placeholderTimeoutMs: 80,
-          auditReadOnly: true,
-        });
-        await auditAdapter.init();
-        const manifest = await loadFolderMergedManifest(auditAdapter, DEK, PREFIX);
-        state.destStoreIdentity = computeFolderStoreIdentity(manifest);
-        saveStorageMigrateState(sk, state);
-        await auditAdapter.close();
-      }
+      assert.ok(state?.copiedRelativePaths?.length);
 
       await assert.rejects(
         () =>
