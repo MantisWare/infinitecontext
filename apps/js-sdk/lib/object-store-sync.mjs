@@ -50,8 +50,10 @@ import {
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
 import {
   bootstrapLocalStateFromLatestSnapshot,
+  clearPendingBootstrapReplica,
   recordManifestAcknowledgement,
 } from "./storage/storage-compaction.mjs";
+import { loadStorageManifest } from "./storage/storage-manifest.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
 const FULL_CHAIN_VERIFY_EVERY_N = 32;
@@ -85,7 +87,7 @@ async function verifyFullTrustedChains(ctx, state) {
     await verifyDeviceLogThroughSeq(
       ctx,
       devH,
-      undefined,
+      trusted,
       (seq) => readEnvelopeAtSeq(ctx, devH, seq),
       trusted.seq,
     );
@@ -283,9 +285,7 @@ async function assertTrustedHeadIntegrity(ctx, devH, trusted) {
   if (trusted.seq === 0) return;
   const prevEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq - 1);
   if (!prevEnvelope) {
-    throw new ObjectStoreLogRollbackError(
-      `Remote log for ${devH} missing segment at seq ${trusted.seq - 1}`,
-    );
+    return;
   }
   const curEnvelope = await readEnvelopeAtSeq(ctx, devH, trusted.seq);
   if (!curEnvelope) {
@@ -313,7 +313,7 @@ async function verifyOwnerTrustedPrefix(ctx, devH, trusted) {
   await verifyDeviceLogThroughSeq(
     ctx,
     devH,
-    undefined,
+    trusted,
     (seq) => readEnvelopeAtSeq(ctx, devH, seq),
     trusted.seq,
   );
@@ -431,7 +431,22 @@ function resolveDeleteTargetClientIds(idsRaw, ledger, contextId) {
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
 async function reconcileOwnLogPrefix(ctx, state) {
-  const trustedSelf = state.trustedHeads[ctx.selfDevH];
+  let trustedSelf = state.trustedHeads[ctx.selfDevH];
+  try {
+    const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+    const manifestHead = manifest.trusted_heads?.[ctx.selfDevH];
+    if (
+      manifestHead &&
+      (!trustedSelf ||
+        manifestHead.seq > trustedSelf.seq ||
+        (manifestHead.seq === trustedSelf.seq && manifestHead.digest !== trustedSelf.digest))
+    ) {
+      commitTrustedHeadAdvance(state, ctx.selfDevH, manifestHead);
+      trustedSelf = manifestHead;
+    }
+  } catch {
+    /* manifest optional for local-only dev */
+  }
   if (trustedSelf) {
     await verifyOwnerTrustedPrefix(ctx, ctx.selfDevH, trustedSelf);
   }
@@ -642,16 +657,19 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   }
 
   state.vectorCursor = cursor;
-  await persistLocalState(ctx, state);
-  try {
-    await recordManifestAcknowledgement(ctx, state);
-  } catch {
-    /* manifest is advisory */
+  /** @type {Record<string, unknown> | undefined} */
+  let bootstrapReplica;
+  if (state.pendingBootstrapReplica) {
+    bootstrapReplica = state.pendingBootstrapReplica;
+    clearPendingBootstrapReplica(state);
   }
+  await persistLocalState(ctx, state);
+  await recordManifestAcknowledgement(ctx, state);
 
   const hasMore = pendingSegments.length > segmentsTaken;
   return {
     changes,
+    bootstrap_replica: bootstrapReplica,
     head_sequence: headSequenceForStatus(state),
     next_since: cursor,
     has_more: hasMore,

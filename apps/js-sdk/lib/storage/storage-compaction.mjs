@@ -1,4 +1,4 @@
-import { normalizeVectorSyncCursor } from "../sync-cursor.mjs";
+import { maxVectorSyncCursor, normalizeVectorSyncCursor } from "../sync-cursor.mjs";
 import { sanitizeSyncReplicaForPersist } from "../sync-replica-state.mjs";
 import {
   commitTrustedHeadAdvance,
@@ -18,6 +18,7 @@ import {
   upsertManifestDeviceAck,
   wrapStorageManifestPlain,
 } from "./storage-manifest.mjs";
+import { PreconditionFailedError } from "./errors.mjs";
 import {
   readLayoutObjectPlaintext,
   storageConditionalCreate,
@@ -119,13 +120,45 @@ async function readEnvelopeAtSeq(ctx, devH, seq) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {StorageSnapshotRecord} snap
  */
-export async function verifySnapshotTrustedHeads(ctx, snap) {
+async function assertSnapshotCoversLiveLogHeads(ctx, snap) {
+  const prefix = `${layoutRootPath(ctx.layoutPrefix)}/log/`;
+  /** @type {Record<string, number>} */
+  const maxSeqByDevH = {};
+  let cursor = undefined;
+  for (;;) {
+    const page = await ctx.adapter.list(prefix, { limit: 500, cursor });
+    for (const row of page.objects) {
+      const parsed = parseLogSegmentKey(row.key);
+      if (!parsed) continue;
+      maxSeqByDevH[parsed.devH] = Math.max(maxSeqByDevH[parsed.devH] ?? -1, parsed.seq);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  for (const [devH, maxSeq] of Object.entries(maxSeqByDevH)) {
+    if (maxSeq < 0) continue;
+    const trusted = snap.trusted_heads?.[devH];
+    if (!trusted || trusted.seq !== maxSeq) {
+      throw new Error(`Snapshot omits or misstates live log head for ${devH}`);
+    }
+    const envelope = await readEnvelopeAtSeq(ctx, devH, maxSeq);
+    if (!envelope) {
+      throw new Error(`Snapshot trusted segment missing at ${devH} seq ${maxSeq}`);
+    }
+    const digest = layoutSegmentEnvelopeDigest(envelope);
+    if (digest !== trusted.digest) {
+      throw new Error(`Snapshot trusted digest mismatch at ${devH} seq ${maxSeq}`);
+    }
+  }
+}
+
+export async function verifySnapshotTrustedHeads(ctx, snap, options = {}) {
   for (const [devH, trusted] of Object.entries(snap.trusted_heads ?? {})) {
     if (!trusted) continue;
     await verifyDeviceLogThroughSeq(
       ctx,
       devH,
-      undefined,
+      { seq: trusted.seq, digest: trusted.digest },
       (seq) => readEnvelopeAtSeq(ctx, devH, seq),
       trusted.seq,
     );
@@ -137,6 +170,9 @@ export async function verifySnapshotTrustedHeads(ctx, snap) {
     if (digest !== trusted.digest) {
       throw new Error(`Snapshot trusted digest mismatch at ${devH} seq ${trusted.seq}`);
     }
+  }
+  if (options.requireFullLogCoverage) {
+    await assertSnapshotCoversLiveLogHeads(ctx, snap);
   }
 }
 
@@ -154,19 +190,80 @@ export function stateNeedsSnapshotBootstrap(state) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
  */
+/**
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./storage-manifest.mjs').StorageManifest} manifest
+ * @param {number[]} epochs
+ */
+export function resolveBootstrapSnapshotEpoch(manifest, epochs) {
+  if (!epochs.length) return null;
+  if (manifest.latest_snapshot_epoch >= 0) {
+    if (!epochs.includes(manifest.latest_snapshot_epoch)) {
+      throw new Error(
+        `Missing snapshot object for manifest latest_snapshot_epoch=${manifest.latest_snapshot_epoch}`,
+      );
+    }
+    return manifest.latest_snapshot_epoch;
+  }
+  return epochs[epochs.length - 1];
+}
+
 export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
   if (!stateNeedsSnapshotBootstrap(state)) return null;
+  const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
   const epochs = await listSnapshotEpochs(ctx);
-  if (!epochs.length) return null;
-  const epoch = epochs[epochs.length - 1];
+  const epoch = resolveBootstrapSnapshotEpoch(manifest, epochs);
+  if (epoch === null) return null;
   const snap = await loadStorageSnapshot(ctx, epoch);
-  if (!snap) return null;
+  if (!snap) {
+    throw new Error(`Snapshot epoch ${epoch} listed but unreadable`);
+  }
   await verifySnapshotTrustedHeads(ctx, snap);
   for (const [devH, head] of Object.entries(snap.trusted_heads ?? {})) {
     if (head) commitTrustedHeadAdvance(state, devH, head);
   }
   state.vectorCursor = normalizeVectorSyncCursor(snap.compacted_through);
+  state.appliedSnapshotEpoch = epoch;
+  state.pendingBootstrapReplica = sanitizeSyncReplicaForPersist(snap.replica);
   return snap;
+}
+
+/**
+ * Adopt verified orphan snapshots after a crash between snap write and manifest update.
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ */
+export async function adoptVerifiedOrphanSnapshots(ctx) {
+  const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
+  const epochs = await listSnapshotEpochs(ctx);
+  /** @type {StorageSnapshotRecord | null} */
+  let bestSnap = null;
+  let bestEpoch = manifest.latest_snapshot_epoch;
+  for (const epoch of epochs) {
+    if (epoch <= manifest.latest_snapshot_epoch) continue;
+    const snap = await loadStorageSnapshot(ctx, epoch);
+    if (!snap) continue;
+    await verifySnapshotTrustedHeads(ctx, snap, { requireFullLogCoverage: true });
+    if (epoch > bestEpoch) {
+      bestEpoch = epoch;
+      bestSnap = snap;
+    }
+  }
+  if (!bestSnap) return manifest;
+  return updateStorageManifest(
+    {
+      adapter: ctx.adapter,
+      dek: ctx.dek,
+      layoutPrefix: ctx.layoutPrefix,
+      ownerDevH: ctx.selfDevH,
+      settleMs: 0,
+    },
+    (m) => {
+      m.latest_snapshot_epoch = bestEpoch;
+      m.compacted_through = maxVectorSyncCursor(m.compacted_through, bestSnap.compacted_through);
+      m.trusted_heads = { ...(m.trusted_heads ?? {}), ...(bestSnap.trusted_heads ?? {}) };
+      return m;
+    },
+  );
 }
 
 /**
@@ -177,8 +274,11 @@ export async function bootstrapLocalStateFromLatestSnapshot(ctx, state) {
  * @param {number} [options.settleMs]
  */
 export async function compactObjectStoreReplica(ctx, state, replica, options = {}) {
+  await adoptVerifiedOrphanSnapshots(ctx);
   const manifest = await loadStorageManifest(ctx.adapter, ctx.dek, ctx.layoutPrefix);
-  const nextEpoch = Math.max(manifest.latest_snapshot_epoch, -1) + 1;
+  const epochs = await listSnapshotEpochs(ctx);
+  const maxListedEpoch = epochs.length ? Math.max(...epochs) : -1;
+  const nextEpoch = Math.max(manifest.latest_snapshot_epoch, maxListedEpoch) + 1;
   const compactedThrough = normalizeVectorSyncCursor(state.vectorCursor);
   /** @type {Record<string, { seq: number, digest: string }>} */
   const trustedHeads = {};
@@ -198,12 +298,23 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
   };
 
   const snapKey = snapEncRelativePath(ctx.layoutPrefix, nextEpoch);
-  await storageConditionalCreate({
-    adapter: ctx.adapter,
-    dek: ctx.dek,
-    objectKey: snapKey,
-    plaintext: wrapStorageSnapshotPlain(snapRecord),
-  });
+  try {
+    await storageConditionalCreate({
+      adapter: ctx.adapter,
+      dek: ctx.dek,
+      objectKey: snapKey,
+      plaintext: wrapStorageSnapshotPlain(snapRecord),
+    });
+  } catch (err) {
+    if (!(err instanceof PreconditionFailedError)) throw err;
+    const existing = await loadStorageSnapshot(ctx, nextEpoch);
+    if (!existing) throw err;
+    await verifySnapshotTrustedHeads(ctx, existing, { requireFullLogCoverage: true });
+  }
+
+  if (options.testHookAfterSnapshotWrite) {
+    await options.testHookAfterSnapshotWrite({ epoch: nextEpoch, snapRecord });
+  }
 
   await updateStorageManifest(
     {
@@ -214,9 +325,9 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
       settleMs: options.settleMs,
     },
     (manifest) => {
-      manifest.latest_snapshot_epoch = nextEpoch;
-      manifest.compacted_through = compactedThrough;
-      manifest.trusted_heads = trustedHeads;
+      manifest.latest_snapshot_epoch = Math.max(manifest.latest_snapshot_epoch, nextEpoch);
+      manifest.compacted_through = maxVectorSyncCursor(manifest.compacted_through, compactedThrough);
+      manifest.trusted_heads = { ...(manifest.trusted_heads ?? {}), ...trustedHeads };
       upsertManifestDeviceAck(
         manifest,
         ctx.selfDevH,
@@ -247,7 +358,9 @@ export function gcSafeSeqFloorForDevH(manifest, devH) {
   const canon = devH.toUpperCase();
   const compactFloor = Number(normalizeVectorSyncCursor(manifest.compacted_through).v?.[canon] ?? -1);
   if (!Number.isFinite(compactFloor) || compactFloor < 0) return -1;
-  if (!manifest.devices.length) return compactFloor;
+  const headSeq = Number(manifest.trusted_heads?.[canon]?.seq ?? compactFloor);
+  if (!Number.isFinite(headSeq) || headSeq < 0) return -1;
+  if (!manifest.devices.length) return -1;
   let minAck = Number.POSITIVE_INFINITY;
   for (const row of manifest.devices) {
     const ack = row.acknowledged_cursor?.v?.[canon];
@@ -256,7 +369,9 @@ export function gcSafeSeqFloorForDevH(manifest, devH) {
     minAck = Math.min(minAck, ackSeq);
   }
   if (!Number.isFinite(minAck) || minAck < compactFloor) return -1;
-  return compactFloor;
+  const deleteThrough = Math.min(compactFloor, headSeq - 1);
+  if (deleteThrough < 0) return -1;
+  return deleteThrough;
 }
 
 export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
@@ -271,7 +386,8 @@ export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
       const parsed = parseLogSegmentKey(row.key);
       if (!parsed) continue;
       const threshold = gcSafeSeqFloorForDevH(m, parsed.devH);
-      if (threshold >= 0 && parsed.seq <= threshold) toDelete.push(row.key);
+      const headSeq = Number(m.trusted_heads?.[parsed.devH]?.seq ?? -1);
+      if (threshold >= 0 && parsed.seq <= threshold && parsed.seq !== headSeq) toDelete.push(row.key);
     }
     if (!page.nextCursor) break;
     cursor = page.nextCursor;
@@ -288,6 +404,10 @@ export async function gcLogSegmentsCoveredByCompaction(ctx, manifest) {
  */
 export async function recordManifestAcknowledgement(ctx, state) {
   const selfHead = state.trustedHeads[ctx.selfDevH]?.seq ?? -1;
+  if (state.pendingBootstrapReplica) {
+    return;
+  }
+  const ackCursor = normalizeVectorSyncCursor(state.vectorCursor);
   await updateStorageManifest(
     {
       adapter: ctx.adapter,
@@ -297,10 +417,15 @@ export async function recordManifestAcknowledgement(ctx, state) {
       settleMs: 0,
     },
     (manifest) => {
-      upsertManifestDeviceAck(manifest, ctx.selfDevH, selfHead, state.vectorCursor);
+      upsertManifestDeviceAck(manifest, ctx.selfDevH, selfHead, ackCursor);
       return manifest;
     },
   );
+}
+
+/** Clear bootstrap pending flag after replica was delivered to the client. */
+export function clearPendingBootstrapReplica(state) {
+  delete state.pendingBootstrapReplica;
 }
 
 export { createEmptyObjectStoreLocalSyncState };

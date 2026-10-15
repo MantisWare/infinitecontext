@@ -1,6 +1,6 @@
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 import { PreconditionFailedError } from "./errors.mjs";
-import { withLeaseLock } from "./lease-lock.mjs";
+import { readLeaseLockForFence, withLeaseLock } from "./lease-lock.mjs";
 import {
   copyVerifiedStoragePutBodyForAdapter,
   encryptVaultPlaintextForStoragePut,
@@ -61,7 +61,9 @@ export async function storageReadModifyWrite(params) {
       const current = row?.body
         ? readLayoutObjectPlaintext(params.dek, params.objectKey, row.body)
         : null;
-      const { plaintext, result } = await params.mutate(current);
+      const mutated = await params.mutate(current);
+      const { plaintext, result } = mutated;
+      if (mutated.skipWrite) return result;
       const body = sealLayoutObjectPlaintext(params.dek, params.objectKey, plaintext);
       try {
         if (!row) {
@@ -85,17 +87,27 @@ export async function storageReadModifyWrite(params) {
     lockName: params.lockName,
     ownerDevH: params.ownerDevH,
     settleMs: params.settleMs,
-    fn: async () => {
+    fn: async (lease) => {
       const row = await params.adapter.get(params.objectKey);
       const current = row?.body
         ? readLayoutObjectPlaintext(params.dek, params.objectKey, row.body)
         : null;
-      const { plaintext, result } = await params.mutate(current);
+      const mutated = await params.mutate(current);
+      const { plaintext, result } = mutated;
+      if (mutated.skipWrite) return result;
+      await readLeaseLockForFence({
+        adapter: params.adapter,
+        dek: params.dek,
+        layoutPrefix: params.layoutPrefix,
+        lockName: params.lockName,
+        ownerDevH: params.ownerDevH,
+        nonce: lease.nonce,
+      });
       const body = sealLayoutObjectPlaintext(params.dek, params.objectKey, plaintext);
       if (!row) {
         await params.adapter.put(params.objectKey, body, { ifNoneMatch: "*" });
       } else {
-        await params.adapter.put(params.objectKey, body);
+        await params.adapter.put(params.objectKey, body, { ifMatch: row.etag });
       }
       return result;
     },

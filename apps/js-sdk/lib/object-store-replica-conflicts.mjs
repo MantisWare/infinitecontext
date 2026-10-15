@@ -157,13 +157,21 @@ function compareLogEntry(a, b) {
  * @param {string} messageId
  */
 let recomputePerfCounter = 0;
+let recomputePerfEntryScans = 0;
+let recomputePerfMaxEntries = 0;
 
 export function resetRecomputePerfCounterForTests() {
   recomputePerfCounter = 0;
+  recomputePerfEntryScans = 0;
+  recomputePerfMaxEntries = 0;
 }
 
 export function getRecomputePerfCounterForTests() {
   return recomputePerfCounter;
+}
+
+export function getRecomputePerfEntryScanStatsForTests() {
+  return { totalScans: recomputePerfEntryScans, maxEntries: recomputePerfMaxEntries };
 }
 
 /**
@@ -234,6 +242,8 @@ export function mutationLogRetainKeySetForMessage(replica, messageId) {
 export function recomputeReplicaConflictsForMessage(replica, messageId) {
   recomputePerfCounter += 1;
   const entries = /** @type {MessageMutationLogEntry[]} */ (replica._message_mutations?.[messageId] ?? []);
+  recomputePerfEntryScans += entries.length;
+  recomputePerfMaxEntries = Math.max(recomputePerfMaxEntries, entries.length);
   /** @type {MessageMutationLogEntry[]} */
   const losers = [];
   /** @type {MessageMutationLogEntry | null} */

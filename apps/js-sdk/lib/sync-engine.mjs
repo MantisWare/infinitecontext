@@ -279,6 +279,10 @@ export async function pullAndApplySync({ baseUrl, store, log, getCursor, setCurs
 
   while (hasMore) {
     lastPage = await syncTransport.pullSyncChanges({ since, limit: 500, baseUrl });
+    if (lastPage?.bootstrap_replica && daemonReplicaMode && store?.flushSyncReplica) {
+      daemonReplica = hydrateSyncReplica(lastPage.bootstrap_replica);
+      store.flushSyncReplica(daemonReplica);
+    }
     for (const change of lastPage.changes ?? []) {
       if (store?.applySyncChange || daemonReplica || cliReplica) {
         if (daemonReplica && objectStoreReplicaPull && isObjectStoreSyncChange(change)) {

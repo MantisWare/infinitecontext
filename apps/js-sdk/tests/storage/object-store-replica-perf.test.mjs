@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { applySyncChangeToReplica, createEmptySyncReplica } from "../../lib/sync-replica-apply.mjs";
 import {
   getRecomputePerfCounterForTests,
+  getRecomputePerfEntryScanStatsForTests,
   resetRecomputePerfCounterForTests,
 } from "../../lib/object-store-replica-conflicts.mjs";
 import { serializeMutationHlc } from "../../lib/object-store-hlc.mjs";
@@ -50,6 +51,15 @@ describe("object store replica recompute performance", () => {
       );
     }
     assert.equal(getRecomputePerfCounterForTests(), 2400);
+    const scanStats = getRecomputePerfEntryScanStatsForTests();
+    assert.ok(
+      scanStats.maxEntries <= 2401,
+      `recompute scanned too many log entries per call (${scanStats.maxEntries})`,
+    );
+    assert.ok(
+      scanStats.totalScans <= 2400 * 2402,
+      `total recompute entry scans regressed (${scanStats.totalScans})`,
+    );
     assert.equal(replica.sync_conflicts.length, 0);
     assert.equal(replica.messages[msgId].payload.content.body, "u2400");
   });

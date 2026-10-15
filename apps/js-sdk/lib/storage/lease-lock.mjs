@@ -111,14 +111,17 @@ async function acquireLeaseLockOnce(options) {
   const now = Date.now();
 
   const existing = await readLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName);
-  if (existing && !isLeaseLockStale(existing, now) && !isLeaseLockHeldBy(existing, ownerDevH, now)) {
+  if (existing && !isLeaseLockStale(existing, now)) {
+    if (isLeaseLockHeldBy(existing, ownerDevH, now)) {
+      throw new Error(`Lease lock ${lockName} is already held by this device; renew with nonce`);
+    }
     throw new Error(`Lease lock ${lockName} is held by ${existing.owner_dev_h}`);
   }
-  if (existing && (isLeaseLockStale(existing, now) || isLeaseLockHeldBy(existing, ownerDevH, now))) {
+  if (existing && isLeaseLockStale(existing, now)) {
     try {
       await options.adapter.delete(key);
     } catch {
-      /* best-effort break */
+      /* best-effort break stale */
     }
   }
 
@@ -129,18 +132,7 @@ async function acquireLeaseLockOnce(options) {
     expires_at_ms: leaseExpiresAtMs(now),
   };
 
-  try {
-    await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
-  } catch {
-    await replaceLeasePayload(
-      options.adapter,
-      options.dek,
-      options.layoutPrefix,
-      lockName,
-      payload,
-      undefined,
-    );
-  }
+  await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
 
   if (settleMs > 0) await sleep(settleMs);
 
@@ -238,10 +230,27 @@ export async function releaseLeaseLock(options) {
  * @param {number} [options.settleMs]
  * @param {() => Promise<T>} options.fn
  */
+export async function readLeaseLockForFence(options) {
+  const ownerDevH = canonicalDevH(options.ownerDevH);
+  const existing = await readLeasePayload(
+    options.adapter,
+    options.dek,
+    options.layoutPrefix,
+    options.lockName,
+  );
+  if (
+    !existing ||
+    !isLeaseLockHeldBy(existing, ownerDevH) ||
+    String(existing.nonce) !== String(options.nonce)
+  ) {
+    throw new Error("Lease fencing token mismatch");
+  }
+}
+
 export async function withLeaseLock(options) {
   const handle = await acquireLeaseLock(options);
   try {
-    return await options.fn();
+    return await options.fn(handle);
   } finally {
     await releaseLeaseLock({
       adapter: options.adapter,

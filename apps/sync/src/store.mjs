@@ -351,6 +351,10 @@ export function createStore({ dbPath = resolveDbPath(process.env) } = {}) {
     applySyncChange(change) {
       if (!change || typeof change !== "object") return;
       if (isObjectStoreSyncChange(change)) {
+        if (!objectStoreReplicaPullEnabled) {
+          applyHostedSyncChange(change);
+          return;
+        }
         if (!replicaPersistence) {
           throw new Error("Object store replica is not initialized — call initObjectStoreReplica() first");
         }

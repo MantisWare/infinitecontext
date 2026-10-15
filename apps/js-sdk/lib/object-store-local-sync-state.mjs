@@ -16,6 +16,8 @@ import {
  * @property {number} changeOrdinal monotonic hosted-shaped sequence for emitted changes
  * @property {{ wall_ms: number, counter: number }} localHlc hybrid logical clock for local stamps
  * @property {string} [logListCursor] pagination cursor for discovering remote log prefixes
+ * @property {number} [appliedSnapshotEpoch] snapshot epoch hydrated on this device (-1 = none)
+ * @property {Record<string, unknown>} [pendingBootstrapReplica] sanitized replica pending pull delivery
  */
 
 /** @returns {ObjectStoreLocalSyncState} */

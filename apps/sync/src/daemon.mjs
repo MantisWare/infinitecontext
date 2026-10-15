@@ -1241,6 +1241,8 @@ export async function daemonBoot({
 
     if (accountSync) {
       const runtimeConfig = await readConfigJson();
+      const storageBackend = String(runtimeConfig?.storage?.backend ?? "hosted").trim();
+      const hostedBackend = !storageBackend || storageBackend === "hosted";
       await configureDaemonObjectStoreSyncTransport({
         accountSyncLoaded: true,
         runtimeConfig,
@@ -1248,7 +1250,7 @@ export async function daemonBoot({
         loadBootstrapModule: loadBootstrapModule,
         bootstrapOptions: { baseUrl: cfg.baseUrl, dbPath: cfg.dbFile },
       });
-      await store.initObjectStoreReplica();
+      await store.initObjectStoreReplica({ objectStoreBackend: !hostedBackend });
     }
 
     // connectivity check
