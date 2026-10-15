@@ -621,6 +621,103 @@ describe("PR #25 follow-ups", () => {
   });
 
   for (const backendLabel of ["file", "daemon.db"]) {
+    it(`push-before-first-pull after compaction on ${backendLabel}`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerCtx = ctx(adapter, writerUuid, createInMemoryObjectStoreLocalState());
+      for (let i = 0; i < 2; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `b2_${i}`,
+            op: "context_create",
+            context_id: `ctx_b2_${i}`,
+            payload: { context_id: `ctx_b2_${i}`, metadata: { n: i } },
+          },
+        ]);
+      }
+      const replica = createEmptySyncReplica();
+      await compactObjectStoreReplica(writerCtx, writerCtx.localState.load(), replica, { settleMs: 0 });
+
+      const readerUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      let readerLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-pbfp-")), "object-store-sync-state.json");
+        readerLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-pbfp-db-")), "daemon.db");
+        readerLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const readerCtx = ctx(adapter, readerUuid, readerLocal);
+      await objectStorePushSyncMutations(readerCtx, [
+        {
+          client_id: "a1_pre",
+          op: "context_create",
+          context_id: "ctx_a1_pre",
+          payload: { context_id: "ctx_a1_pre", metadata: {} },
+        },
+      ]);
+      resetObjectStorePullVerifyGenerationForTests();
+      const page = await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      assert.ok(page.bootstrap_replica);
+      await confirmObjectStorePullDeliveryForContext(readerCtx);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      if (readerLocal.close) readerLocal.close();
+    });
+
+    it(`existing device behind snapshot floor push then pull on ${backendLabel}`, async () => {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerCtx = ctx(adapter, writerUuid, createInMemoryObjectStoreLocalState());
+      for (let i = 0; i < 4; i += 1) {
+        await objectStorePushSyncMutations(writerCtx, [
+          {
+            client_id: `beh${i}`,
+            op: "context_create",
+            context_id: `ctx_beh_${i}`,
+            payload: { context_id: `ctx_beh_${i}`, metadata: {} },
+          },
+        ]);
+      }
+      let readerLocal;
+      if (backendLabel === "file") {
+        const filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-behind-")), "object-store-sync-state.json");
+        readerLocal = createCliFileObjectStoreLocalState(filePath);
+      } else {
+        const dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-behind-db-")), "daemon.db");
+        readerLocal = createDaemonDbObjectStoreLocalState(dbFile);
+      }
+      const readerUuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const readerCtx = ctx(adapter, readerUuid, readerLocal);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 1 });
+      await compactObjectStoreReplica(
+        writerCtx,
+        writerCtx.localState.load(),
+        createEmptySyncReplica(),
+        { settleMs: 0 },
+      );
+      await objectStorePushSyncMutations(readerCtx, [
+        {
+          client_id: "beh_own",
+          op: "context_create",
+          context_id: "ctx_beh_own",
+          payload: { context_id: "ctx_beh_own", metadata: {} },
+        },
+      ]);
+      resetObjectStorePullVerifyGenerationForTests();
+      const page = await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      assert.ok(page.bootstrap_replica);
+      await confirmObjectStorePullDeliveryForContext(readerCtx);
+      resetObjectStorePullVerifyGenerationForTests();
+      await objectStorePullSyncChanges(readerCtx, { limit: 500 });
+      if (readerLocal.close) readerLocal.close();
+    });
+  }
+
+  for (const backendLabel of ["file", "daemon.db"]) {
     it(`existing devices adopt verified snapshot floor after honest GC on ${backendLabel}`, async () => {
       const adapter = createMemoryStorageAdapter();
       await adapter.init();

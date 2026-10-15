@@ -65,8 +65,10 @@ import {
 } from "./storage/storage-manifest.mjs";
 import { writeDeviceSyncAckFromState } from "./storage/storage-device-sync-ack.mjs";
 import {
+  bootstrapVerifiedSnapshotFloorCatchUp,
   ensureManifestVerifiedSnapshotFloors,
   verifiedSnapshotFloorForDevH,
+  vectorCursorBelowManifestFloor,
 } from "./object-store-snapshot-floor.mjs";
 
 const LAYOUT_SEGMENT_PLAIN_FIELD = "ic_layout_segment_envelope_v1";
@@ -301,6 +303,7 @@ async function assertTrustedAnchorDigest(ctx, devH, trusted) {
  * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
  */
 async function maybeAdoptVerifiedSnapshotFloors(ctx, state, manifest) {
+  if (vectorCursorBelowManifestFloor(state, manifest)) return;
   const adopted = await ensureManifestVerifiedSnapshotFloors(ctx, state, manifest, (devH, seq) =>
     readEnvelopeAtSeq(ctx, devH, seq),
   );
@@ -630,6 +633,9 @@ export async function objectStorePullSyncChanges(ctx, options = {}) {
   const pendingDelivery = Boolean(state.pendingBootstrapReplica && state.bootstrapReplicaPendingAck);
   if (!pendingDelivery) {
     await bootstrapLocalStateFromLatestSnapshot(ctx, state);
+    await bootstrapVerifiedSnapshotFloorCatchUp(ctx, state, manifest, (devH, seq) =>
+      readEnvelopeAtSeq(ctx, devH, seq),
+    );
   }
   const pullBaseline = capturePullApplyBaseline(state);
   const cursor = resolvePullVectorCursor(state, options.since);

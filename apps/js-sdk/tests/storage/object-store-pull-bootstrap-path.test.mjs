@@ -419,6 +419,75 @@ describe("object store pull bootstrap via pullAndApplySync", () => {
     }
   });
 
+  it("random new-device histories with push-before-first-pull converge (50 trials)", async () => {
+    const sorted = sortMergeableMutations(scenarioThreeUpdates());
+    const reference = createEmptySyncReplica();
+    for (const item of sorted) {
+      applySyncChangeToReplica(reference, syncChangeFromMergeable(item), () => {});
+    }
+    const minSnapshotContexts = Object.keys(fullSnapshot(reference).contexts ?? {}).length;
+    for (let trial = 0; trial < 50; trial += 1) {
+      const adapter = createMemoryStorageAdapter();
+      await adapter.init();
+      const writerUuid = "11111111-1111-4111-8111-111111111111";
+      const writerLocal = createInMemoryObjectStoreLocalState();
+      await pushMergeablesInPlan(adapter, sorted);
+      await syncWriterLocalFromStore(adapter, writerUuid, writerLocal);
+      const compactorReplica = createEmptySyncReplica();
+      for (const item of sorted) {
+        applySyncChangeToReplica(compactorReplica, syncChangeFromMergeable(item), () => {});
+      }
+      await compactObjectStoreReplica(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          selfDevH: deriveDevH(TEST_DEK, writerUuid),
+          deviceUuid: writerUuid,
+          localState: writerLocal,
+        },
+        writerLocal.load(),
+        compactorReplica,
+        { settleMs: 0 },
+      );
+      await gcLogSegmentsCoveredByCompaction(
+        {
+          adapter,
+          dek: TEST_DEK,
+          layoutPrefix: LAYOUT_PREFIX,
+          selfDevH: deriveDevH(TEST_DEK, writerUuid),
+          deviceUuid: writerUuid,
+          localState: writerLocal,
+        },
+        await loadStorageManifest(adapter, TEST_DEK, LAYOUT_PREFIX),
+      );
+      const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), `ic-rnd-prepull-${trial}-`));
+      process.env.HOME = cliDir;
+      fs.mkdirSync(path.join(cliDir, ".infinitecontext"), { recursive: true });
+      fs.writeFileSync(path.join(cliDir, ".infinitecontext", "sync-replica.json"), "{}\n");
+      const store = createCliSyncStore();
+      const joinUuid = crypto.randomUUID();
+      const newDeviceT = transport(adapter, joinUuid);
+      const ctxId = `ctx_rnd_prepull_${trial}`;
+      await newDeviceT.pushSyncMutations([
+        {
+          client_id: `rnd_prepull_${trial}`,
+          op: "context_create",
+          context_id: ctxId,
+          payload: { context_id: ctxId, metadata: { trial } },
+        },
+      ]);
+      resetObjectStorePullVerifyGenerationForTests();
+      await pullAndApplySync({ store, transport: newDeviceT });
+      const replica = store.loadSyncReplica();
+      assert.ok(replica.contexts?.[ctxId], `trial ${trial}: own pre-pull mutation missing`);
+      assert.ok(
+        Object.keys(replica.contexts ?? {}).length >= minSnapshotContexts + 1,
+        `trial ${trial}: snapshot contexts missing`,
+      );
+    }
+  });
+
   it("multi-device history converges on CLI pull after compaction and GC", async () => {
     const sorted = sortMergeableMutations(scenarioConcurrentUpdates());
     const reference = createEmptySyncReplica();

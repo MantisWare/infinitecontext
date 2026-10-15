@@ -13,6 +13,8 @@ import {
 import { snapEncRelativePath } from "./storage/layout.mjs";
 import { layoutSegmentEnvelopeDigest } from "./storage/layout.mjs";
 import { decryptVaultStorageObjectPlaintext } from "./storage/storage-object-move.mjs";
+import { sanitizeSyncReplicaForPersist } from "./sync-replica-state.mjs";
+import { effectiveVectorCursorForPull } from "./object-store-pull-delivery.mjs";
 
 /**
  * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
@@ -53,6 +55,34 @@ export function refreshVerifiedSnapshotGenerationBinding(state, manifest) {
   if (manifest.manifest_generation <= state.verifiedManifestGeneration) return false;
   state.verifiedManifestGeneration = manifest.manifest_generation;
   return true;
+}
+
+/**
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+export function vectorCursorBelowManifestFloor(state, manifest) {
+  const cursor = effectiveVectorCursorForPull(state);
+  const compacted = normalizeVectorSyncCursor(manifest.compacted_through).v ?? {};
+  for (const [devH, floorRaw] of Object.entries(compacted)) {
+    const floor = Number(floorRaw);
+    if (!Number.isFinite(floor) || floor < 0) continue;
+    const canon = devH.toUpperCase();
+    const cur = Number(cursor.v?.[canon] ?? -1);
+    if (cur < floor) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ */
+export function stateNeedsSnapshotFloorCatchUp(state, manifest) {
+  if (state.bootstrapReplicaPendingAck && state.pendingBootstrapReplica) return false;
+  if (manifest.latest_snapshot_epoch < 0) return false;
+  if (!vectorCursorBelowManifestFloor(state, manifest)) return false;
+  return Object.values(state.trustedHeads ?? {}).some((head) => head && head.seq >= 0);
 }
 
 export function manifestNeedsVerifiedSnapshotFloorAdoption(state, manifest) {
@@ -209,7 +239,42 @@ export function anchorTrustedHeadsFromCoveringSnapshot(state, snap, manifest) {
  * @param {(devH: string, seq: number) => Promise<import('./ic-crypto.mjs').AeadEnvelope | null>} readEnvelopeAtSeq
  * @returns {Promise<boolean>} true when state was updated
  */
+/**
+ * Device pushed (or pulled partially) while vector cursor is below manifest compacted floor:
+ * deliver snapshot bootstrap + defer cursor advance until confirm (invariant 1).
+ *
+ * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
+ * @param {import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState} state
+ * @param {import('./storage/storage-manifest.mjs').StorageManifest} manifest
+ * @param {(devH: string, seq: number) => Promise<import('./ic-crypto.mjs').AeadEnvelope | null>} readEnvelopeAtSeq
+ */
+export async function bootstrapVerifiedSnapshotFloorCatchUp(ctx, state, manifest, readEnvelopeAtSeq) {
+  if (!stateNeedsSnapshotFloorCatchUp(state, manifest)) return false;
+  if (manifest.latest_snapshot_epoch < 0) {
+    throw new ObjectStoreLogRollbackError("Manifest compacted_through set without latest_snapshot_epoch");
+  }
+  const snap = await loadStorageSnapshot(ctx, manifest.latest_snapshot_epoch);
+  if (!snap) {
+    throw new ObjectStoreLogRollbackError(
+      `Missing snapshot epoch ${manifest.latest_snapshot_epoch} required for verified GC floor`,
+    );
+  }
+  await verifySnapshotTrustedHeadsForManifestFloor(ctx, state, manifest, snap, readEnvelopeAtSeq);
+  anchorTrustedHeadsFromCoveringSnapshot(state, snap, manifest);
+  state.appliedSnapshotEpoch = snap.epoch;
+  state.verifiedManifestGeneration = manifest.manifest_generation;
+  state.snapshotCompactedThrough = maxVectorSyncCursor(
+    normalizeVectorSyncCursor(state.snapshotCompactedThrough),
+    normalizeVectorSyncCursor(manifest.compacted_through),
+  );
+  state.vectorCursor = normalizeVectorSyncCursor(manifest.compacted_through);
+  state.pendingBootstrapReplica = sanitizeSyncReplicaForPersist(snap.replica);
+  state.bootstrapReplicaPendingAck = true;
+  return true;
+}
+
 export async function ensureManifestVerifiedSnapshotFloors(ctx, state, manifest, readEnvelopeAtSeq) {
+  if (vectorCursorBelowManifestFloor(state, manifest)) return false;
   if (!manifestNeedsVerifiedSnapshotFloorAdoption(state, manifest)) return false;
   if (manifest.latest_snapshot_epoch < 0) {
     throw new ObjectStoreLogRollbackError("Manifest compacted_through set without latest_snapshot_epoch");
