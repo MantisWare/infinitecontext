@@ -667,11 +667,26 @@ export async function runStorageMigrateLocalToFolder(options) {
   const max = options.maxCopyFiles ?? Number.POSITIVE_INFINITY;
 
   const assertDestinationStableBeforeDestWrite = async () => {
+    const isFirstDestWriteThisRun = destWritesThisRun === 0;
     destWritesThisRun += 1;
+    if (isFirstDestWriteThisRun) {
+      if (!objectsTreeHasRegularFiles(destRoot)) {
+        /* empty destination — first copy needs no identity */
+      } else if (state.destStoreIdentity) {
+        await recordAndAssertMigrationDestinationIdentity({
+          scopeKey,
+          state,
+          destRoot,
+          dek: options.dek,
+          layoutPrefix: options.layoutPrefix,
+          allowRecord: false,
+        });
+      }
+    }
     const checkIdentity =
       Boolean(state.destStoreIdentity) &&
       (destWritesThisRun === 1 || destWritesThisRun % MIGRATION_DEST_IDENTITY_CHECK_EVERY_N === 0);
-    if (checkIdentity) {
+    if (checkIdentity && !isFirstDestWriteThisRun) {
       await recordAndAssertMigrationDestinationIdentity({
         scopeKey,
         state,

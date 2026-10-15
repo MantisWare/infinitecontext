@@ -41,5 +41,6 @@ Object format, CAS, listing, and repair semantics: **`docs/design/storage-filesy
 | 3 | `SecretStore` for backend credentials |
 | 4 | `createFilesystemStorageAdapter` |
 | **5** | **Default local object store factory + config resolution (this PR)** |
+| **10** | **S3 / S3-compatible `StorageAdapter` + MinIO CI** — see **`docs/design/storage-s3-adapter.md`** |
 
-Future PRs: hosted/S3/WebDAV object backends, manifest CAS, additional `infinitecontext storage …` backends.
+Future PRs: hosted/WebDAV object backends, additional `infinitecontext storage …` backends.

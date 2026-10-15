@@ -9,6 +9,29 @@ on:
 jobs:
   storage-tests:
     runs-on: ubuntu-latest
+    services:
+      minio:
+        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --entrypoint /bin/sh
+          -c "mkdir -p /data && minio server /data --address :9000"
+    env:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://127.0.0.1:9000
+      INFINITECONTEXT_S3_TEST_BUCKET: infinitecontext-ci
+      INFINITECONTEXT_S3_TEST_PREFIX: storage-ci
+      IC_REQUIRE_MINIO: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +75,10 @@ jobs:
           node --check apps/js-sdk/lib/storage/secret-store-file.mjs
           node --check apps/js-sdk/lib/storage/secret-store.mjs
           node --check apps/js-sdk/lib/storage/index.mjs
+          node --check apps/js-sdk/lib/storage/s3-config.mjs
+          node --check apps/js-sdk/lib/storage/s3-cas-probe.mjs
+          node --check apps/js-sdk/lib/storage/s3-adapter.mjs
+          node --check apps/js-sdk/lib/storage/s3-object-store.mjs
 
       - name: Storage adapter contract tests
         run: node --test --test-concurrency=1 apps/js-sdk/tests/storage/*.test.mjs
