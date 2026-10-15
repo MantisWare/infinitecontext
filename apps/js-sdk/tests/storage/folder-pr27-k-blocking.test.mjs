@@ -119,11 +119,29 @@ describe("PR27 K-blocking regressions", () => {
     const { createMemoryStorageAdapter } = await import("../../lib/storage/memory-adapter.mjs");
     const { pickVerifiedBootstrapSnapshot } = await import("../../lib/storage/storage-compaction.mjs");
     const { createEmptyStorageManifest } = await import("../../lib/storage/storage-manifest.mjs");
+    const { snapEncRelativePath } = await import("../../lib/storage/layout.mjs");
+    const { wrapStorageSnapshotPlain, SNAPSHOT_FORMAT } = await import("../../lib/storage/storage-compaction.mjs");
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
     const ctx = syncCtx(adapter, DEVICE_A);
+    const snapKey = snapEncRelativePath(PREFIX, 0);
+    const snapBody = sealLayoutObjectPlaintext(
+      DEK,
+      snapKey,
+      wrapStorageSnapshotPlain({
+        format: SNAPSHOT_FORMAT,
+        epoch: 0,
+        created_at: new Date().toISOString(),
+        compacted_through: normalizeVectorSyncCursor(0),
+        trusted_heads: {
+          [deriveDevH(DEK, DEVICE_A)]: { seq: 5, digest: "deadbeef".repeat(8) },
+        },
+        replica: {},
+      }),
+    );
+    await adapter.put(snapKey, snapBody, { ifNoneMatch: "*" });
     const manifest = createEmptyStorageManifest();
-    manifest.latest_snapshot_epoch = 99;
+    manifest.latest_snapshot_epoch = 0;
     await assert.rejects(
       () => pickVerifiedBootstrapSnapshot(ctx, manifest, ctx.localState.load()),
       /No verified snapshot satisfies manifest compaction floor/,
