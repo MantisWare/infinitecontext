@@ -51,8 +51,21 @@ export async function openS3StorageCasProbeSession(options = {}) {
     endpoint: s3.endpoint,
   });
   await adapter.init({ mode: "probe-session", cachePath: options.cachePath });
+  let sessionAdapter = wrapStorageAdapterCasProbeSession(adapter);
+  if (String(env.INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST ?? "") === "1") {
+    const inner = sessionAdapter;
+    sessionAdapter = {
+      ...inner,
+      put(key, body, putOptions) {
+        if (putOptions?.ifNoneMatch === "*" && String(key).includes("ic-cas-race/")) {
+          return inner.put(key, body, {});
+        }
+        return inner.put(key, body, putOptions);
+      },
+    };
+  }
   return {
-    adapter: wrapStorageAdapterCasProbeSession(adapter),
+    adapter: sessionAdapter,
     close: () => adapter.close(),
   };
 }
