@@ -5,6 +5,8 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  attachStorageCasCorruptionContextForRead,
+  bumpStorageCasCorruptionMarker,
   DEFAULT_STORAGE_CAS_CACHE_TTL_MS,
   getStorageCasCacheRecord,
   loadStorageCasCache,
@@ -18,6 +20,7 @@ import {
   recordStorageCasInitProbeSuccess,
   saveStorageCasCache,
   setStorageCasCacheRecord,
+  storageCasCacheLastGoodPath,
   storageCasProbeBindingKey,
 } from "../../lib/storage/storage-cas-cache.mjs";
 import { normalizeStorageCasEndpoint } from "../../lib/storage/storage-cas-endpoint.mjs";
@@ -160,6 +163,55 @@ describe("storage CAS cache", () => {
     const mismatch = normalizeStorageCasCacheRecordOnRead(record, "expected", 1500);
     assert.equal(mismatch.casUnsafe, true);
     assert.equal(mismatch.unsafeReason, "binding_key_mismatch");
+  });
+
+  it("unsalvaged corruption requires seq recheck and cas-race before CAS-on", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-unsalv-")), "cache.json");
+    const bindingKey = "s3:test:bucket:p";
+    const now = Date.now();
+    saveStorageCasCache(
+      {
+        v: 1,
+        endpoints: {
+          [bindingKey]: {
+            bindingKey,
+            crossDeviceCas: true,
+            probedAtMs: now,
+            expiresAtMs: now + 60_000,
+          },
+        },
+      },
+      cachePath,
+    );
+    fs.unlinkSync(storageCasCacheLastGoodPath(cachePath));
+    fs.truncateSync(cachePath, 6);
+    bumpStorageCasCorruptionMarker(cachePath);
+    let cache = loadStorageCasCache(cachePath);
+    attachStorageCasCorruptionContextForRead(cache, cachePath);
+    assert.equal(cache.salvageUnavailable, true);
+    assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, false);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
+    cache = loadStorageCasCache(cachePath);
+    attachStorageCasCorruptionContextForRead(cache, cachePath);
+    assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, false);
+    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey);
+    cache = loadStorageCasCache(cachePath);
+    attachStorageCasCorruptionContextForRead(cache, cachePath);
+    assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, true);
+  });
+
+  it("new unsafeAtMs stays above latest doctor pass (clock skew)", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-skew-")), "cache.json");
+    const bindingKey = "s3:test:bucket:p";
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 100);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
+    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey);
+    const before = loadStorageCasCache(cachePath).endpoints[bindingKey];
+    const latestPass = Math.max(before?.seqRecheckAtMs ?? 0, before?.racePassAtMs ?? 0);
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 50);
+    const after = loadStorageCasCache(cachePath).endpoints[bindingKey];
+    assert.ok((after?.unsafeAtMs ?? 0) >= latestPass + 1);
+    assert.equal(after?.seqRecheckAtMs ?? 0, 0);
   });
 
   it("fail closed on corrupt cache until recheck clears it", () => {

@@ -14,11 +14,6 @@ import {
   storageCasCacheLastGoodPath,
   storageCasProbeBindingKey,
 } from "../../lib/storage/storage-cas-cache.mjs";
-import {
-  runStorageDoctorCasRace,
-  runStorageDoctorRecheckCas,
-  runStorageDoctorResetCasCache,
-} from "../../lib/storage/storage-doctor-cas.mjs";
 import { createS3StorageAdapter } from "../../lib/storage/s3-adapter.mjs";
 import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
 
@@ -40,89 +35,154 @@ function resolveS3AdapterTestConfigFromEnv(env = process.env) {
 }
 
 /**
+ * @param {string} homeDir
+ * @param {string} prefix
+ */
+function writeS3ConfigInHome(homeDir, prefix) {
+  assert.ok(s3Config);
+  const config = {
+    storage: {
+      backend: "s3",
+      s3: {
+        bucket: s3Config.bucket,
+        prefix,
+        region: s3Config.region,
+        endpoint: s3Config.endpoint,
+      },
+    },
+  };
+  const dir = path.join(homeDir, ".infinitecontext");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dir, "config.json"), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  return config;
+}
+
+/**
+ * @param {string} homeDir
+ * @param {string[]} doctorArgs
+ */
+async function runStorageDoctorCli(homeDir, doctorArgs) {
+  const prevHome = process.env.HOME;
+  process.env.HOME = homeDir;
+  /** @type {string[]} */
+  const lines = [];
+  const origLog = console.log;
+  console.log = (msg) => {
+    lines.push(String(msg));
+    origLog(msg);
+  };
+  try {
+    const { runStorageCli } = await import("../../src/cli/storage-cli.mjs");
+    await runStorageCli("doctor", doctorArgs);
+    const last = lines.filter((line) => line.trim()).pop();
+    assert.ok(last, "expected JSON on stdout from storage doctor CLI");
+    return JSON.parse(last);
+  } finally {
+    console.log = origLog;
+    process.env.HOME = prevHome;
+  }
+}
+
+/**
  * @param {(homeDir: string) => Promise<void>} fn
  */
 async function withIsolatedInfinitecontextHome(fn) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-home-"));
-  const prevHome = process.env.HOME;
-  process.env.HOME = homeDir;
-  fs.mkdirSync(path.join(homeDir, ".infinitecontext"), { recursive: true, mode: 0o700 });
   try {
     await fn(homeDir);
   } finally {
-    process.env.HOME = prevHome;
+    /* home is ephemeral */
   }
 }
 
 const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
 
-(s3Config ? describe : describe.skip)("storage doctor CAS (MinIO / CI)", () => {
-  it("doctor --recheck-cas clears cas_unsafe on a healthy backend", async () => {
+(s3Config ? describe : describe.skip)("storage doctor CAS CLI (MinIO / CI)", () => {
+  it("CLI doctor --recheck-cas clears cas_unsafe on a healthy backend", async () => {
     assert.ok(s3Config);
-    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-doc-recheck-")), "cache.json");
-    const config = {
-      storage: {
-        backend: "s3",
-        s3: {
-          bucket: s3Config.bucket,
-          prefix: `${s3Config.prefix}/doctor-recheck-${Date.now()}`,
-          region: s3Config.region,
-          endpoint: s3Config.endpoint,
-        },
-      },
-    };
-    const bindingKey = storageCasProbeBindingKey({
-      endpoint: s3Config.endpoint,
-      bucket: s3Config.bucket,
-      prefix: config.storage.s3.prefix,
+    await withIsolatedInfinitecontextHome(async (homeDir) => {
+      const prefix = `${s3Config.prefix}/cli-recheck-${Date.now()}`;
+      const prevHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      writeS3ConfigInHome(homeDir, prefix);
+      const bindingKey = storageCasProbeBindingKey({
+        endpoint: s3Config.endpoint,
+        bucket: s3Config.bucket,
+        prefix,
+      });
+      markStorageCasUnsafePersisted(undefined, bindingKey, "test_sticky", Date.now());
+      const result = await runStorageDoctorCli(homeDir, ["--recheck-cas"]);
+      assert.equal(result.ok, true);
+      const cache = loadStorageCasCache(storageCasCacheFilePath());
+      assert.equal(cache.endpoints[bindingKey]?.casUnsafe, false);
+      assert.equal(cache.endpoints[bindingKey]?.crossDeviceCas, true);
+      process.env.HOME = prevHome;
     });
-    markStorageCasUnsafePersisted(cachePath, bindingKey, "test_sticky", Date.now());
-    const result = await runStorageDoctorRecheckCas({ config, env: process.env, cachePath });
-    assert.equal(result.ok, true);
-    const cache = loadStorageCasCache(cachePath);
-    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, false);
-    assert.equal(cache.endpoints[bindingKey]?.crossDeviceCas, true);
   });
 
-  it("doctor --cas-race on a never-probed backend does not persist cas_unsafe", async () => {
+  it("CLI doctor --cas-race on a never-probed backend does not persist cas_unsafe", async () => {
     assert.ok(s3Config);
-    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-doc-race-")), "cache.json");
-    const config = {
-      storage: {
-        backend: "s3",
-        s3: {
-          bucket: s3Config.bucket,
-          prefix: `${s3Config.prefix}/doctor-race-${Date.now()}`,
-          region: s3Config.region,
-          endpoint: s3Config.endpoint,
-        },
-      },
-    };
-    const bindingKey = storageCasProbeBindingKey({
-      endpoint: s3Config.endpoint,
-      bucket: s3Config.bucket,
-      prefix: config.storage.s3.prefix,
+    await withIsolatedInfinitecontextHome(async (homeDir) => {
+      const prefix = `${s3Config.prefix}/cli-race-${Date.now()}`;
+      const prevHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      writeS3ConfigInHome(homeDir, prefix);
+      const bindingKey = storageCasProbeBindingKey({
+        endpoint: s3Config.endpoint,
+        bucket: s3Config.bucket,
+        prefix,
+      });
+      const result = await runStorageDoctorCli(homeDir, ["--cas-race=20"]);
+      console.log(
+        `IC_CLI_CAS_RACE: ok=${result.ok} inconclusive=${result.inconclusive} persisted=${result.persistedUnsafe}`,
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.persistedUnsafe, false);
+      const cache = loadStorageCasCache(storageCasCacheFilePath());
+      assert.equal(cache.endpoints[bindingKey]?.casUnsafe, undefined);
+      process.env.HOME = prevHome;
     });
-    const result = await runStorageDoctorCasRace({
-      config,
-      env: process.env,
-      cachePath,
-      rounds: 20,
-    });
-    console.log(`IC_DOCTOR_CAS_RACE: ok=${result.ok} inconclusive=${result.inconclusive} persisted=${result.persistedUnsafe}`);
-    assert.equal(result.ok, true);
-    assert.equal(result.persistedUnsafe, false);
-    const cache = loadStorageCasCache(cachePath);
-    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, undefined);
   });
 
-  it("default cachePath: corrupt cache keeps unrechecked init fail-closed (C1)", async () => {
+  it("CLI doctor --reset-cas-cache bumps marker and preserves race unsafe flags", async () => {
     assert.ok(s3Config);
-    await withIsolatedInfinitecontextHome(async () => {
+    await withIsolatedInfinitecontextHome(async (homeDir) => {
+      const prefix = `${s3Config.prefix}/cli-reset-${Date.now()}`;
+      writeS3ConfigInHome(homeDir, prefix);
+      const bindingKey = storageCasProbeBindingKey({
+        endpoint: s3Config.endpoint,
+        bucket: s3Config.bucket,
+        prefix,
+      });
+      const prevHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      markStorageCasUnsafePersisted(undefined, bindingKey, "race_double_win", Date.now());
       const defaultCachePath = storageCasCacheFilePath();
-      const prefixA = `${s3Config.prefix}/cas-default-a-${Date.now()}`;
-      const prefixB = `${s3Config.prefix}/cas-default-b-${Date.now()}`;
+      const beforeMarker = readStorageCasCorruptionMarker(defaultCachePath)?.corruptedAtMs ?? 0;
+
+      const result = await runStorageDoctorCli(homeDir, ["--reset-cas-cache"]);
+      assert.equal(result.ok, true);
+
+      const afterMarker = readStorageCasCorruptionMarker(defaultCachePath)?.corruptedAtMs ?? 0;
+      assert.ok(afterMarker >= beforeMarker);
+      assert.ok(afterMarker > 0);
+      const cache = loadStorageCasCache(defaultCachePath);
+      assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
+      assert.equal(cache.endpoints[bindingKey]?.flagKind, "race_double_win");
+      assert.equal(cache.endpoints[bindingKey]?.seqRecheckAtMs ?? 0, 0);
+      assert.equal(cache.endpoints[bindingKey]?.racePassAtMs ?? 0, 0);
+      assert.equal(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)), false);
+      process.env.HOME = prevHome;
+    });
+  });
+
+  it("corruption without last-good: race flag lost; CLI recheck + cas-race restores CAS", async () => {
+    assert.ok(s3Config);
+    await withIsolatedInfinitecontextHome(async (homeDir) => {
+      const prefixA = `${s3Config.prefix}/cli-nolg-a-${Date.now()}`;
+      const prefixB = `${s3Config.prefix}/cli-nolg-b-${Date.now()}`;
+      writeS3ConfigInHome(homeDir, prefixA);
       const bindingA = storageCasProbeBindingKey({
         endpoint: s3Config.endpoint,
         bucket: s3Config.bucket,
@@ -134,6 +194,106 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
         prefix: prefixB,
       });
 
+      const prevHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      const defaultCachePath = storageCasCacheFilePath();
+
+      for (const prefix of [prefixA, prefixB]) {
+        const adapter = createS3StorageAdapter({
+          bucket: s3Config.bucket,
+          prefix,
+          region: s3Config.region,
+          endpoint: s3Config.endpoint,
+        });
+        await adapter.init();
+        await adapter.close();
+      }
+
+      markStorageCasUnsafePersisted(undefined, bindingB, "race_double_win", Date.now());
+      assert.ok(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)));
+      fs.unlinkSync(storageCasCacheLastGoodPath(defaultCachePath));
+      fs.truncateSync(defaultCachePath, 8);
+
+      let cache = loadStorageCasCache(defaultCachePath);
+      attachStorageCasCorruptionContextForRead(cache, defaultCachePath);
+      assert.equal(cache.salvageUnavailable, true);
+      assert.equal(cache.endpoints[bindingB], undefined);
+      assert.equal(getStorageCasCacheRecord(cache, bindingB, Date.now())?.unsafe, true);
+
+      await runStorageDoctorCli(homeDir, ["--recheck-cas"]);
+      cache = loadStorageCasCache(defaultCachePath);
+      attachStorageCasCorruptionContextForRead(cache, defaultCachePath);
+      assert.equal(getStorageCasCacheRecord(cache, bindingA, Date.now())?.crossDeviceCas, false);
+
+      let probeCalls = 0;
+      const adapterB = createS3StorageAdapter({
+        bucket: s3Config.bucket,
+        prefix: prefixB,
+        region: s3Config.region,
+        endpoint: s3Config.endpoint,
+        casProbe: async () => {
+          probeCalls += 1;
+          return true;
+        },
+      });
+      await adapterB.init();
+      assert.equal(probeCalls, 0);
+      assert.equal(adapterB.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), false);
+      await adapterB.close();
+
+      writeS3ConfigInHome(homeDir, prefixB);
+      await runStorageDoctorCli(homeDir, ["--recheck-cas"]);
+      await runStorageDoctorCli(homeDir, ["--cas-race=20"]);
+
+      const adapterB2 = createS3StorageAdapter({
+        bucket: s3Config.bucket,
+        prefix: prefixB,
+        region: s3Config.region,
+        endpoint: s3Config.endpoint,
+        casProbe: async () => {
+          throw new Error("probe should not run after doctor recovery");
+        },
+      });
+      await adapterB2.init();
+      assert.equal(adapterB2.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
+      await adapterB2.close();
+
+      writeS3ConfigInHome(homeDir, prefixA);
+      await runStorageDoctorCli(homeDir, ["--recheck-cas"]);
+      await runStorageDoctorCli(homeDir, ["--cas-race=20"]);
+      const adapterA = createS3StorageAdapter({
+        bucket: s3Config.bucket,
+        prefix: prefixA,
+        region: s3Config.region,
+        endpoint: s3Config.endpoint,
+        casProbe: async () => {
+          throw new Error("probe should not run after doctor recovery");
+        },
+      });
+      await adapterA.init();
+      assert.equal(adapterA.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
+      await adapterA.close();
+
+      process.env.HOME = prevHome;
+    });
+  });
+
+  it("default cachePath: corrupt cache keeps unrechecked init fail-closed", async () => {
+    assert.ok(s3Config);
+    await withIsolatedInfinitecontextHome(async (homeDir) => {
+      const prefixA = `${s3Config.prefix}/cas-default-a-${Date.now()}`;
+      const prefixB = `${s3Config.prefix}/cas-default-b-${Date.now()}`;
+      writeS3ConfigInHome(homeDir, prefixA);
+      const bindingB = storageCasProbeBindingKey({
+        endpoint: s3Config.endpoint,
+        bucket: s3Config.bucket,
+        prefix: prefixB,
+      });
+
+      const prevHome = process.env.HOME;
+      process.env.HOME = homeDir;
+      const defaultCachePath = storageCasCacheFilePath();
+
       const adapterA = createS3StorageAdapter({
         bucket: s3Config.bucket,
         prefix: prefixA,
@@ -141,11 +301,9 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
         endpoint: s3Config.endpoint,
       });
       await adapterA.init();
-      assert.equal(adapterA.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
       await adapterA.close();
 
       markStorageCasUnsafePersisted(undefined, bindingB, "race_double_win", Date.now());
-      assert.ok(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)));
       fs.unlinkSync(storageCasCacheLastGoodPath(defaultCachePath));
       fs.truncateSync(defaultCachePath, 8);
 
@@ -165,120 +323,16 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
       assert.equal(adapterB.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), false);
       await adapterB.close();
 
-      const configA = {
-        storage: {
-          backend: "s3",
-          s3: {
-            bucket: s3Config.bucket,
-            prefix: prefixA,
-            region: s3Config.region,
-            endpoint: s3Config.endpoint,
-          },
-        },
-      };
-      await runStorageDoctorRecheckCas({ config: configA, env: process.env });
-
-      const adapterA2 = createS3StorageAdapter({
-        bucket: s3Config.bucket,
-        prefix: prefixA,
-        region: s3Config.region,
-        endpoint: s3Config.endpoint,
-        casProbe: async () => {
-          throw new Error("probe should not run after doctor recheck");
-        },
-      });
-      await adapterA2.init();
-      assert.equal(adapterA2.capabilities.has(STORAGE_CAPABILITIES.crossDeviceCas), true);
-      await adapterA2.close();
+      await runStorageDoctorCli(homeDir, ["--recheck-cas"]);
+      await runStorageDoctorCli(homeDir, ["--cas-race=20"]);
 
       const cache = loadStorageCasCache(defaultCachePath);
       attachStorageCasCorruptionContextForRead(cache, defaultCachePath);
-      const corruptedAtMs = readStorageCasCorruptionMarker(defaultCachePath)?.corruptedAtMs ?? 0;
-      assert.ok(corruptedAtMs > 0);
       const viewB = getStorageCasCacheRecord(cache, bindingB, Date.now());
       assert.equal(viewB?.crossDeviceCas, false);
       assert.equal(viewB?.unsafe, true);
-      assert.equal(cache.endpoints[bindingA]?.crossDeviceCas, true);
-    });
-  });
 
-  it("default cachePath: doctor recheck after corruption without last-good (real paths)", async () => {
-    assert.ok(s3Config);
-    await withIsolatedInfinitecontextHome(async () => {
-      const defaultCachePath = storageCasCacheFilePath();
-      const prefixA = `${s3Config.prefix}/cas-nolg-a-${Date.now()}`;
-      const prefixC = `${s3Config.prefix}/cas-nolg-c-${Date.now()}`;
-      const bindingA = storageCasProbeBindingKey({
-        endpoint: s3Config.endpoint,
-        bucket: s3Config.bucket,
-        prefix: prefixA,
-      });
-      const bindingC = storageCasProbeBindingKey({
-        endpoint: s3Config.endpoint,
-        bucket: s3Config.bucket,
-        prefix: prefixC,
-      });
-
-      for (const prefix of [prefixA, prefixC]) {
-        const adapter = createS3StorageAdapter({
-          bucket: s3Config.bucket,
-          prefix,
-          region: s3Config.region,
-          endpoint: s3Config.endpoint,
-        });
-        await adapter.init();
-        await adapter.close();
-      }
-
-      fs.unlinkSync(storageCasCacheLastGoodPath(defaultCachePath));
-      fs.truncateSync(defaultCachePath, 8);
-
-      const configA = {
-        storage: {
-          backend: "s3",
-          s3: {
-            bucket: s3Config.bucket,
-            prefix: prefixA,
-            region: s3Config.region,
-            endpoint: s3Config.endpoint,
-          },
-        },
-      };
-      await runStorageDoctorRecheckCas({ config: configA, env: process.env });
-
-      const cache = loadStorageCasCache(defaultCachePath);
-      attachStorageCasCorruptionContextForRead(cache, defaultCachePath);
-      const viewC = getStorageCasCacheRecord(cache, bindingC, Date.now());
-      assert.equal(cache.endpoints[bindingA]?.crossDeviceCas, true);
-      assert.equal(viewC?.crossDeviceCas, false);
-      assert.equal(viewC?.unsafe, true);
-    });
-  });
-
-  it("--reset-cas-cache bumps marker and preserves race unsafe flags (C3)", async () => {
-    assert.ok(s3Config);
-    await withIsolatedInfinitecontextHome(async () => {
-      const defaultCachePath = storageCasCacheFilePath();
-      const prefix = `${s3Config.prefix}/cas-reset-${Date.now()}`;
-      const bindingKey = storageCasProbeBindingKey({
-        endpoint: s3Config.endpoint,
-        bucket: s3Config.bucket,
-        prefix,
-      });
-      markStorageCasUnsafePersisted(undefined, bindingKey, "race_double_win", Date.now());
-      const beforeMarker = readStorageCasCorruptionMarker(defaultCachePath)?.corruptedAtMs ?? 0;
-
-      runStorageDoctorResetCasCache({});
-
-      const afterMarker = readStorageCasCorruptionMarker(defaultCachePath)?.corruptedAtMs ?? 0;
-      assert.ok(afterMarker >= beforeMarker);
-      assert.ok(afterMarker > 0);
-      const cache = loadStorageCasCache(defaultCachePath);
-      assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
-      assert.equal(cache.endpoints[bindingKey]?.flagKind, "race_double_win");
-      assert.equal(cache.endpoints[bindingKey]?.seqRecheckAtMs ?? 0, 0);
-      assert.equal(cache.endpoints[bindingKey]?.racePassAtMs ?? 0, 0);
-      assert.equal(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)), false);
+      process.env.HOME = prevHome;
     });
   });
 });
