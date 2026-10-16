@@ -1105,12 +1105,12 @@ export function resetStorageCasProbeCache(cachePath) {
         casUnsafe: Boolean(norm?.casUnsafe || norm?.flagKind),
       });
     }
-    try {
-      fs.unlinkSync(storageCasCacheLastGoodPath(resolved));
-    } catch {
-      /* ignore */
-    }
   });
+  try {
+    fs.unlinkSync(storageCasCacheLastGoodPath(resolved));
+  } catch {
+    /* ignore — reset must not leave a last-good snapshot after save */
+  }
   sweepStaleCasCacheArtifacts(resolved);
 }
 
