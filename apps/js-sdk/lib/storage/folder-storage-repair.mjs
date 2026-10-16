@@ -134,6 +134,12 @@ export async function verifyFolderDeviceLogsForManifest(ctx, manifest) {
  * @param {{ dryRun?: boolean }} [options]
  */
 export async function repairFolderObjectStoreVault(ctx, options = {}) {
+  try {
+    const { sweepStaleCasProbeObjects } = await import("./storage-cas-probe-sweep.mjs");
+    await sweepStaleCasProbeObjects(ctx.adapter);
+  } catch {
+    /* best-effort */
+  }
   const folderAdapter = /** @type {{ rootDir?: string }} */ (ctx.adapter);
   const rootDir = folderAdapter.rootDir;
   if (!rootDir) {

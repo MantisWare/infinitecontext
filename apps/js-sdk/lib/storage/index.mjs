@@ -31,6 +31,9 @@ export {
   defaultLocalObjectStoreRootDir,
   resolveLocalObjectStoreRootDir,
 } from "./local-object-store.mjs";
+export { S3_OBJECT_STORE_BACKEND_ID, resolveS3ObjectStoreConfig } from "./s3-config.mjs";
+export { createS3ObjectStore } from "./s3-object-store.mjs";
+export { createS3StorageAdapter } from "./s3-adapter.mjs";
 export {
   IC_LAYOUT_DIR,
   IC_LAYOUT_LOG_AAD_VERSION,

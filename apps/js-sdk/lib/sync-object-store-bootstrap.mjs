@@ -4,7 +4,8 @@ import { getUnlockedDek } from "./vault-session.mjs";
 import { readConfigFile, writeConfigFile, resolveBaseUrl } from "./client-config.mjs";
 import { createFolderObjectStore } from "./storage/folder-object-store.mjs";
 import { createLocalObjectStore } from "./storage/local-object-store.mjs";
-import { isFolderObjectStoreBackend } from "./sync-storage-backend.mjs";
+import { createS3ObjectStore } from "./storage/s3-object-store.mjs";
+import { isFolderObjectStoreBackend, isS3ObjectStoreBackend } from "./sync-storage-backend.mjs";
 import { setDefaultSyncTransport } from "./sync-transport.mjs";
 import { isHostedStorageBackend } from "./sync-storage-backend.mjs";
 import { resolveDaemonDbPathFromEnv } from "./object-store-sync-runtime.mjs";
@@ -56,7 +57,9 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
 
   const storeFactory = isFolderObjectStoreBackend(config)
     ? createFolderObjectStore
-    : createLocalObjectStore;
+    : isS3ObjectStoreBackend(config)
+      ? createS3ObjectStore
+      : createLocalObjectStore;
   openLocalStore = await storeFactory({
     dek,
     deviceUuid,
@@ -64,6 +67,8 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
     env: options.env,
     sync: { mode, persist: true, dbPath },
     layoutPrefix: "accounts/local",
+    casInitMode: options.casInitMode ?? "read-write",
+    casCachePath: options.casCachePath,
   });
   setDefaultSyncTransport(openLocalStore.transport);
   return openLocalStore;

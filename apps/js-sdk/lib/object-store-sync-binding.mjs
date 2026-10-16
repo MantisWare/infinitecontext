@@ -5,6 +5,7 @@ import { readConfigFile } from "./client-config.mjs";
 import { resolveFolderObjectStoreRootDir } from "./storage/folder-object-store.mjs";
 import { resolveLocalObjectStoreRootDir } from "./storage/local-object-store.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./storage/folder-adapter.mjs";
+import { resolveS3ObjectStoreConfig, S3_OBJECT_STORE_BACKEND_ID } from "./storage/s3-config.mjs";
 import { resolveStorageBackendId } from "./sync-storage-backend.mjs";
 
 /**
@@ -46,6 +47,13 @@ export function resolveObjectStoreSyncBindingKey(
   options = {},
 ) {
   const backendId = options.backendId ?? resolveStorageBackendId(config);
+  if (backendId === S3_OBJECT_STORE_BACKEND_ID) {
+    const s3 = resolveS3ObjectStoreConfig(config, env);
+    const prefix = String(s3.prefix ?? "")
+      .trim()
+      .replace(/^\/+|\/+$/g, "");
+    return `${S3_OBJECT_STORE_BACKEND_ID}:${s3.bucket}:${prefix}`;
+  }
   if (options.rootDir) {
     return `${backendId}:${resolveStorageRootRealpathForBinding(options.rootDir)}`;
   }

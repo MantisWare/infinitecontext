@@ -39,6 +39,8 @@ import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs
 import { deriveDevH, logSegmentRelativePath } from "../../lib/storage/layout.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
 import { StorageError } from "../../lib/storage/errors.mjs";
+import { loadFolderMergedManifest } from "../../lib/storage/storage-manifest-folder.mjs";
+import { computeFolderStoreIdentity } from "../../lib/storage/storage-vault-trust-audit.mjs";
 import { assertLocalObjectStoreRootNotSynced } from "../../lib/storage/sync-root-guard.mjs";
 const DEK = new Uint8Array(32).fill(61);
 const DEVICE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -258,6 +260,112 @@ describe("Phase 4.5 storage CLI (#9)", () => {
         cliStatePath: syncStatePath,
       });
       assert.equal(again.phase, "verified");
+    });
+
+    it("records destStoreIdentity mid-copy before verified (multi-gen device tree)", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-id-mid-src-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-id-mid-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedMultiGenLocalVault(localRoot);
+      const sk = `${scopeKey}-mid-id`;
+      const partial = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 21,
+      });
+      assert.equal(partial.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state?.destStoreIdentity);
+      assert.match(String(state.destStoreIdentity), /^0:/);
+    });
+
+    it("N4: aborts when destination is swapped mid-copy after destStoreIdentity is recorded", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-src-"));
+      const localRootB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-srcb-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap2-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedMultiGenLocalVault(localRoot);
+      await seedLocalVault(localRootB, DEK, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      const sk = `${scopeKey}-swap-after-id`;
+      const first = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 21,
+      });
+      assert.equal(first.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state?.destStoreIdentity);
+
+      await assert.rejects(
+        () =>
+          runStorageMigrateLocalToFolder({
+            scopeKey: sk,
+            dek: DEK,
+            layoutPrefix: PREFIX,
+            sourceRoot: localRoot,
+            destRoot: folderRoot,
+            deviceUuid: DEVICE_A,
+            cliStatePath: syncStatePath,
+            testAfterDestIdentityCheck: () => {
+              copyObjectsTree(localRootB, folderRoot);
+            },
+          }),
+        (err) => err instanceof StorageError && /identity changed/i.test(String(err.message)),
+      );
+      const after = loadStorageMigrateState(sk);
+      assert.equal(after?.copiedRelativePaths?.length, state.copiedRelativePaths?.length);
+    });
+
+    it("N4: aborts with 0 files written when destination is swapped mid-copy", async () => {
+      const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-src-"));
+      const localRootB = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-srcb-"));
+      const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-swap-d-"));
+      initFolderStorageRoot(folderRoot);
+      const { syncStatePath } = await seedLocalVault(localRoot);
+      await seedLocalVault(localRootB, DEK, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      const sk = `${scopeKey}-swap-mid`;
+      const first = await runStorageMigrateLocalToFolder({
+        scopeKey: sk,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        sourceRoot: localRoot,
+        destRoot: folderRoot,
+        deviceUuid: DEVICE_A,
+        cliStatePath: syncStatePath,
+        maxCopyFiles: 1,
+      });
+      assert.equal(first.phase, "copying");
+      const state = loadStorageMigrateState(sk);
+      assert.ok(state?.copiedRelativePaths?.length);
+
+      await assert.rejects(
+        () =>
+          runStorageMigrateLocalToFolder({
+            scopeKey: sk,
+            dek: DEK,
+            layoutPrefix: PREFIX,
+            sourceRoot: localRoot,
+            destRoot: folderRoot,
+            deviceUuid: DEVICE_A,
+            cliStatePath: syncStatePath,
+            testAfterDestIdentityCheck: () => {
+              copyObjectsTree(localRootB, folderRoot);
+            },
+          }),
+        (err) => err instanceof StorageError && /identity changed/i.test(String(err.message)),
+      );
+      const after = loadStorageMigrateState(sk);
+      assert.equal(after?.copiedRelativePaths?.length, state.copiedRelativePaths?.length);
     });
 
     it("refuses resume when destination vault identity changed", async () => {
@@ -705,6 +813,8 @@ describe("Phase 4.5 storage CLI (#9)", () => {
   describe("storage CLI daemon.db trust wiring (B1)", () => {
     /** @type {string | undefined} */
     let priorDbFileEnv;
+    /** @type {string | undefined} */
+    let priorHomeEnv;
 
     afterEach(() => {
       clearStorageCliDepsForTests();
@@ -713,7 +823,17 @@ describe("Phase 4.5 storage CLI (#9)", () => {
       } else {
         process.env.INFINITECONTEXT_DB_FILE = priorDbFileEnv;
       }
+      if (priorHomeEnv === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = priorHomeEnv;
+      }
     });
+
+    function isolateInfinitecontextHomeForCli() {
+      priorHomeEnv = process.env.HOME;
+      process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-home-"));
+    }
 
     it("real CLI doctor catches folder rollback using daemon.db trust only", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
@@ -743,6 +863,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
 
     it("real CLI migrate --apply-config succeeds after createLocalObjectStore open", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      isolateInfinitecontextHomeForCli();
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-local-"));
       const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-mig-folder-"));
       initFolderStorageRoot(folderRoot);
@@ -786,6 +907,7 @@ describe("Phase 4.5 storage CLI (#9)", () => {
 
     it("real CLI doctor does not report heads_unverified when only daemon.db has trusted heads", async () => {
       priorDbFileEnv = process.env.INFINITECONTEXT_DB_FILE;
+      isolateInfinitecontextHomeForCli();
       const daemonDbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-daemon-db-")), "daemon.db");
       process.env.INFINITECONTEXT_DB_FILE = daemonDbPath;
       const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-cli-daemon-ok-"));
@@ -892,7 +1014,7 @@ async function inflateDaemonTrustAheadOfStore(daemonDbPath, storeRoot, backendId
   }
 }
 
-async function seedLocalVault(localRoot, dek = DEK) {
+async function seedLocalVault(localRoot, dek = DEK, deviceUuid = DEVICE_A) {
   const adapter = createFilesystemStorageAdapter({ rootDir: localRoot });
   await adapter.init();
   const localState = createCliFileObjectStoreLocalState(
@@ -903,8 +1025,8 @@ async function seedLocalVault(localRoot, dek = DEK) {
       adapter,
       dek,
       layoutPrefix: PREFIX,
-      selfDevH: deriveDevH(dek, DEVICE_A),
-      deviceUuid: DEVICE_A,
+      selfDevH: deriveDevH(dek, deviceUuid),
+      deviceUuid,
       localState,
     },
     [
@@ -917,6 +1039,34 @@ async function seedLocalVault(localRoot, dek = DEK) {
   );
   await adapter.close();
   return { syncStatePath: path.join(localRoot, "sync-state.json") };
+}
+
+async function seedMultiGenLocalVault(localRoot, pushCount = 8) {
+  const adapter = createFilesystemStorageAdapter({ rootDir: localRoot });
+  await adapter.init();
+  const syncStatePath = path.join(localRoot, "sync-state.json");
+  const localState = createCliFileObjectStoreLocalState(syncStatePath);
+  for (let i = 0; i < pushCount; i += 1) {
+    await objectStorePushSyncMutations(
+      {
+        adapter,
+        dek: DEK,
+        layoutPrefix: PREFIX,
+        selfDevH: deriveDevH(DEK, DEVICE_A),
+        deviceUuid: DEVICE_A,
+        localState,
+      },
+      [
+        {
+          client_id: generateClientNodeId(),
+          op: "context_create",
+          payload: { metadata: { tag: `migrate-seed-${i}` } },
+        },
+      ],
+    );
+  }
+  await adapter.close();
+  return { syncStatePath };
 }
 
 /**
@@ -952,4 +1102,37 @@ function listObjectFiles(storeRoot) {
   };
   walk(objects);
   return out;
+}
+
+/** @param {string} storeRoot @param {string} layoutPrefix */
+/** @param {string} sourceRoot @param {string} destRoot */
+function copyObjectsTree(sourceRoot, destRoot) {
+  const src = path.join(sourceRoot, "objects");
+  const dst = path.join(destRoot, "objects");
+  const walk = (relDir) => {
+    const srcDir = path.join(src, relDir);
+    for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      const rel = path.join(relDir, ent.name);
+      const srcPath = path.join(src, rel);
+      const dstPath = path.join(dst, rel);
+      if (ent.isDirectory()) {
+        fs.mkdirSync(dstPath, { recursive: true, mode: 0o700 });
+        walk(rel);
+      } else if (ent.isFile()) {
+        fs.mkdirSync(path.dirname(dstPath), { recursive: true, mode: 0o700 });
+        fs.copyFileSync(srcPath, dstPath);
+      }
+    }
+  };
+  walk("");
+}
+
+function findManifestRelativePath(storeRoot, layoutPrefix) {
+  const suffix = `objects/${layoutPrefix}/ic-v1/manifest.json.enc`;
+  const direct = path.join(storeRoot, suffix);
+  if (fs.existsSync(direct)) {
+    return suffix;
+  }
+  const hit = listObjectFiles(storeRoot).find((p) => p.endsWith(`${path.sep}manifest.json.enc`));
+  return hit ? path.relative(storeRoot, hit) : null;
 }
