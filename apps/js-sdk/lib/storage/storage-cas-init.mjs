@@ -6,6 +6,7 @@ import {
   markStorageCasUnsafePersisted,
   recordStorageCasDoctorRecheckSuccess,
   recordStorageCasInitProbeSuccess,
+  resolveStorageCasCachePath,
 } from "./storage-cas-cache.mjs";
 import { sweepStaleCasProbeObjects } from "./storage-cas-probe-sweep.mjs";
 import { probeCrossDeviceCas } from "./storage-cas-probe.mjs";
@@ -53,10 +54,10 @@ export function crossDeviceCasCapabilitiesFromProbeResult(crossDeviceCas) {
 export async function resolveCrossDeviceCasForAdapterInit(adapter, options) {
   const mode = options.mode ?? "read-write";
   const nowMs = options.nowMs ?? Date.now();
-  const cachePath = options.cachePath;
+  const cachePath = resolveStorageCasCachePath(options.cachePath);
   const runBasicProbe = options.runBasicProbe ?? probeCrossDeviceCas;
-  const cache = loadStorageCasCache(cachePath ?? undefined);
-  attachStorageCasCorruptionContextForRead(cache, cachePath ?? undefined);
+  const cache = loadStorageCasCache(cachePath);
+  attachStorageCasCorruptionContextForRead(cache, cachePath);
   const cached = getStorageCasCacheRecord(cache, options.bindingKey, nowMs);
 
   if (cache.fileCorrupt || (cached && cached.unsafe)) {
@@ -124,14 +125,14 @@ export async function resolveCrossDeviceCasForAdapterInit(adapter, options) {
 export async function recheckStorageCasProbe(adapter, options) {
   const nowMs = options.nowMs ?? Date.now();
   const runBasicProbe = options.runBasicProbe ?? probeCrossDeviceCas;
-  const cachePath = options.cachePath;
+  const cachePath = resolveStorageCasCachePath(options.cachePath);
   await sweepStaleCasProbeObjects(adapter);
   const basicOk = await runBasicProbe(adapter);
   if (!basicOk) {
     markStorageCasUnsafePersisted(cachePath, options.bindingKey, "recheck_failed", nowMs);
     return { ok: false, crossDeviceCas: false };
   }
-  recordStorageCasDoctorRecheckSuccess(cachePath, options.bindingKey, nowMs);
+  recordStorageCasDoctorRecheckSuccess(cachePath, options.bindingKey);
   const crossDeviceCas = crossDeviceCasEnabledAfterDoctorRecheck(cachePath, options.bindingKey, nowMs);
   return { ok: true, crossDeviceCas };
 }

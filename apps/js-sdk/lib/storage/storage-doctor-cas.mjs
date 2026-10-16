@@ -40,7 +40,7 @@ export async function runStorageDoctorCasRace(options = {}) {
         persistedUnsafe: result.detail === "double_win",
       };
     }
-    recordStorageCasDoctorRaceSuccess(options.cachePath, bindingKey, Date.now());
+    recordStorageCasDoctorRaceSuccess(options.cachePath, bindingKey);
     return { bindingKey, ...result, rounds, inconclusive: false, persistedUnsafe: false };
   } finally {
     await session.close();

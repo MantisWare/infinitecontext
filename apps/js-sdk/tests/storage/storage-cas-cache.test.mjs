@@ -82,12 +82,12 @@ describe("storage CAS cache", () => {
     const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-race-doc-")), "cache.json");
     const bindingKey = "s3:test:bucket:p";
     markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 100);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, 200);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
     let cache = loadStorageCasCache(cachePath);
     assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
-    assert.equal(cache.endpoints[bindingKey]?.doctorSequentialRecheckOk, true);
-    assert.notEqual(cache.endpoints[bindingKey]?.doctorRaceRecheckOk, true);
-    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, 300);
+    assert.ok((cache.endpoints[bindingKey]?.seqRecheckAtMs ?? 0) > 0);
+    assert.equal(cache.endpoints[bindingKey]?.racePassAtMs ?? 0, 0);
+    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey);
     cache = loadStorageCasCache(cachePath);
     assert.equal(cache.endpoints[bindingKey]?.casUnsafe, false);
     assert.equal(cache.endpoints[bindingKey]?.crossDeviceCas, true);
@@ -125,7 +125,7 @@ describe("storage CAS cache", () => {
     const corruptView = loadStorageCasCache(cachePath);
     assert.equal(corruptView.fileCorrupt, true);
     assert.equal(corruptView.salvagedEndpoints?.[bindingB]?.unsafeReason, "race_double_win");
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA, now + 1);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA);
     const fixed = loadStorageCasCache(cachePath);
     assert.equal(fixed.endpoints[bindingA]?.crossDeviceCas, true);
     assert.equal(fixed.endpoints[bindingA]?.casUnsafe, false);

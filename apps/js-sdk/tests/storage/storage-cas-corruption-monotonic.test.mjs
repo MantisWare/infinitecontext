@@ -66,7 +66,7 @@ describe("storage CAS corruption monotonic recovery (blocker B)", () => {
       mergeSalvagedUnsafeOnce(cache.endpoints, salvagedSnapshot, corruptedAtMs);
       cache.salvageMergedForCorruptedAtMs = corruptedAtMs;
     });
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA, now + 10);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA);
     const cache = loadStorageCasCache(cachePath);
     cache.corruptedAtMs = readStorageCasCorruptionMarker(cachePath)?.corruptedAtMs ?? corruptedAtMs;
     assert.ok(readStorageCasCorruptionMarker(cachePath));
@@ -114,9 +114,9 @@ describe("storage CAS corruption monotonic recovery (blocker B)", () => {
     );
     fs.truncateSync(cachePath, 8);
     bumpStorageCasCorruptionMarker(cachePath);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA, now + 20);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingC, now + 30);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingB, now + 40);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingC);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingB);
     const cache = loadStorageCasCache(cachePath);
     cache.corruptedAtMs = readStorageCasCorruptionMarker(cachePath)?.corruptedAtMs ?? 0;
     for (const key of [bindingA, bindingB, bindingC]) {
@@ -146,7 +146,7 @@ describe("storage CAS corruption monotonic recovery (blocker B)", () => {
     );
     fs.truncateSync(cachePath, 6);
     bumpStorageCasCorruptionMarker(cachePath);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, now + 50);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
     for (let i = 0; i < 5; i += 1) {

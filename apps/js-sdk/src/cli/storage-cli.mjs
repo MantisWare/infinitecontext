@@ -49,7 +49,7 @@ Commands:
   doctor [--repair] [--dry-run]     Audit folder vault; optional quarantine repair
   doctor --cas-race[=N]             S3 only: optional conditional-write race probe (default 20 rounds)
   doctor --recheck-cas              S3 only: rerun basic CAS probe and clear cas_unsafe when it passes
-  doctor --reset-cas-cache          S3 only: wipe CAS probe cache, last-good, and corruption marker
+  doctor --reset-cas-cache          S3 only: fresh corruption marker; preserve unsafe flags; drop last-good
   migrate [--to <folder>] [--apply-config] [--reset]  Resumable local → folder copy + trust verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 

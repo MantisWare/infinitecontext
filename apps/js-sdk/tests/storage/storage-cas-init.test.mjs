@@ -66,7 +66,7 @@ describe("storage CAS init cache", () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();
     markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", Date.now());
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, Date.now() + 1);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
     const recheck = await recheckStorageCasProbe(adapter, {
       bindingKey,
       cachePath,
