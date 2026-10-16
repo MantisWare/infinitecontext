@@ -1,5 +1,8 @@
-import { storageCasProbeBindingKey } from "./storage-cas-cache.mjs";
-import { markStorageCasUnsafePersisted } from "./storage-cas-cache.mjs";
+import {
+  markStorageCasUnsafePersisted,
+  recordStorageCasDoctorRaceSuccess,
+  storageCasProbeBindingKey,
+} from "./storage-cas-cache.mjs";
 import { recheckStorageCasProbe } from "./storage-cas-init.mjs";
 import { probeCrossDeviceCasRace } from "./storage-cas-race-probe.mjs";
 import { sweepStaleCasProbeObjects } from "./storage-cas-probe-sweep.mjs";
@@ -36,6 +39,7 @@ export async function runStorageDoctorCasRace(options = {}) {
         persistedUnsafe: result.detail === "double_win",
       };
     }
+    recordStorageCasDoctorRaceSuccess(options.cachePath, bindingKey, Date.now());
     return { bindingKey, ...result, rounds, inconclusive: false, persistedUnsafe: false };
   } finally {
     await session.close();

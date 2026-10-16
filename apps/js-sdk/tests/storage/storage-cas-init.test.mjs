@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 import {
   loadStorageCasCache,
+  markStorageCasUnsafePersisted,
   storageCasProbeBindingKey,
 } from "../../lib/storage/storage-cas-cache.mjs";
 import {
@@ -35,6 +36,26 @@ describe("storage CAS init cache", () => {
     assert.equal(probeCalls, 0);
     assert.equal(resolved.crossDeviceCas, null);
     assert.equal(resolved.source, "unknown");
+    await adapter.close();
+  });
+
+  it("init probe success does not clear race_double_win unsafe", async () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-race-init2-")), "cache.json");
+    const bindingKey = "s3:mem:bucket:race";
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", Date.now());
+    const resolved = await resolveCrossDeviceCasForAdapterInit(adapter, {
+      bindingKey,
+      mode: "read-write",
+      cachePath,
+      runBasicProbe: async () => true,
+    });
+    assert.equal(resolved.crossDeviceCas, false);
+    assert.equal(resolved.source, "cas_unsafe");
+    const cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
+    assert.equal(cache.endpoints[bindingKey]?.unsafeReason, "race_double_win");
     await adapter.close();
   });
 

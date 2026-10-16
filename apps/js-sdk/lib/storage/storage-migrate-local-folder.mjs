@@ -102,6 +102,7 @@ function atomicCopySourceToDestinationPath(src, dest, destRoot) {
   let fd;
   try {
     assertMigrationDestWriteTargetSafe(destRoot, tmp);
+    assertRealpathUnderRoot(destDir, destRoot);
     fd = fs.openSync(
       tmp,
       fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
@@ -124,6 +125,7 @@ function atomicCopySourceToDestinationPath(src, dest, destRoot) {
     fs.closeSync(fd);
   }
   assertMigrationDestWriteTargetSafe(destRoot, tmp);
+  assertRealpathUnderRoot(tmp, destRoot);
   assertMigrationDestWriteTargetSafe(destRoot, dest);
   fs.renameSync(tmp, dest);
   try {
