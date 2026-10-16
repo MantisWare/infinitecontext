@@ -120,8 +120,9 @@ export function mergeStorageCasCacheRecords(prev, next, mergeOptions = {}) {
  * @param {{ allowClearUnsafe?: boolean }} [options]
  */
 export function mutateStorageCasCache(cachePath, mutator, options = {}) {
-  const lockPath = `${cachePath}.lock`;
-  fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
+  const resolvedPath = cachePath ?? storageCasCacheFilePath();
+  const lockPath = `${resolvedPath}.lock`;
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + 30_000;
   /** @type {number | undefined} */
   let lockFd;
@@ -140,7 +141,7 @@ export function mutateStorageCasCache(cachePath, mutator, options = {}) {
     throw new Error("Timed out waiting for storage CAS cache lock");
   }
   try {
-    const cache = loadStorageCasCache(cachePath);
+    const cache = loadStorageCasCache(resolvedPath);
     /** @type {Record<string, StorageCasCacheRecord>} */
     const prevSnapshot = { ...cache.endpoints };
     mutator(cache);
@@ -148,7 +149,7 @@ export function mutateStorageCasCache(cachePath, mutator, options = {}) {
       cache.endpoints[key] = mergeStorageCasCacheRecords(prevSnapshot[key], cache.endpoints[key], options);
     }
     delete cache.fileCorrupt;
-    saveStorageCasCache(cache, cachePath);
+    saveStorageCasCache(cache, resolvedPath);
   } finally {
     try {
       fs.closeSync(lockFd);
