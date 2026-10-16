@@ -135,7 +135,7 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
       });
       const result = await runStorageDoctorCli(homeDir, ["--cas-race=20"]);
       console.log(
-        `IC_CLI_CAS_RACE: ok=${result.ok} inconclusive=${result.inconclusive} persisted=${result.persistedUnsafe}`,
+        `IC_DOCTOR_CAS_RACE: ok=${result.ok} inconclusive=${result.inconclusive} persisted=${result.persistedUnsafe}`,
       );
       assert.equal(result.ok, true);
       assert.equal(result.persistedUnsafe, false);
