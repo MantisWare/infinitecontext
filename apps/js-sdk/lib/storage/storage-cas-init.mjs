@@ -1,4 +1,5 @@
 import {
+  attachStorageCasCorruptionContextForRead,
   crossDeviceCasEnabledAfterDoctorRecheck,
   getStorageCasCacheRecord,
   loadStorageCasCache,
@@ -55,6 +56,7 @@ export async function resolveCrossDeviceCasForAdapterInit(adapter, options) {
   const cachePath = options.cachePath;
   const runBasicProbe = options.runBasicProbe ?? probeCrossDeviceCas;
   const cache = loadStorageCasCache(cachePath ?? undefined);
+  attachStorageCasCorruptionContextForRead(cache, cachePath ?? undefined);
   const cached = getStorageCasCacheRecord(cache, options.bindingKey, nowMs);
 
   if (cache.fileCorrupt || (cached && cached.unsafe)) {

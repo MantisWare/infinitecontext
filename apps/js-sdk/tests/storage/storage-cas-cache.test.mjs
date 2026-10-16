@@ -12,6 +12,7 @@ import {
   mergeStorageCasCacheRecords,
   mutateStorageCasCache,
   normalizeStorageCasCacheRecordOnRead,
+  readStorageCasCorruptionMarker,
   recordStorageCasDoctorRecheckSuccess,
   recordStorageCasDoctorRaceSuccess,
   recordStorageCasInitProbeSuccess,
@@ -129,8 +130,8 @@ describe("storage CAS cache", () => {
     assert.equal(fixed.endpoints[bindingA]?.crossDeviceCas, true);
     assert.equal(fixed.endpoints[bindingA]?.casUnsafe, false);
     assert.equal(fixed.endpoints[bindingB]?.casUnsafe, true);
-    assert.ok(fixed.endpoints[bindingB]?.failClosedCorruptGen);
-    assert.equal(fixed.corruptGeneration, fixed.endpoints[bindingB]?.failClosedCorruptGen);
+    assert.equal(fixed.endpoints[bindingB]?.unsafeReason, "race_double_win");
+    fixed.corruptedAtMs = readStorageCasCorruptionMarker(cachePath)?.corruptedAtMs ?? 0;
     const viewB = getStorageCasCacheRecord(fixed, bindingB, now + 1);
     assert.equal(viewB?.unsafe, true);
     assert.equal(viewB?.crossDeviceCas, false);

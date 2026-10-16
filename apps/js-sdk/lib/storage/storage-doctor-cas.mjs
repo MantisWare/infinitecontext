@@ -1,6 +1,7 @@
 import {
   markStorageCasUnsafePersisted,
   recordStorageCasDoctorRaceSuccess,
+  resetStorageCasProbeCache,
   storageCasProbeBindingKey,
 } from "./storage-cas-cache.mjs";
 import { recheckStorageCasProbe } from "./storage-cas-init.mjs";
@@ -44,6 +45,17 @@ export async function runStorageDoctorCasRace(options = {}) {
   } finally {
     await session.close();
   }
+}
+
+/**
+ * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string }} options
+ */
+/**
+ * @param {{ cachePath?: string }} [options]
+ */
+export function runStorageDoctorResetCasCache(options = {}) {
+  resetStorageCasProbeCache(options.cachePath);
+  return { ok: true, reset: true };
 }
 
 /**

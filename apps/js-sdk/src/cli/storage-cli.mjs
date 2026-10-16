@@ -49,6 +49,7 @@ Commands:
   doctor [--repair] [--dry-run]     Audit folder vault; optional quarantine repair
   doctor --cas-race[=N]             S3 only: optional conditional-write race probe (default 20 rounds)
   doctor --recheck-cas              S3 only: rerun basic CAS probe and clear cas_unsafe when it passes
+  doctor --reset-cas-cache          S3 only: wipe CAS probe cache, last-good, and corruption marker
   migrate [--to <folder>] [--apply-config] [--reset]  Resumable local → folder copy + trust verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 
@@ -124,14 +125,21 @@ Environment:
   if (cmd === "doctor") {
     const casRaceArg = args.find((a) => a === "--cas-race" || a.startsWith("--cas-race="));
     const recheckCas = args.includes("--recheck-cas");
-    if (casRaceArg || recheckCas) {
+    const resetCasCache = args.includes("--reset-cas-cache");
+    if (casRaceArg || recheckCas || resetCasCache) {
       return run(async () => {
         const config = readConfigFile();
         if (!isS3ObjectStoreBackend(config)) {
-          throw new Error("storage doctor --cas-race / --recheck-cas require storage.backend=s3");
+          throw new Error("storage doctor S3 CAS commands require storage.backend=s3");
         }
-        if (casRaceArg && recheckCas) {
-          throw new Error("Use either --cas-race or --recheck-cas, not both");
+        const casCmdCount = [casRaceArg, recheckCas, resetCasCache].filter(Boolean).length;
+        if (casCmdCount > 1) {
+          throw new Error("Use only one of --cas-race, --recheck-cas, or --reset-cas-cache");
+        }
+        if (resetCasCache) {
+          const { runStorageDoctorResetCasCache } = await import("../../lib/storage/storage-doctor-cas.mjs");
+          console.log(JSON.stringify(runStorageDoctorResetCasCache({ env: process.env }), null, 2));
+          return;
         }
         if (casRaceArg) {
           let rounds = 20;

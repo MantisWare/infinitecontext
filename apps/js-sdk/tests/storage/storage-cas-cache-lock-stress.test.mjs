@@ -123,7 +123,6 @@ describe("storage CAS cache lock stress", () => {
     let cache = loadStorageCasCache(cachePath);
     assert.equal(cache.endpoints[bindingA]?.crossDeviceCas, true);
     assert.equal(cache.endpoints[bindingB]?.crossDeviceCas, true);
-    assert.equal(cache.endpoints[bindingB]?.failClosedCorruptGen, undefined);
     assert.equal(fs.existsSync(`${cachePath}.corruption-marker`), false);
     recordStorageCasDoctorRecheckSuccess(cachePath, bindingB, now + 2);
     cache = loadStorageCasCache(cachePath);
@@ -180,7 +179,7 @@ describe("storage CAS cache lock stress", () => {
     const fixed = loadStorageCasCache(cachePath);
     assert.equal(fixed.endpoints[bindingA]?.crossDeviceCas, true);
     assert.equal(fixed.endpoints[bindingB]?.casUnsafe, true);
-    assert.ok(fixed.endpoints[bindingB]?.failClosedCorruptGen);
+    assert.equal(fixed.endpoints[bindingB]?.unsafeReason, "race_double_win");
     const viewB = getStorageCasCacheRecord(fixed, bindingB, now + 1);
     assert.equal(viewB?.unsafe, true);
     assert.equal(viewB?.crossDeviceCas, false);

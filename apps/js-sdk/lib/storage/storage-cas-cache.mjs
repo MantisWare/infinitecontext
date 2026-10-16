@@ -66,7 +66,6 @@ export function storageCasCacheCorruptionMarkerPath(cachePath) {
  *   casUnsafe?: boolean,
  *   unsafeReason?: string,
  *   unsafeAtMs?: number,
- *   failClosedCorruptGen?: string,
  *   doctorSequentialRecheckOk?: boolean,
  *   doctorRaceRecheckOk?: boolean,
  *   doctorSequentialRecheckAtMs?: number,
@@ -77,10 +76,11 @@ export function storageCasCacheCorruptionMarkerPath(cachePath) {
 /**
  * @typedef {{
  *   v: number,
- *   corruptGeneration?: string,
  *   endpoints: Record<string, StorageCasCacheRecord>,
  *   fileCorrupt?: boolean,
  *   salvagedEndpoints?: Record<string, StorageCasCacheRecord>,
+ *   corruptedAtMs?: number,
+ *   salvageMergedForCorruptedAtMs?: number,
  * }} StorageCasCacheFile
  */
 
@@ -141,11 +141,7 @@ export function salvagedEndpointsFromCorruptBackups(cachePath) {
 }
 
 /**
- * @typedef {{
- *   corruptGeneration: string,
- *   atMs: number,
- *   pendingSalvagedKeys?: string[],
- * }} StorageCasCorruptionMarker
+ * @typedef {{ corruptedAtMs: number }} StorageCasCorruptionMarker
  */
 
 /**
@@ -155,16 +151,14 @@ export function salvagedEndpointsFromCorruptBackups(cachePath) {
 export function readStorageCasCorruptionMarker(cachePath) {
   try {
     const parsed = JSON.parse(fs.readFileSync(storageCasCacheCorruptionMarkerPath(cachePath), "utf8"));
-    if (parsed && typeof parsed === "object" && typeof parsed.corruptGeneration === "string") {
-      const pendingRaw = /** @type {{ pendingSalvagedKeys?: unknown }} */ (parsed).pendingSalvagedKeys;
-      const pendingSalvagedKeys = Array.isArray(pendingRaw)
-        ? pendingRaw.map((k) => String(k))
-        : undefined;
-      return {
-        corruptGeneration: parsed.corruptGeneration,
-        atMs: Number(/** @type {{ atMs?: number }} */ (parsed).atMs) || 0,
-        ...(pendingSalvagedKeys ? { pendingSalvagedKeys } : {}),
-      };
+    if (parsed && typeof parsed === "object") {
+      const corruptedAtMs = Number(
+        /** @type {{ corruptedAtMs?: number, atMs?: number }} */ (parsed).corruptedAtMs ??
+          /** @type {{ atMs?: number }} */ (parsed).atMs,
+      );
+      if (Number.isFinite(corruptedAtMs) && corruptedAtMs > 0) {
+        return { corruptedAtMs };
+      }
     }
   } catch {
     /* none */
@@ -174,31 +168,28 @@ export function readStorageCasCorruptionMarker(cachePath) {
 
 /**
  * @param {string} cachePath
- * @param {string} corruptGeneration
- * @param {number} [atMs]
- * @param {string[]} [pendingSalvagedKeys]
+ * @param {number} corruptedAtMs
  */
-export function writeStorageCasCorruptionMarker(
-  cachePath,
-  corruptGeneration,
-  atMs = Date.now(),
-  pendingSalvagedKeys,
-) {
+export function writeStorageCasCorruptionMarker(cachePath, corruptedAtMs) {
   const markerPath = storageCasCacheCorruptionMarkerPath(cachePath);
   const dir = path.dirname(markerPath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = `${markerPath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-  const body = `${JSON.stringify(
-    {
-      corruptGeneration,
-      atMs,
-      ...(pendingSalvagedKeys && pendingSalvagedKeys.length ? { pendingSalvagedKeys } : {}),
-    },
-    null,
-    2,
-  )}\n`;
+  const body = `${JSON.stringify({ corruptedAtMs }, null, 2)}\n`;
   fs.writeFileSync(tmp, body, { flag: "wx", mode: 0o600 });
   fs.renameSync(tmp, markerPath);
+}
+
+/**
+ * @param {string} cachePath
+ * @param {number} [nowMs]
+ * @returns {number}
+ */
+export function bumpStorageCasCorruptionMarker(cachePath, nowMs = Date.now()) {
+  const existing = readStorageCasCorruptionMarker(cachePath);
+  const corruptedAtMs = Math.max(existing?.corruptedAtMs ?? 0, nowMs);
+  writeStorageCasCorruptionMarker(cachePath, corruptedAtMs);
+  return corruptedAtMs;
 }
 
 /**
@@ -213,63 +204,94 @@ export function clearStorageCasCorruptionMarker(cachePath) {
 }
 
 /**
- * @param {string} cachePath
- * @param {string[]} [salvagedKeys]
- * @returns {string}
+ * @param {StorageCasCacheRecord | undefined} record
+ * @param {number} corruptedAtMs
  */
-function ensureCorruptionGenerationOnCorruptLoad(cachePath, salvagedKeys = []) {
-  const existing = readStorageCasCorruptionMarker(cachePath);
-  if (existing?.corruptGeneration) {
-    return existing.corruptGeneration;
+export function isBindingCasTrustedAfterCorruption(record, corruptedAtMs) {
+  if (!corruptedAtMs || corruptedAtMs <= 0) {
+    if (!record) {
+      return false;
+    }
+    if (record.casUnsafe) {
+      return false;
+    }
+    return record.crossDeviceCas === true;
   }
-  const generation = crypto.randomBytes(8).toString("hex");
-  writeStorageCasCorruptionMarker(cachePath, generation, Date.now(), salvagedKeys);
-  return generation;
+  if (!record) {
+    return false;
+  }
+  const seqAt = record.doctorSequentialRecheckAtMs ?? 0;
+  if (!record.doctorSequentialRecheckOk || seqAt < corruptedAtMs) {
+    return false;
+  }
+  if (record.casUnsafe && isRaceRelatedCasUnsafeReason(record.unsafeReason)) {
+    const raceAt = record.doctorRaceRecheckAtMs ?? 0;
+    return Boolean(record.doctorRaceRecheckOk && raceAt >= corruptedAtMs);
+  }
+  if (record.casUnsafe) {
+    return false;
+  }
+  return record.crossDeviceCas === true;
 }
 
 /**
- * @param {string} cachePath
- * @param {StorageCasCacheFile} cache
+ * @param {Record<string, StorageCasCacheRecord>} endpoints
+ * @param {Record<string, StorageCasCacheRecord>} salvaged
+ * @param {number} corruptedAtMs
  */
-function maybeClearCorruptionMarkerAfterSave(cachePath, cache) {
-  const marker = readStorageCasCorruptionMarker(cachePath);
-  if (!marker) {
-    return;
-  }
-  const generation = cache.corruptGeneration ?? marker.corruptGeneration;
-  const pending = marker.pendingSalvagedKeys ?? [];
-  if (pending.length > 0) {
-    return;
-  }
-  const anyFailClosed = Object.values(cache.endpoints).some(
-    (rec) => rec.failClosedCorruptGen && rec.failClosedCorruptGen === generation,
-  );
-  if (anyFailClosed) {
-    return;
-  }
-  clearStorageCasCorruptionMarker(cachePath);
-  if (cache.corruptGeneration === generation) {
-    delete cache.corruptGeneration;
+export function mergeSalvagedUnsafeOnce(endpoints, salvaged, corruptedAtMs) {
+  for (const [key, sal] of Object.entries(salvaged)) {
+    const cur = endpoints[key];
+    if (isBindingCasTrustedAfterCorruption(cur, corruptedAtMs)) {
+      continue;
+    }
+    if (sal.casUnsafe) {
+      endpoints[key] = {
+        bindingKey: key,
+        crossDeviceCas: false,
+        casUnsafe: true,
+        unsafeReason: sal.unsafeReason ?? cur?.unsafeReason ?? "salvaged_unsafe",
+        unsafeAtMs: Math.max(cur?.unsafeAtMs ?? 0, sal.unsafeAtMs ?? 0),
+        probedAtMs: Math.max(cur?.probedAtMs ?? 0, sal.probedAtMs ?? 0),
+        expiresAtMs: 0,
+      };
+    } else if (!cur) {
+      endpoints[key] = {
+        bindingKey: key,
+        crossDeviceCas: false,
+        casUnsafe: false,
+        probedAtMs: sal.probedAtMs ?? 0,
+        expiresAtMs: 0,
+      };
+    }
   }
 }
 
 /**
- * @param {string} cachePath
  * @param {StorageCasCacheFile} cache
- * @param {string} bindingKey
+ * @param {string} cachePath
  */
-function noteCorruptionBindingRechecked(cachePath, cache, bindingKey) {
+function attachCorruptionContext(cache, cachePath) {
   const marker = readStorageCasCorruptionMarker(cachePath);
-  if (!marker) {
+  cache.corruptedAtMs = marker?.corruptedAtMs ?? 0;
+}
+
+/**
+ * @param {StorageCasCacheFile} cache
+ * @param {string} cachePath
+ */
+function ensureRecoverySalvageMerged(cache, cachePath) {
+  const corruptedAtMs = cache.corruptedAtMs ?? 0;
+  if (!corruptedAtMs) {
     return;
   }
-  const pending = (marker.pendingSalvagedKeys ?? []).filter((key) => key !== bindingKey);
-  if (pending.length === (marker.pendingSalvagedKeys ?? []).length) {
-    maybeClearCorruptionMarkerAfterSave(cachePath, cache);
+  const mergedFor = cache.salvageMergedForCorruptedAtMs ?? 0;
+  if (mergedFor >= corruptedAtMs) {
     return;
   }
-  writeStorageCasCorruptionMarker(cachePath, marker.corruptGeneration, marker.atMs, pending);
-  maybeClearCorruptionMarkerAfterSave(cachePath, cache);
+  const salvaged = loadSalvagedEndpointsFromLastGood(cachePath) ?? {};
+  mergeSalvagedUnsafeOnce(cache.endpoints, salvaged, corruptedAtMs);
+  cache.salvageMergedForCorruptedAtMs = corruptedAtMs;
 }
 
 /**
@@ -357,7 +379,7 @@ export function normalizeStorageCasCacheRecordOnRead(record, bindingKey, nowMs =
     expiresAtMs = maxExpires;
   }
   const stale = expiresAtMs <= nowMs;
-  const unsafe = Boolean(record.casUnsafe || record.failClosedCorruptGen);
+  const unsafe = Boolean(record.casUnsafe);
   return {
     ...record,
     expiresAtMs,
@@ -377,12 +399,11 @@ export function loadStorageCasCache(cachePath = storageCasCacheFilePath()) {
     if (!parsed || typeof parsed !== "object") {
       backupCorruptCacheFile(cachePath);
       const salvagedEndpoints = loadSalvagedEndpointsFromLastGood(cachePath) ?? undefined;
-      const salvagedKeys = salvagedEndpoints ? Object.keys(salvagedEndpoints) : [];
-      const corruptGeneration = ensureCorruptionGenerationOnCorruptLoad(cachePath, salvagedKeys);
+      const corruptedAtMs = bumpStorageCasCorruptionMarker(cachePath);
       return {
         v: STORAGE_CAS_CACHE_VERSION,
         endpoints: {},
-        corruptGeneration,
+        corruptedAtMs,
         fileCorrupt: true,
         salvagedEndpoints,
       };
@@ -391,23 +412,29 @@ export function loadStorageCasCache(cachePath = storageCasCacheFilePath()) {
       parsed.endpoints && typeof parsed.endpoints === "object" && !Array.isArray(parsed.endpoints)
         ? /** @type {Record<string, StorageCasCacheRecord>} */ (parsed.endpoints)
         : {};
-    const corruptGeneration =
-      typeof parsed.corruptGeneration === "string"
-        ? parsed.corruptGeneration
-        : readStorageCasCorruptionMarker(cachePath)?.corruptGeneration;
-    return { v: STORAGE_CAS_CACHE_VERSION, endpoints, corruptGeneration, fileCorrupt: false };
+    const salvageMergedForCorruptedAtMs =
+      typeof parsed.salvageMergedForCorruptedAtMs === "number"
+        ? parsed.salvageMergedForCorruptedAtMs
+        : undefined;
+    const cache = {
+      v: STORAGE_CAS_CACHE_VERSION,
+      endpoints,
+      fileCorrupt: false,
+      ...(salvageMergedForCorruptedAtMs !== undefined ? { salvageMergedForCorruptedAtMs } : {}),
+    };
+    attachCorruptionContext(cache, cachePath);
+    return cache;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return { v: STORAGE_CAS_CACHE_VERSION, endpoints: {}, fileCorrupt: false };
     }
     backupCorruptCacheFile(cachePath);
     const salvagedEndpoints = loadSalvagedEndpointsFromLastGood(cachePath) ?? undefined;
-    const salvagedKeys = salvagedEndpoints ? Object.keys(salvagedEndpoints) : [];
-    const corruptGeneration = ensureCorruptionGenerationOnCorruptLoad(cachePath, salvagedKeys);
+    const corruptedAtMs = bumpStorageCasCorruptionMarker(cachePath);
     return {
       v: STORAGE_CAS_CACHE_VERSION,
       endpoints: {},
-      corruptGeneration,
+      corruptedAtMs,
       fileCorrupt: true,
       salvagedEndpoints,
     };
@@ -424,8 +451,10 @@ export function saveStorageCasCache(cache, cachePath = storageCasCacheFilePath()
   const tmp = `${cachePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   const payload = {
     v: cache.v,
-    ...(cache.corruptGeneration ? { corruptGeneration: cache.corruptGeneration } : {}),
     endpoints: cache.endpoints,
+    ...(cache.salvageMergedForCorruptedAtMs
+      ? { salvageMergedForCorruptedAtMs: cache.salvageMergedForCorruptedAtMs }
+      : {}),
   };
   const body = `${JSON.stringify(payload, null, 2)}\n`;
   /** @param {string} tempPath */
@@ -447,7 +476,6 @@ export function saveStorageCasCache(cache, cachePath = storageCasCacheFilePath()
     assertRealpathUnderRoot(tmp, cacheDir);
     fs.renameSync(tmp, cachePath);
     persistLastGoodSnapshot(cachePath, body);
-    maybeClearCorruptionMarkerAfterSave(cachePath, cache);
   } catch (error) {
     removeTempIfPresent(tmp);
     throw error;
@@ -479,6 +507,22 @@ function isProcessAlive(pid) {
  * @param {string} lockPath
  * @returns {StorageCasCacheLockMeta | null}
  */
+/**
+ * @param {string} lockPath
+ */
+function readLockPartialPid(lockPath) {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const match = raw.match(/"pid"\s*:\s*(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+  } catch {
+    /* ignore */
+  }
+  return NaN;
+}
+
 function readLockMetadata(lockPath) {
   try {
     const raw = fs.readFileSync(lockPath, "utf8");
@@ -519,6 +563,17 @@ function breakStaleCacheLockIfNeeded(lockPath) {
   if (!fs.existsSync(lockPath)) return;
   const meta = readLockMetadata(lockPath);
   if (!meta) {
+    const partialPid = readLockPartialPid(lockPath);
+    if (Number.isInteger(partialPid) && partialPid > 0 && !isProcessAlive(partialPid)) {
+      try {
+        fs.unlinkSync(lockPath);
+        lastCasCacheLockBreakHint =
+          "Removed a tokenless CAS cache lock left by a dead process (pid no longer running).";
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     let ageMs = STORAGE_CAS_LOCK_MAX_AGE_MS + 1;
     try {
       ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
@@ -673,45 +728,6 @@ export function mergeStorageCasCacheRecords(prev, next, mergeOptions = {}) {
 }
 
 /**
- * @param {string} corruptGeneration
- * @param {StorageCasCacheRecord} rec
- */
-function failClosedCorruptRecord(corruptGeneration, rec) {
-  return {
-    ...rec,
-    bindingKey: rec.bindingKey,
-    crossDeviceCas: false,
-    casUnsafe: true,
-    unsafeReason: rec.unsafeReason ?? "fail_closed_corrupt_cache",
-    failClosedCorruptGen: corruptGeneration,
-    expiresAtMs: 0,
-  };
-}
-
-/**
- * @param {StorageCasCacheFile} cache
- * @param {string} bindingKey
- * @param {Record<string, StorageCasCacheRecord>} salvaged
- * @param {string} corruptGeneration
- */
-export function preserveFailClosedEndpointsAfterCorrupt(cache, bindingKey, salvaged, corruptGeneration) {
-  for (const [key, rec] of Object.entries(salvaged)) {
-    if (key === bindingKey) continue;
-    setStorageCasCacheRecord(cache, key, failClosedCorruptRecord(corruptGeneration, rec));
-  }
-  for (const [key, rec] of Object.entries(cache.endpoints)) {
-    if (key === bindingKey) continue;
-    if (rec.failClosedCorruptGen || rec.casUnsafe) {
-      setStorageCasCacheRecord(
-        cache,
-        key,
-        failClosedCorruptRecord(cache.corruptGeneration ?? corruptGeneration, rec),
-      );
-    }
-  }
-}
-
-/**
  * @param {string} cachePath
  * @param {(cache: StorageCasCacheFile) => void} mutator
  * @param {{ allowClearUnsafe?: boolean }} [options]
@@ -725,11 +741,19 @@ export function mutateStorageCasCache(cachePath, mutator, options = {}) {
   const deadline = Date.now() + 30_000;
   const ownerToken = acquireCacheLockWithBackoff(lockPath, deadline);
   if (!ownerToken) {
+    if (fs.existsSync(lockPath) && !readLockMetadata(lockPath)) {
+      const heldHint =
+        "A tokenless or unreadable CAS cache lock is still held (younger than 60s). Wait for the other process or remove ~/.infinitecontext/storage-cas-probe-cache.json.lock only if you are sure no writer is active.";
+      console.error(`storage-cas-cache: ${heldHint}`);
+      lastCasCacheLockBreakHint = lastCasCacheLockBreakHint ?? heldHint;
+    }
     const hint = lastCasCacheLockBreakHint ? ` ${lastCasCacheLockBreakHint}` : "";
     throw new Error(`Timed out waiting for storage CAS cache lock.${hint}`);
   }
   try {
     const cache = loadStorageCasCache(resolvedPath);
+    attachCorruptionContext(cache, resolvedPath);
+    ensureRecoverySalvageMerged(cache, resolvedPath);
     /** @type {Record<string, StorageCasCacheRecord>} */
     const prevSnapshot = { ...cache.endpoints };
     mutator(cache);
@@ -762,9 +786,10 @@ export function getStorageCasCacheRecord(cache, bindingKey, nowMs = Date.now()) 
       corrupt: true,
     };
   }
+  const corruptedAtMs = cache.corruptedAtMs ?? 0;
   const record = cache.endpoints[bindingKey];
   if (!record) {
-    if (cache.corruptGeneration) {
+    if (corruptedAtMs) {
       return {
         bindingKey,
         crossDeviceCas: false,
@@ -779,10 +804,14 @@ export function getStorageCasCacheRecord(cache, bindingKey, nowMs = Date.now()) 
     return null;
   }
   const normalized = normalizeStorageCasCacheRecordOnRead(record, bindingKey, nowMs);
-  if (normalized.failClosedCorruptGen && cache.corruptGeneration) {
-    if (normalized.failClosedCorruptGen === cache.corruptGeneration) {
-      return { ...normalized, unsafe: true, casUnsafe: true, stale: false };
-    }
+  if (corruptedAtMs && !isBindingCasTrustedAfterCorruption(record, corruptedAtMs)) {
+    return {
+      ...normalized,
+      crossDeviceCas: false,
+      unsafe: true,
+      casUnsafe: normalized.casUnsafe ?? true,
+      stale: false,
+    };
   }
   if (normalized.casUnsafe || normalized.unsafe) {
     return { ...normalized, crossDeviceCas: false };
@@ -826,7 +855,6 @@ export function markStorageCasUnsafePersisted(
       doctorRaceRecheckOk: false,
       doctorSequentialRecheckAtMs: undefined,
       doctorRaceRecheckAtMs: undefined,
-      failClosedCorruptGen: undefined,
     });
   });
 }
@@ -871,7 +899,6 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
         casUnsafe: false,
         unsafeReason: undefined,
         unsafeAtMs: undefined,
-        failClosedCorruptGen: undefined,
         doctorSequentialRecheckOk: false,
         doctorRaceRecheckOk: false,
         doctorSequentialRecheckAtMs: undefined,
@@ -897,10 +924,9 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
     casUnsafe: false,
     unsafeReason: undefined,
     unsafeAtMs: undefined,
-    failClosedCorruptGen: undefined,
-    doctorSequentialRecheckOk: false,
+    doctorSequentialRecheckOk: true,
     doctorRaceRecheckOk: false,
-    doctorSequentialRecheckAtMs: undefined,
+    doctorSequentialRecheckAtMs: nowMs,
     doctorRaceRecheckAtMs: undefined,
   };
 }
@@ -911,40 +937,14 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
  * @param {number} [nowMs]
  */
 export function recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, nowMs = Date.now()) {
-  const resolved = cachePath ?? storageCasCacheFilePath();
-  const loaded = loadStorageCasCache(resolved);
-  const marker = readStorageCasCorruptionMarker(resolved);
-  const inCorruptionRecovery = loaded.fileCorrupt || Boolean(marker);
-  const salvaged = inCorruptionRecovery
-    ? (loaded.salvagedEndpoints ?? loadSalvagedEndpointsFromLastGood(resolved) ?? {})
-    : {};
-  const salvagedKeys = Object.keys(salvaged);
-  const corruptGeneration = inCorruptionRecovery
-    ? (loaded.corruptGeneration ??
-      marker?.corruptGeneration ??
-      ensureCorruptionGenerationOnCorruptLoad(resolved, salvagedKeys))
-    : loaded.corruptGeneration;
   mutateStorageCasCache(
     cachePath,
     (cache) => {
-      if (inCorruptionRecovery) {
-        if (!cache.corruptGeneration) {
-          cache.corruptGeneration = corruptGeneration ?? crypto.randomBytes(8).toString("hex");
-          const pending = marker?.pendingSalvagedKeys ?? salvagedKeys;
-          writeStorageCasCorruptionMarker(resolved, cache.corruptGeneration, Date.now(), pending);
-        }
-        if (cache.corruptGeneration && salvagedKeys.length) {
-          preserveFailClosedEndpointsAfterCorrupt(cache, bindingKey, salvaged, cache.corruptGeneration);
-        }
-      }
-      const prev = cache.endpoints[bindingKey] ?? salvaged[bindingKey];
+      const prev = cache.endpoints[bindingKey];
       setStorageCasCacheRecord(cache, bindingKey, {
         ...doctorRecheckSuccessRecord(prev, nowMs),
         bindingKey,
       });
-      if (inCorruptionRecovery) {
-        noteCorruptionBindingRechecked(resolved, cache, bindingKey);
-      }
     },
     { allowClearUnsafe: true },
   );
@@ -957,8 +957,29 @@ export function recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, nowM
  */
 export function crossDeviceCasEnabledAfterDoctorRecheck(cachePath, bindingKey, nowMs = Date.now()) {
   const cache = loadStorageCasCache(cachePath ?? undefined);
+  attachCorruptionContext(cache, cachePath ?? storageCasCacheFilePath());
   const record = getStorageCasCacheRecord(cache, bindingKey, nowMs);
   return Boolean(record && record.crossDeviceCas === true && !record.unsafe && !record.casUnsafe);
+}
+
+/**
+ * @param {string} [cachePath]
+ */
+export function resetStorageCasProbeCache(cachePath = storageCasCacheFilePath()) {
+  const resolved = cachePath ?? storageCasCacheFilePath();
+  for (const target of [
+    resolved,
+    storageCasCacheLastGoodPath(resolved),
+    storageCasCacheCorruptionMarkerPath(resolved),
+    `${resolved}.lock`,
+  ]) {
+    try {
+      fs.unlinkSync(target);
+    } catch {
+      /* ignore */
+    }
+  }
+  sweepStaleCasCacheArtifacts(resolved);
 }
 
 /**
@@ -975,12 +996,19 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
       if (prev?.casUnsafe && isRaceRelatedCasUnsafeReason(prev.unsafeReason)) {
         const doctorRaceRecheckOk = true;
         const doctorRaceRecheckAtMs = nowMs;
-        const seqOk = doctorSequentialPassValidAfterUnsafe({
-          ...prev,
-          doctorSequentialRecheckOk: prev.doctorSequentialRecheckOk,
-          doctorSequentialRecheckAtMs: prev.doctorSequentialRecheckAtMs,
-        });
-        if (seqOk) {
+        const corruptedAtMs = cache.corruptedAtMs ?? 0;
+        const seqOk = corruptedAtMs
+          ? Boolean(
+              prev.doctorSequentialRecheckOk &&
+                (prev.doctorSequentialRecheckAtMs ?? 0) >= corruptedAtMs,
+            )
+          : doctorSequentialPassValidAfterUnsafe(prev);
+        const raceClears =
+          seqOk &&
+          (!corruptedAtMs ||
+            (doctorRaceRecheckAtMs >= corruptedAtMs &&
+              (prev.doctorSequentialRecheckAtMs ?? 0) >= corruptedAtMs));
+        if (raceClears) {
           setStorageCasCacheRecord(cache, bindingKey, {
             bindingKey,
             crossDeviceCas: true,
@@ -989,7 +1017,6 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
             casUnsafe: false,
             unsafeReason: undefined,
             unsafeAtMs: undefined,
-            failClosedCorruptGen: undefined,
             doctorSequentialRecheckOk: false,
             doctorRaceRecheckOk: false,
             doctorSequentialRecheckAtMs: undefined,
@@ -1018,6 +1045,14 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
     },
     { allowClearUnsafe: true },
   );
+}
+
+/**
+ * @param {StorageCasCacheFile} cache
+ * @param {string} cachePath
+ */
+export function attachStorageCasCorruptionContextForRead(cache, cachePath) {
+  attachCorruptionContext(cache, cachePath);
 }
 
 /** @deprecated */
