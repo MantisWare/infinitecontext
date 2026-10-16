@@ -10,6 +10,8 @@ export const STORAGE_CAS_CACHE_VERSION = 1;
 export const DEFAULT_STORAGE_CAS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const STORAGE_CAS_CACHE_FILENAME = "storage-cas-probe-cache.json";
 export const STORAGE_CAS_LOCK_MAX_AGE_MS = 60_000;
+export const STORAGE_CAS_CACHE_LAST_GOOD_SUFFIX = ".last-good";
+export const STORAGE_CAS_CACHE_CORRUPTION_MARKER_SUFFIX = ".corruption-marker";
 
 /**
  * @param {{ endpoint?: string, bucket: string, prefix?: string }} params
@@ -39,6 +41,20 @@ export function storageCasCacheFilePath(homeDir = infinitecontextHome()) {
 }
 
 /**
+ * @param {string} cachePath
+ */
+export function storageCasCacheLastGoodPath(cachePath) {
+  return `${cachePath}${STORAGE_CAS_CACHE_LAST_GOOD_SUFFIX}`;
+}
+
+/**
+ * @param {string} cachePath
+ */
+export function storageCasCacheCorruptionMarkerPath(cachePath) {
+  return `${cachePath}${STORAGE_CAS_CACHE_CORRUPTION_MARKER_SUFFIX}`;
+}
+
+/**
  * @typedef {{
  *   bindingKey: string,
  *   crossDeviceCas: boolean,
@@ -50,6 +66,8 @@ export function storageCasCacheFilePath(homeDir = infinitecontextHome()) {
  *   failClosedCorruptGen?: string,
  *   doctorSequentialRecheckOk?: boolean,
  *   doctorRaceRecheckOk?: boolean,
+ *   doctorSequentialRecheckAtMs?: number,
+ *   doctorRaceRecheckAtMs?: number,
  * }} StorageCasCacheRecord
  */
 
@@ -62,6 +80,27 @@ export function storageCasCacheFilePath(homeDir = infinitecontextHome()) {
  *   salvagedEndpoints?: Record<string, StorageCasCacheRecord>,
  * }} StorageCasCacheFile
  */
+
+/**
+ * @typedef {{ pid: number, createdAtMs: number, ownerToken: string }} StorageCasCacheLockMeta
+ */
+
+/**
+ * @param {number} ms
+ */
+export function sleepMsForCasCacheLockBackoff(ms) {
+  const delay = Math.max(0, Math.min(ms, 500));
+  const sab = new SharedArrayBuffer(4);
+  const arr = new Int32Array(sab);
+  Atomics.wait(arr, 0, 0, delay);
+}
+
+/**
+ * @param {number} attempt
+ */
+function lockBackoffMs(attempt) {
+  return Math.min(50 * 2 ** attempt, 250);
+}
 
 /**
  * @param {string} cachePath
@@ -80,30 +119,105 @@ function backupCorruptCacheFile(cachePath) {
  * @param {string} cachePath
  * @returns {Record<string, StorageCasCacheRecord> | null}
  */
-export function salvagedEndpointsFromCorruptBackups(cachePath) {
-  const dir = path.dirname(cachePath);
-  const base = path.basename(cachePath);
-  let names;
+export function loadSalvagedEndpointsFromLastGood(cachePath) {
+  const lastGood = storageCasCacheLastGoodPath(cachePath);
   try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return null;
-  }
-  const candidates = names
-    .filter((n) => n.startsWith(`${base}.corrupt.`) && n.endsWith(".bak"))
-    .sort()
-    .reverse();
-  for (const name of candidates) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
-      if (parsed && typeof parsed === "object" && parsed.endpoints && typeof parsed.endpoints === "object") {
-        return /** @type {Record<string, StorageCasCacheRecord>} */ (parsed.endpoints);
-      }
-    } catch {
-      /* try next backup */
+    const parsed = JSON.parse(fs.readFileSync(lastGood, "utf8"));
+    if (parsed && typeof parsed === "object" && parsed.endpoints && typeof parsed.endpoints === "object") {
+      return /** @type {Record<string, StorageCasCacheRecord>} */ (parsed.endpoints);
     }
+  } catch {
+    /* no last-good snapshot */
   }
   return null;
+}
+
+/** @deprecated use loadSalvagedEndpointsFromLastGood */
+export function salvagedEndpointsFromCorruptBackups(cachePath) {
+  return loadSalvagedEndpointsFromLastGood(cachePath);
+}
+
+/**
+ * @param {string} cachePath
+ * @returns {{ corruptGeneration: string, atMs: number } | null}
+ */
+export function readStorageCasCorruptionMarker(cachePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storageCasCacheCorruptionMarkerPath(cachePath), "utf8"));
+    if (parsed && typeof parsed === "object" && typeof parsed.corruptGeneration === "string") {
+      return {
+        corruptGeneration: parsed.corruptGeneration,
+        atMs: Number(/** @type {{ atMs?: number }} */ (parsed).atMs) || 0,
+      };
+    }
+  } catch {
+    /* none */
+  }
+  return null;
+}
+
+/**
+ * @param {string} cachePath
+ * @param {string} corruptGeneration
+ * @param {number} [atMs]
+ */
+export function writeStorageCasCorruptionMarker(cachePath, corruptGeneration, atMs = Date.now()) {
+  const markerPath = storageCasCacheCorruptionMarkerPath(cachePath);
+  const dir = path.dirname(markerPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${markerPath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  const body = `${JSON.stringify({ corruptGeneration, atMs }, null, 2)}\n`;
+  fs.writeFileSync(tmp, body, { flag: "wx", mode: 0o600 });
+  fs.renameSync(tmp, markerPath);
+}
+
+/**
+ * @param {string} cachePath
+ */
+export function clearStorageCasCorruptionMarker(cachePath) {
+  try {
+    fs.unlinkSync(storageCasCacheCorruptionMarkerPath(cachePath));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * @param {string} cachePath
+ * @returns {string}
+ */
+function ensureCorruptionGenerationOnCorruptLoad(cachePath) {
+  const existing = readStorageCasCorruptionMarker(cachePath);
+  if (existing?.corruptGeneration) {
+    return existing.corruptGeneration;
+  }
+  const generation = crypto.randomBytes(8).toString("hex");
+  writeStorageCasCorruptionMarker(cachePath, generation);
+  return generation;
+}
+
+/**
+ * @param {string} cachePath
+ * @param {string} body
+ */
+function persistLastGoodSnapshot(cachePath, body) {
+  const lastGood = storageCasCacheLastGoodPath(cachePath);
+  const dir = path.dirname(lastGood);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${lastGood}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    assertRealpathUnderRoot(dir, dir);
+    fs.writeFileSync(tmp, body, { flag: "wx", mode: 0o600 });
+    assertRealpathUnderRoot(tmp, dir);
+    fs.renameSync(tmp, lastGood);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw error;
+  }
 }
 
 /**
@@ -149,11 +263,13 @@ export function loadStorageCasCache(cachePath = storageCasCacheFilePath()) {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") {
       backupCorruptCacheFile(cachePath);
+      const corruptGeneration = ensureCorruptionGenerationOnCorruptLoad(cachePath);
       return {
         v: STORAGE_CAS_CACHE_VERSION,
         endpoints: {},
+        corruptGeneration,
         fileCorrupt: true,
-        salvagedEndpoints: salvagedEndpointsFromCorruptBackups(cachePath) ?? undefined,
+        salvagedEndpoints: loadSalvagedEndpointsFromLastGood(cachePath) ?? undefined,
       };
     }
     const endpoints =
@@ -161,18 +277,22 @@ export function loadStorageCasCache(cachePath = storageCasCacheFilePath()) {
         ? /** @type {Record<string, StorageCasCacheRecord>} */ (parsed.endpoints)
         : {};
     const corruptGeneration =
-      typeof parsed.corruptGeneration === "string" ? parsed.corruptGeneration : undefined;
+      typeof parsed.corruptGeneration === "string"
+        ? parsed.corruptGeneration
+        : readStorageCasCorruptionMarker(cachePath)?.corruptGeneration;
     return { v: STORAGE_CAS_CACHE_VERSION, endpoints, corruptGeneration, fileCorrupt: false };
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return { v: STORAGE_CAS_CACHE_VERSION, endpoints: {}, fileCorrupt: false };
     }
     backupCorruptCacheFile(cachePath);
+    const corruptGeneration = ensureCorruptionGenerationOnCorruptLoad(cachePath);
     return {
       v: STORAGE_CAS_CACHE_VERSION,
       endpoints: {},
+      corruptGeneration,
       fileCorrupt: true,
-      salvagedEndpoints: salvagedEndpointsFromCorruptBackups(cachePath) ?? undefined,
+      salvagedEndpoints: loadSalvagedEndpointsFromLastGood(cachePath) ?? undefined,
     };
   }
 }
@@ -209,6 +329,10 @@ export function saveStorageCasCache(cache, cachePath = storageCasCacheFilePath()
     fd = undefined;
     assertRealpathUnderRoot(tmp, cacheDir);
     fs.renameSync(tmp, cachePath);
+    persistLastGoodSnapshot(cachePath, body);
+    if (!cache.corruptGeneration) {
+      clearStorageCasCorruptionMarker(cachePath);
+    }
   } catch (error) {
     removeTempIfPresent(tmp);
     throw error;
@@ -238,21 +362,39 @@ function isProcessAlive(pid) {
 
 /**
  * @param {string} lockPath
+ * @returns {StorageCasCacheLockMeta | null}
  */
 function readLockMetadata(lockPath) {
   try {
     const raw = fs.readFileSync(lockPath, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      return {
-        pid: Number(/** @type {{ pid?: number }} */ (parsed).pid),
-        createdAtMs: Number(/** @type {{ createdAtMs?: number }} */ (parsed).createdAtMs),
-      };
+      const ownerToken = String(/** @type {{ ownerToken?: string }} */ (parsed).ownerToken ?? "");
+      const pid = Number(/** @type {{ pid?: number }} */ (parsed).pid);
+      const createdAtMs = Number(/** @type {{ createdAtMs?: number }} */ (parsed).createdAtMs);
+      if (!ownerToken || !Number.isFinite(createdAtMs)) {
+        return null;
+      }
+      return { pid, createdAtMs, ownerToken };
     }
   } catch {
-    /* legacy empty lock */
+    /* unreadable lock — treat as held */
   }
-  return { pid: NaN, createdAtMs: 0 };
+  return null;
+}
+
+/**
+ * @param {string} lockPath
+ * @param {StorageCasCacheLockMeta} expected
+ */
+function lockMetadataStillMatches(lockPath, expected) {
+  const current = readLockMetadata(lockPath);
+  return Boolean(
+    current &&
+      current.ownerToken === expected.ownerToken &&
+      current.pid === expected.pid &&
+      current.createdAtMs === expected.createdAtMs,
+  );
 }
 
 /**
@@ -261,28 +403,111 @@ function readLockMetadata(lockPath) {
 function breakStaleCacheLockIfNeeded(lockPath) {
   if (!fs.existsSync(lockPath)) return;
   const meta = readLockMetadata(lockPath);
-  const ageMs = meta.createdAtMs ? Date.now() - meta.createdAtMs : STORAGE_CAS_LOCK_MAX_AGE_MS + 1;
-  if (!isProcessAlive(meta.pid) || ageMs > STORAGE_CAS_LOCK_MAX_AGE_MS) {
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-      /* ignore */
-    }
+  if (!meta) {
+    return;
+  }
+  const ageMs = Date.now() - meta.createdAtMs;
+  if (isProcessAlive(meta.pid) && ageMs <= STORAGE_CAS_LOCK_MAX_AGE_MS) {
+    return;
+  }
+  if (!lockMetadataStillMatches(lockPath, meta)) {
+    return;
+  }
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    /* ignore */
   }
 }
 
 /**
  * @param {string} lockPath
+ * @returns {string | null}
  */
-function acquireCacheLock(lockPath) {
-  breakStaleCacheLockIfNeeded(lockPath);
-  const fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
-  fs.writeFileSync(
-    fd,
-    `${JSON.stringify({ pid: process.pid, createdAtMs: Date.now() })}\n`,
-    { encoding: "utf8" },
-  );
-  return fd;
+function tryAcquireCacheLock(lockPath) {
+  const ownerToken = crypto.randomBytes(16).toString("hex");
+  const payload = `${JSON.stringify({
+    pid: process.pid,
+    createdAtMs: Date.now(),
+    ownerToken,
+  })}\n`;
+  const tmp = `${lockPath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.locktmp`;
+  try {
+    fs.writeFileSync(tmp, payload, { flag: "wx", mode: 0o600 });
+    try {
+      fs.linkSync(tmp, lockPath);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+        return null;
+      }
+      throw error;
+    }
+    fs.unlinkSync(tmp);
+    return ownerToken;
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * @param {string} lockPath
+ * @param {number} deadlineMs
+ */
+function acquireCacheLockWithBackoff(lockPath, deadlineMs) {
+  let attempt = 0;
+  while (Date.now() < deadlineMs) {
+    const token = tryAcquireCacheLock(lockPath);
+    if (token) {
+      return token;
+    }
+    breakStaleCacheLockIfNeeded(lockPath);
+    sleepMsForCasCacheLockBackoff(lockBackoffMs(attempt));
+    attempt += 1;
+  }
+  return null;
+}
+
+/**
+ * @param {string} lockPath
+ * @param {string | null | undefined} ownerToken
+ */
+function releaseCacheLock(lockPath, ownerToken) {
+  if (!ownerToken) return;
+  const meta = readLockMetadata(lockPath);
+  if (!meta || meta.ownerToken !== ownerToken) {
+    return;
+  }
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * @param {StorageCasCacheRecord | undefined} prev
+ */
+function doctorSequentialPassValidAfterUnsafe(prev) {
+  if (!prev?.casUnsafe) return true;
+  const unsafeAt = prev.unsafeAtMs ?? 0;
+  return Boolean(prev.doctorSequentialRecheckOk && (prev.doctorSequentialRecheckAtMs ?? 0) >= unsafeAt);
+}
+
+/**
+ * @param {StorageCasCacheRecord | undefined} prev
+ */
+function doctorRacePassValidAfterUnsafe(prev) {
+  if (!prev?.casUnsafe) return true;
+  const unsafeAt = prev.unsafeAtMs ?? 0;
+  return Boolean(prev.doctorRaceRecheckOk && (prev.doctorRaceRecheckAtMs ?? 0) >= unsafeAt);
 }
 
 /**
@@ -353,21 +578,8 @@ export function mutateStorageCasCache(cachePath, mutator, options = {}) {
   const lockPath = `${resolvedPath}.lock`;
   fs.mkdirSync(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + 30_000;
-  /** @type {number | undefined} */
-  let lockFd;
-  while (Date.now() < deadline) {
-    try {
-      lockFd = acquireCacheLock(lockPath);
-      break;
-    } catch {
-      breakStaleCacheLockIfNeeded(lockPath);
-      const until = Date.now() + 25;
-      while (Date.now() < until) {
-        /* spin briefly */
-      }
-    }
-  }
-  if (lockFd === undefined) {
+  const ownerToken = acquireCacheLockWithBackoff(lockPath, deadline);
+  if (!ownerToken) {
     throw new Error("Timed out waiting for storage CAS cache lock");
   }
   try {
@@ -382,16 +594,7 @@ export function mutateStorageCasCache(cachePath, mutator, options = {}) {
     delete cache.salvagedEndpoints;
     saveStorageCasCache(cache, resolvedPath);
   } finally {
-    try {
-      fs.closeSync(lockFd);
-    } catch {
-      /* ignore */
-    }
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-      /* ignore */
-    }
+    releaseCacheLock(lockPath, ownerToken);
   }
 }
 
@@ -414,7 +617,21 @@ export function getStorageCasCacheRecord(cache, bindingKey, nowMs = Date.now()) 
     };
   }
   const record = cache.endpoints[bindingKey];
-  if (!record) return null;
+  if (!record) {
+    if (cache.corruptGeneration) {
+      return {
+        bindingKey,
+        crossDeviceCas: false,
+        probedAtMs: 0,
+        expiresAtMs: 0,
+        stale: false,
+        unsafe: true,
+        casUnsafe: true,
+        unknownAfterCorruption: true,
+      };
+    }
+    return null;
+  }
   const normalized = normalizeStorageCasCacheRecordOnRead(record, bindingKey, nowMs);
   if (normalized.failClosedCorruptGen && cache.corruptGeneration) {
     if (normalized.failClosedCorruptGen === cache.corruptGeneration) {
@@ -460,7 +677,10 @@ export function markStorageCasUnsafePersisted(
       expiresAtMs: 0,
       doctorSequentialRecheckOk: false,
       doctorRaceRecheckOk: false,
-      ...(prev && prev.casUnsafe ? { unsafeAtMs: prev.unsafeAtMs ?? nowMs } : {}),
+      doctorSequentialRecheckAtMs: undefined,
+      doctorRaceRecheckAtMs: undefined,
+      failClosedCorruptGen: undefined,
+      ...(prev && prev.casUnsafe && prev.unsafeAtMs ? { unsafeAtMs: nowMs } : {}),
     });
   });
 }
@@ -491,10 +711,12 @@ export function recordStorageCasInitProbeSuccess(cachePath, bindingKey, nowMs = 
 function doctorRecheckSuccessRecord(prev, nowMs) {
   const expiresAtMs = Math.min(nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS, nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS);
   const raceUnsafe = prev?.casUnsafe && isRaceRelatedCasUnsafeReason(prev.unsafeReason);
+  const doctorSequentialRecheckAtMs = nowMs;
+  const doctorSequentialRecheckOk = true;
   if (raceUnsafe) {
-    const doctorSequentialRecheckOk = true;
-    const doctorRaceRecheckOk = Boolean(prev?.doctorRaceRecheckOk);
-    if (doctorRaceRecheckOk) {
+    const unsafeAt = prev?.unsafeAtMs ?? 0;
+    const raceOk = doctorRacePassValidAfterUnsafe(prev);
+    if (raceOk && doctorSequentialRecheckAtMs >= unsafeAt) {
       return {
         bindingKey: prev.bindingKey,
         crossDeviceCas: true,
@@ -506,6 +728,8 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
         failClosedCorruptGen: undefined,
         doctorSequentialRecheckOk: false,
         doctorRaceRecheckOk: false,
+        doctorSequentialRecheckAtMs: undefined,
+        doctorRaceRecheckAtMs: undefined,
       };
     }
     return {
@@ -514,6 +738,7 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
       crossDeviceCas: false,
       casUnsafe: true,
       doctorSequentialRecheckOk,
+      doctorSequentialRecheckAtMs,
       probedAtMs: nowMs,
       expiresAtMs: 0,
     };
@@ -529,6 +754,8 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
     failClosedCorruptGen: undefined,
     doctorSequentialRecheckOk: false,
     doctorRaceRecheckOk: false,
+    doctorSequentialRecheckAtMs: undefined,
+    doctorRaceRecheckAtMs: undefined,
   };
 }
 
@@ -539,16 +766,17 @@ function doctorRecheckSuccessRecord(prev, nowMs) {
  */
 export function recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, nowMs = Date.now()) {
   const loaded = loadStorageCasCache(cachePath ?? undefined);
-  const salvaged = loaded.salvagedEndpoints ?? {};
+  const salvaged = loaded.salvagedEndpoints ?? loadSalvagedEndpointsFromLastGood(cachePath ?? "") ?? {};
   const corruptGeneration =
     loaded.fileCorrupt || Object.keys(salvaged).length
-      ? (loaded.corruptGeneration ?? crypto.randomBytes(8).toString("hex"))
+      ? (loaded.corruptGeneration ?? ensureCorruptionGenerationOnCorruptLoad(cachePath ?? storageCasCacheFilePath()))
       : loaded.corruptGeneration;
   mutateStorageCasCache(
     cachePath,
     (cache) => {
       if (!cache.corruptGeneration && (loaded.fileCorrupt || Object.keys(salvaged).length)) {
         cache.corruptGeneration = corruptGeneration ?? crypto.randomBytes(8).toString("hex");
+        writeStorageCasCorruptionMarker(cachePath ?? storageCasCacheFilePath(), cache.corruptGeneration);
       }
       if (cache.corruptGeneration && (loaded.fileCorrupt || Object.keys(salvaged).length)) {
         preserveFailClosedEndpointsAfterCorrupt(cache, bindingKey, salvaged, cache.corruptGeneration);
@@ -576,8 +804,13 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
       const expiresAtMs = Math.min(nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS, nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS);
       if (prev?.casUnsafe && isRaceRelatedCasUnsafeReason(prev.unsafeReason)) {
         const doctorRaceRecheckOk = true;
-        const doctorSequentialRecheckOk = Boolean(prev.doctorSequentialRecheckOk);
-        if (doctorSequentialRecheckOk) {
+        const doctorRaceRecheckAtMs = nowMs;
+        const seqOk = doctorSequentialPassValidAfterUnsafe({
+          ...prev,
+          doctorSequentialRecheckOk: prev.doctorSequentialRecheckOk,
+          doctorSequentialRecheckAtMs: prev.doctorSequentialRecheckAtMs,
+        });
+        if (seqOk) {
           setStorageCasCacheRecord(cache, bindingKey, {
             bindingKey,
             crossDeviceCas: true,
@@ -587,6 +820,10 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
             unsafeReason: undefined,
             unsafeAtMs: undefined,
             failClosedCorruptGen: undefined,
+            doctorSequentialRecheckOk: false,
+            doctorRaceRecheckOk: false,
+            doctorSequentialRecheckAtMs: undefined,
+            doctorRaceRecheckAtMs: undefined,
           });
           return;
         }
@@ -596,6 +833,7 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, nowMs =
           crossDeviceCas: false,
           casUnsafe: true,
           doctorRaceRecheckOk,
+          doctorRaceRecheckAtMs,
         });
         return;
       }

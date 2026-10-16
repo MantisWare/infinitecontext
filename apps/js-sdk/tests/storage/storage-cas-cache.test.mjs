@@ -120,8 +120,7 @@ describe("storage CAS cache", () => {
       },
       cachePath,
     );
-    fs.copyFileSync(cachePath, `${cachePath}.corrupt.test-fixture.bak`);
-    fs.writeFileSync(cachePath, "{ corrupt", { mode: 0o600 });
+    fs.truncateSync(cachePath, 6);
     const corruptView = loadStorageCasCache(cachePath);
     assert.equal(corruptView.fileCorrupt, true);
     assert.equal(corruptView.salvagedEndpoints?.[bindingB]?.unsafeReason, "race_double_win");
