@@ -85,6 +85,53 @@ describe("storage CAS cache lock stress", () => {
     assert.equal(cache.endpoints[bindingKey]?.unsafeReason, "race_double_win");
   });
 
+  it("re-flag while race-unsafe then cas-race alone stays unsafe (blocker A2 repro)", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-a2-seq-")), "cache.json");
+    const bindingKey = "s3:test:bucket:p";
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 100);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, 200);
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 300);
+    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey, 400);
+    const cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
+    assert.equal(cache.endpoints[bindingKey]?.unsafeReason, "race_double_win");
+    assert.ok((cache.endpoints[bindingKey]?.unsafeAtMs ?? 0) >= 300);
+    assert.notEqual(cache.endpoints[bindingKey]?.doctorSequentialRecheckOk, true);
+  });
+
+  it("two healthy backends stay CAS-on across individual rechecks (blocker R1)", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-r1-")), "cache.json");
+    const bindingA = "s3:http://loopback:9000:bucket:a";
+    const bindingB = "s3:http://loopback:9000:bucket:b";
+    const now = Date.now();
+    mutateStorageCasCache(cachePath, (cache) => {
+      setStorageCasCacheRecord(cache, bindingA, {
+        bindingKey: bindingA,
+        crossDeviceCas: true,
+        probedAtMs: now,
+        expiresAtMs: now + 60_000,
+      });
+      setStorageCasCacheRecord(cache, bindingB, {
+        bindingKey: bindingB,
+        crossDeviceCas: true,
+        probedAtMs: now,
+        expiresAtMs: now + 60_000,
+      });
+    });
+    assert.ok(loadSalvagedEndpointsFromLastGood(cachePath));
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingA, now + 1);
+    let cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingA]?.crossDeviceCas, true);
+    assert.equal(cache.endpoints[bindingB]?.crossDeviceCas, true);
+    assert.equal(cache.endpoints[bindingB]?.failClosedCorruptGen, undefined);
+    assert.equal(fs.existsSync(`${cachePath}.corruption-marker`), false);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingB, now + 2);
+    cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingA]?.crossDeviceCas, true);
+    assert.equal(cache.endpoints[bindingB]?.crossDeviceCas, true);
+    assert.equal(fs.existsSync(`${cachePath}.corruption-marker`), false);
+  });
+
   it("new race_double_win after recheck cannot clear with cas-race alone (blocker A2)", () => {
     const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-a2-")), "cache.json");
     const bindingKey = "s3:test:bucket:p";

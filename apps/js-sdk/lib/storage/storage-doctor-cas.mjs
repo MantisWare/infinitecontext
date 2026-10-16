@@ -70,7 +70,7 @@ export async function runStorageDoctorRecheckCas(options = {}) {
         "invalid_argument",
       );
     }
-    return { bindingKey, ok: true, crossDeviceCas: true };
+    return { bindingKey, ok: true, crossDeviceCas: recheck.crossDeviceCas };
   } finally {
     await session.close();
   }

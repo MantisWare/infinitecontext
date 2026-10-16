@@ -1,4 +1,5 @@
 import {
+  crossDeviceCasEnabledAfterDoctorRecheck,
   getStorageCasCacheRecord,
   loadStorageCasCache,
   markStorageCasUnsafePersisted,
@@ -129,5 +130,6 @@ export async function recheckStorageCasProbe(adapter, options) {
     return { ok: false, crossDeviceCas: false };
   }
   recordStorageCasDoctorRecheckSuccess(cachePath, options.bindingKey, nowMs);
-  return { ok: true, crossDeviceCas: true };
+  const crossDeviceCas = crossDeviceCasEnabledAfterDoctorRecheck(cachePath, options.bindingKey, nowMs);
+  return { ok: true, crossDeviceCas };
 }

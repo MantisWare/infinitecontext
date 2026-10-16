@@ -14,6 +14,7 @@ import {
   recheckStorageCasProbe,
   resolveCrossDeviceCasForAdapterInit,
 } from "../../lib/storage/storage-cas-init.mjs";
+import { recordStorageCasDoctorRecheckSuccess } from "../../lib/storage/storage-cas-cache.mjs";
 import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
 import { createS3StorageAdapter } from "../../lib/storage/s3-adapter.mjs";
 
@@ -56,6 +57,23 @@ describe("storage CAS init cache", () => {
     const cache = loadStorageCasCache(cachePath);
     assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
     assert.equal(cache.endpoints[bindingKey]?.unsafeReason, "race_double_win");
+    await adapter.close();
+  });
+
+  it("recheck-cas reports crossDeviceCas false while race-unsafe pending cas-race", async () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-recheck-out-")), "cache.json");
+    const bindingKey = "s3:mem:bucket:race-out";
+    const adapter = createMemoryStorageAdapter();
+    await adapter.init();
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", Date.now());
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey, Date.now() + 1);
+    const recheck = await recheckStorageCasProbe(adapter, {
+      bindingKey,
+      cachePath,
+      runBasicProbe: async () => true,
+    });
+    assert.equal(recheck.ok, true);
+    assert.equal(recheck.crossDeviceCas, false);
     await adapter.close();
   });
 
