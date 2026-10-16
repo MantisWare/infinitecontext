@@ -73,12 +73,11 @@ function spawnStorageDoctorCli(homeDir, envPatch, doctorArgs) {
     encoding: "utf8",
   });
   assert.equal(res.status, 0, res.stderr || res.stdout || `exit ${res.status}`);
-  const lines = String(res.stdout)
-    .trim()
-    .split("\n")
-    .filter((line) => line.trim());
-  const last = lines.at(-1) ?? "";
-  return JSON.parse(last);
+  const text = String(res.stdout).trim();
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  assert.ok(first >= 0 && last > first, `CLI stdout missing JSON object: ${text.slice(0, 400)}`);
+  return JSON.parse(text.slice(first, last + 1));
 }
 
 /**
