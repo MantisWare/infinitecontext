@@ -1,0 +1,58 @@
+import { createS3StorageAdapter } from "./s3-adapter.mjs";
+import { resolveS3ObjectStoreConfig } from "./s3-config.mjs";
+import { StorageError } from "./errors.mjs";
+import { CAS_PROBE_OBJECT_PREFIXES } from "./storage-cas-probe-sweep.mjs";
+
+/**
+ * @param {string} key
+ */
+function isCasProbeObjectKey(key) {
+  const k = String(key);
+  return CAS_PROBE_OBJECT_PREFIXES.some((prefix) => k.startsWith(prefix));
+}
+
+/**
+ * Adapter that allows conditional writes only under ic-cas-probe/ and ic-cas-race/.
+ *
+ * @param {import("./types.mjs").StorageAdapter} adapter
+ */
+export function wrapStorageAdapterCasProbeSession(adapter) {
+  return {
+    ...adapter,
+    async put(key, body, putOptions) {
+      if (!isCasProbeObjectKey(key)) {
+        throw new StorageError(`CAS probe session refuses put outside probe prefixes: ${key}`, "invalid_argument");
+      }
+      return adapter.put(key, body, putOptions);
+    },
+    async delete(key, deleteOptions) {
+      if (!isCasProbeObjectKey(key)) {
+        throw new StorageError(
+          `CAS probe session refuses delete outside probe prefixes: ${key}`,
+          "invalid_argument",
+        );
+      }
+      return adapter.delete(key, deleteOptions);
+    },
+  };
+}
+
+/**
+ * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string }} options
+ */
+export async function openS3StorageCasProbeSession(options = {}) {
+  const env = options.env ?? process.env;
+  const config = options.config ?? {};
+  const s3 = resolveS3ObjectStoreConfig(config, env);
+  const adapter = createS3StorageAdapter({
+    bucket: s3.bucket,
+    prefix: s3.prefix,
+    region: s3.region,
+    endpoint: s3.endpoint,
+  });
+  await adapter.init({ mode: "probe-session", cachePath: options.cachePath });
+  return {
+    adapter: wrapStorageAdapterCasProbeSession(adapter),
+    close: () => adapter.close(),
+  };
+}

@@ -113,6 +113,7 @@ export function createS3StorageAdapter(options) {
   /** @type {import("./types.mjs").StorageCapability[]} */
   let capabilityList = crossDeviceCasCapabilitiesFromProbeResult(null);
   let casProbeActive = false;
+  let probeSessionActive = false;
 
   /** @param {string} logicalKey */
   const toObjectKey = (logicalKey) => {
@@ -134,11 +135,15 @@ export function createS3StorageAdapter(options) {
     capabilities: storageCapabilitySet(capabilityList),
 
     async init(initOptions = {}) {
+      const mode = initOptions.mode ?? "read-write";
       try {
         await client.send(new HeadBucketCommand({ Bucket: bucket }));
       } catch (error) {
         const mapped = mapS3Error(error);
         if (mapped) throw mapped;
+        if (mode === "read-only") {
+          throw new StorageError("S3 bucket unavailable", "invalid_argument");
+        }
         try {
           await client.send(new CreateBucketCommand({ Bucket: bucket }));
         } catch (createError) {
@@ -146,11 +151,17 @@ export function createS3StorageAdapter(options) {
           throw createMapped ?? new StorageError("S3 bucket unavailable", "invalid_argument");
         }
       }
+      if (mode === "probe-session") {
+        probeSessionActive = true;
+        capabilityList = crossDeviceCasCapabilitiesFromProbeResult(true);
+        adapter.capabilities = storageCapabilitySet(capabilityList);
+        return;
+      }
       casProbeActive = true;
       try {
         const resolved = await resolveCrossDeviceCasForAdapterInit(adapter, {
           bindingKey: casBindingKey,
-          mode: initOptions.mode ?? "read-write",
+          mode,
           cachePath: initOptions.cachePath,
           runBasicProbe: runCasProbe,
           sweepProbeKeys: initOptions.sweepProbeKeys,
@@ -202,7 +213,7 @@ export function createS3StorageAdapter(options) {
 
     async put(key, body, putOptions = {}) {
       assertNotAborted(putOptions.signal);
-      if (!casProbeActive) {
+      if (!casProbeActive && !probeSessionActive) {
         assertStoragePutPreconditionsSupported(adapter, putOptions);
       }
       const canonical = assertCanonicalStorageObjectKey(key);
@@ -297,7 +308,7 @@ export function createS3StorageAdapter(options) {
 
     async delete(key, deleteOptions = {}) {
       assertNotAborted(deleteOptions.signal);
-      if (!casProbeActive) {
+      if (!casProbeActive && !probeSessionActive) {
         assertStorageDeletePreconditionsSupported(adapter, deleteOptions);
       }
       const objectKey = toObjectKey(key);

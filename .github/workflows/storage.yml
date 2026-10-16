@@ -92,6 +92,8 @@ jobs:
           node --check apps/js-sdk/lib/storage/s3-cas-probe.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-probe.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-cache.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-endpoint.mjs
+          node --check apps/js-sdk/lib/storage/storage-s3-cas-probe-session.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-init.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-probe-sweep.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-race-probe.mjs
@@ -104,6 +106,10 @@ jobs:
       - name: Storage adapter contract tests
         working-directory: apps/js-sdk
         run: node --test --test-concurrency=1 tests/storage/*.test.mjs
+
+      - name: Storage doctor CAS race (MinIO)
+        working-directory: apps/js-sdk
+        run: node --test --test-concurrency=1 tests/storage/storage-doctor-cas-minio.test.mjs 2>&1 | tee /tmp/ic-doctor-cas.log && grep -q "IC_DOCTOR_CAS_RACE:" /tmp/ic-doctor-cas.log
 
       - name: Secret store keyring (Secret Service via dbus-run-session)
         run: |

@@ -128,9 +128,11 @@ describe("storage CAS init cache", () => {
 
 describe("storageCasProbeBindingKey", () => {
   it("normalizes endpoint and prefix", () => {
+    const key = storageCasProbeBindingKey({ endpoint: "http://127.0.0.1:9000/", bucket: "b", prefix: "/p/" });
+    assert.equal(key, "s3:http://loopback:9000:b:p");
     assert.equal(
-      storageCasProbeBindingKey({ endpoint: "http://127.0.0.1:9000/", bucket: "b", prefix: "/p/" }),
-      "s3:http://127.0.0.1:9000:b:p",
+      storageCasProbeBindingKey({ endpoint: "http://localhost:9000", bucket: "b", prefix: "p" }),
+      key,
     );
   });
 });

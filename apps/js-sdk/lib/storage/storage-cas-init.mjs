@@ -2,16 +2,15 @@ import {
   DEFAULT_STORAGE_CAS_CACHE_TTL_MS,
   getStorageCasCacheRecord,
   loadStorageCasCache,
-  markStorageCasUnsafe,
-  recordStorageCasProbeSuccess,
-  saveStorageCasCache,
+  markStorageCasUnsafePersisted,
+  recordStorageCasProbeSuccessPersisted,
 } from "./storage-cas-cache.mjs";
 import { sweepStaleCasProbeObjects } from "./storage-cas-probe-sweep.mjs";
 import { probeCrossDeviceCas } from "./storage-cas-probe.mjs";
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 
 /**
- * @typedef {'read-only' | 'read-write' | 'force-recheck'} StorageCasInitMode
+ * @typedef {'read-only' | 'read-write' | 'force-recheck' | 'probe-session'} StorageCasInitMode
  */
 
 /**
@@ -52,15 +51,15 @@ export function crossDeviceCasCapabilitiesFromProbeResult(crossDeviceCas) {
 export async function resolveCrossDeviceCasForAdapterInit(adapter, options) {
   const mode = options.mode ?? "read-write";
   const nowMs = options.nowMs ?? Date.now();
-  const ttlMs = options.ttlMs ?? DEFAULT_STORAGE_CAS_CACHE_TTL_MS;
+  const cachePath = options.cachePath;
   const runBasicProbe = options.runBasicProbe ?? probeCrossDeviceCas;
-  const cache = loadStorageCasCache(options.cachePath);
+  const cache = loadStorageCasCache(cachePath);
   const cached = getStorageCasCacheRecord(cache, options.bindingKey, nowMs);
 
-  if (cached && cached.unsafe) {
+  if (cache.fileCorrupt || (cached && cached.unsafe)) {
     return {
       crossDeviceCas: false,
-      source: "cas_unsafe",
+      source: cache.fileCorrupt ? "corrupt_cache" : "cas_unsafe",
       probed: false,
       cache,
     };
@@ -98,44 +97,37 @@ export async function resolveCrossDeviceCasForAdapterInit(adapter, options) {
   }
   const basicOk = await runBasicProbe(adapter);
   if (!basicOk) {
-    markStorageCasUnsafe(cache, options.bindingKey, "basic_probe_failed", nowMs);
-    saveStorageCasCache(cache, options.cachePath);
+    markStorageCasUnsafePersisted(cachePath, options.bindingKey, "basic_probe_failed", nowMs);
     return {
       crossDeviceCas: false,
       source: "probe_failed",
       probed: true,
-      cache,
+      cache: loadStorageCasCache(cachePath),
     };
   }
-  recordStorageCasProbeSuccess(cache, options.bindingKey, true, nowMs, ttlMs);
-  saveStorageCasCache(cache, options.cachePath);
+  recordStorageCasProbeSuccessPersisted(cachePath, options.bindingKey, true, nowMs);
   return {
     crossDeviceCas: true,
     source: "probe",
     probed: true,
-    cache,
+    cache: loadStorageCasCache(cachePath),
   };
 }
 
 /**
- * Force a successful basic probe and clear cas_unsafe (doctor --recheck-cas).
- *
  * @param {import("./types.mjs").StorageAdapter} adapter
  * @param {{ bindingKey: string, cachePath?: string, ttlMs?: number, nowMs?: number, runBasicProbe?: (a: import("./types.mjs").StorageAdapter) => Promise<boolean> }} options
  */
 export async function recheckStorageCasProbe(adapter, options) {
   const nowMs = options.nowMs ?? Date.now();
-  const ttlMs = options.ttlMs ?? DEFAULT_STORAGE_CAS_CACHE_TTL_MS;
   const runBasicProbe = options.runBasicProbe ?? probeCrossDeviceCas;
-  const cache = loadStorageCasCache(options.cachePath);
+  const cachePath = options.cachePath;
   await sweepStaleCasProbeObjects(adapter);
   const basicOk = await runBasicProbe(adapter);
   if (!basicOk) {
-    markStorageCasUnsafe(cache, options.bindingKey, "recheck_failed", nowMs);
-    saveStorageCasCache(cache, options.cachePath);
+    markStorageCasUnsafePersisted(cachePath, options.bindingKey, "recheck_failed", nowMs);
     return { ok: false, crossDeviceCas: false };
   }
-  recordStorageCasProbeSuccess(cache, options.bindingKey, true, nowMs, ttlMs);
-  saveStorageCasCache(cache, options.cachePath);
+  recordStorageCasProbeSuccessPersisted(cachePath, options.bindingKey, true, nowMs);
   return { ok: true, crossDeviceCas: true };
 }

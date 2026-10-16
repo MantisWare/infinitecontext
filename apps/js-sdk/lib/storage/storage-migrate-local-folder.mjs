@@ -91,19 +91,35 @@ function atomicCopySourceToDestinationPath(src, dest, destRoot) {
   assertMigrationDestWriteTargetSafe(destRoot, destDir);
   const tmp = migrationCopyTempPath(destDir);
   const payload = fs.readFileSync(src);
+  /** @param {string} tempPath */
+  const removeTempIfPresent = (tempPath) => {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      /* ignore */
+    }
+  };
   let fd;
   try {
+    assertMigrationDestWriteTargetSafe(destRoot, tmp);
     fd = fs.openSync(
       tmp,
       fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
       0o600,
     );
   } catch (error) {
+    removeTempIfPresent(tmp);
+    if (error instanceof StorageError) {
+      throw error;
+    }
     throw mapFsError(error, tmp);
   }
   try {
     fs.writeSync(fd, payload, 0, payload.length);
     fs.fsyncSync(fd);
+  } catch (error) {
+    removeTempIfPresent(tmp);
+    throw error;
   } finally {
     fs.closeSync(fd);
   }
