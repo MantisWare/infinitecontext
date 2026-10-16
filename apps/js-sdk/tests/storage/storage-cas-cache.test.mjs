@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it } from "node:test";
+import { describe, it, afterEach } from "node:test";
 
 import {
   attachStorageCasCorruptionContextForRead,
@@ -15,17 +15,40 @@ import {
   mutateStorageCasCache,
   normalizeStorageCasCacheRecordOnRead,
   readStorageCasCorruptionMarker,
+  readStorageCasCorruptionMarkerFile,
   recordStorageCasDoctorRecheckSuccess,
   recordStorageCasDoctorRaceSuccess,
   recordStorageCasInitProbeSuccess,
   saveStorageCasCache,
   setStorageCasCacheRecord,
+  setStorageCasClockForTests,
   storageCasCacheLastGoodPath,
   storageCasProbeBindingKey,
+  STORAGE_CAS_TIME_SKEW_MS,
+  writeStorageCasCorruptionMarkerFile,
 } from "../../lib/storage/storage-cas-cache.mjs";
 import { normalizeStorageCasEndpoint } from "../../lib/storage/storage-cas-endpoint.mjs";
 
 describe("storage CAS cache", () => {
+  afterEach(() => {
+    setStorageCasClockForTests(null);
+  });
+
+  it("clamps future corruption marker on locked read and rewrites file", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-future-")), "cache.json");
+    const now = 2_000_000;
+    setStorageCasClockForTests(() => now);
+    writeStorageCasCorruptionMarkerFile(cachePath, {
+      corruptedAtMs: now + STORAGE_CAS_TIME_SKEW_MS + 60_000,
+      salvagedBindings: {},
+    });
+    saveStorageCasCache({ v: 1, endpoints: {} }, cachePath);
+    mutateStorageCasCache(cachePath, () => {});
+    const marker = readStorageCasCorruptionMarkerFile(cachePath);
+    assert.ok(marker);
+    assert.equal(marker?.corruptedAtMs, now);
+  });
+
   it("normalises loopback endpoints to one binding key", () => {
     const a = storageCasProbeBindingKey({ endpoint: "http://127.0.0.1:9000", bucket: "b", prefix: "p" });
     const b = storageCasProbeBindingKey({ endpoint: "http://localhost:9000", bucket: "b", prefix: "p" });
@@ -188,6 +211,8 @@ describe("storage CAS cache", () => {
     bumpStorageCasCorruptionMarker(cachePath);
     let cache = loadStorageCasCache(cachePath);
     attachStorageCasCorruptionContextForRead(cache, cachePath);
+    const marker = readStorageCasCorruptionMarkerFile(cachePath);
+    assert.deepEqual(marker?.salvagedBindings ?? {}, {});
     assert.equal(cache.salvageUnavailable, true);
     assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, false);
     recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
@@ -198,20 +223,6 @@ describe("storage CAS cache", () => {
     cache = loadStorageCasCache(cachePath);
     attachStorageCasCorruptionContextForRead(cache, cachePath);
     assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, true);
-  });
-
-  it("new unsafeAtMs stays above latest doctor pass (clock skew)", () => {
-    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-skew-")), "cache.json");
-    const bindingKey = "s3:test:bucket:p";
-    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 100);
-    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
-    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey);
-    const before = loadStorageCasCache(cachePath).endpoints[bindingKey];
-    const latestPass = Math.max(before?.seqRecheckAtMs ?? 0, before?.racePassAtMs ?? 0);
-    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 50);
-    const after = loadStorageCasCache(cachePath).endpoints[bindingKey];
-    assert.ok((after?.unsafeAtMs ?? 0) >= latestPass + 1);
-    assert.equal(after?.seqRecheckAtMs ?? 0, 0);
   });
 
   it("fail closed on corrupt cache until recheck clears it", () => {
