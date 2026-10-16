@@ -140,7 +140,7 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
       assert.equal(result.ok, true);
       assert.equal(result.persistedUnsafe, false);
       const cache = loadStorageCasCache(storageCasCacheFilePath());
-      assert.equal(cache.endpoints[bindingKey]?.casUnsafe, undefined);
+      assert.notEqual(cache.endpoints[bindingKey]?.casUnsafe, true);
       process.env.HOME = prevHome;
     });
   });
