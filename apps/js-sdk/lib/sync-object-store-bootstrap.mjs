@@ -67,6 +67,8 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
     env: options.env,
     sync: { mode, persist: true, dbPath },
     layoutPrefix: "accounts/local",
+    casInitMode: options.casInitMode ?? "read-write",
+    casCachePath: options.casCachePath,
   });
   setDefaultSyncTransport(openLocalStore.transport);
   return openLocalStore;

@@ -91,7 +91,11 @@ jobs:
           node --check apps/js-sdk/lib/storage/s3-config.mjs
           node --check apps/js-sdk/lib/storage/s3-cas-probe.mjs
           node --check apps/js-sdk/lib/storage/storage-cas-probe.mjs
-          node --check apps/js-sdk/lib/storage/storage-cas-concurrency-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-cache.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-init.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-probe-sweep.mjs
+          node --check apps/js-sdk/lib/storage/storage-cas-race-probe.mjs
+          node --check apps/js-sdk/lib/storage/storage-doctor-cas.mjs
           node --check apps/js-sdk/lib/storage/storage-migrate-dest-path-guard.mjs
           node --check apps/js-sdk/lib/storage/storage-put-preconditions.mjs
           node --check apps/js-sdk/lib/storage/s3-adapter.mjs
@@ -99,15 +103,7 @@ jobs:
 
       - name: Storage adapter contract tests
         working-directory: apps/js-sdk
-        env:
-          IC_S3_CAS_RACE_ROUNDS: "200"
         run: node --test --test-concurrency=1 tests/storage/*.test.mjs
-
-      - name: S3 conditional-write race probe (200 rounds, MinIO)
-        working-directory: apps/js-sdk
-        env:
-          IC_S3_CAS_RACE_ROUNDS: "200"
-        run: node --test --test-concurrency=1 tests/storage/s3-cas-concurrency-ci.test.mjs 2>&1 | tee /tmp/ic-s3-cas-race.log && grep -q "IC_S3_CAS_RACE_CI:" /tmp/ic-s3-cas-race.log
 
       - name: Secret store keyring (Secret Service via dbus-run-session)
         run: |

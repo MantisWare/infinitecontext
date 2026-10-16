@@ -26,7 +26,10 @@ export async function createS3ObjectStore(options) {
     region: s3.region,
     endpoint: s3.endpoint,
   });
-  await adapter.init();
+  await adapter.init({
+    mode: options.casInitMode ?? "read-write",
+    cachePath: options.casCachePath,
+  });
 
   const persist = options.sync?.persist !== false;
   const localState =

@@ -7,7 +7,7 @@ import {
   resetObjectStoreBootstrapForTests,
 } from "../../lib/sync-object-store-bootstrap.mjs";
 import { createLocalObjectStore } from "../../lib/storage/local-object-store.mjs";
-import { isHostedStorageBackend } from "../../lib/sync-storage-backend.mjs";
+import { isHostedStorageBackend, isS3ObjectStoreBackend } from "../../lib/sync-storage-backend.mjs";
 import {
   isManifestDeviceRecentlyActive,
   loadStorageManifest,
@@ -47,6 +47,8 @@ export async function runStorageCli(subcommand, args, deps = getStorageCliDepsFo
 Commands:
   init <folderPath>                 Create folder store skeleton (objects/)
   doctor [--repair] [--dry-run]     Audit folder vault; optional quarantine repair
+  doctor --cas-race[=N]             S3 only: optional conditional-write race probe (default 20 rounds)
+  doctor --recheck-cas              S3 only: rerun basic CAS probe and clear cas_unsafe when it passes
   migrate [--to <folder>] [--apply-config] [--reset]  Resumable local → folder copy + trust verify
   devices remove <devH> [--force]   Drop a device from manifest GC participation
 
@@ -120,6 +122,33 @@ Environment:
   }
 
   if (cmd === "doctor") {
+    const casRaceArg = args.find((a) => a === "--cas-race" || a.startsWith("--cas-race="));
+    const recheckCas = args.includes("--recheck-cas");
+    if (casRaceArg || recheckCas) {
+      return run(async () => {
+        const config = readConfigFile();
+        if (!isS3ObjectStoreBackend(config)) {
+          throw new Error("storage doctor --cas-race / --recheck-cas require storage.backend=s3");
+        }
+        if (casRaceArg && recheckCas) {
+          throw new Error("Use either --cas-race or --recheck-cas, not both");
+        }
+        if (casRaceArg) {
+          let rounds = 20;
+          if (casRaceArg.includes("=")) {
+            const parsed = Number(casRaceArg.split("=", 2)[1]);
+            if (Number.isFinite(parsed) && parsed > 0) rounds = parsed;
+          }
+          const { runStorageDoctorCasRace } = await import("../../lib/storage/storage-doctor-cas.mjs");
+          const result = await runStorageDoctorCasRace({ config, env: process.env, rounds });
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        const { runStorageDoctorRecheckCas } = await import("../../lib/storage/storage-doctor-cas.mjs");
+        const result = await runStorageDoctorRecheckCas({ config, env: process.env });
+        console.log(JSON.stringify(result, null, 2));
+      });
+    }
     const action = String(args[0] ?? "").toLowerCase();
     if (action === "--repair" || action === "repair") {
       const dryRun = args.includes("--dry-run");

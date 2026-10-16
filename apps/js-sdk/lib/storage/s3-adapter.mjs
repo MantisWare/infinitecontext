@@ -21,7 +21,11 @@ import {
   RateLimitedError,
   StorageError,
 } from "./errors.mjs";
-import { probeCrossDeviceCasConcurrency } from "./storage-cas-concurrency-probe.mjs";
+import {
+  crossDeviceCasCapabilitiesFromProbeResult,
+  resolveCrossDeviceCasForAdapterInit,
+} from "./storage-cas-init.mjs";
+import { storageCasProbeBindingKey } from "./storage-cas-cache.mjs";
 import { probeCrossDeviceCas } from "./storage-cas-probe.mjs";
 import {
   assertStorageDeletePreconditionsSupported,
@@ -82,9 +86,6 @@ function s3IfMatchValue(ifMatch) {
  *   maxObjectBytes?: number,
  *   client?: import("@aws-sdk/client-s3").S3Client,
  *   casProbe?: (adapter: import("./types.mjs").StorageAdapter) => Promise<boolean>,
- *   casConcurrencyProbe?: (
- *     adapter: import("./types.mjs").StorageAdapter,
- *   ) => Promise<boolean>,
  * }} options
  */
 export function createS3StorageAdapter(options) {
@@ -103,17 +104,14 @@ export function createS3StorageAdapter(options) {
     });
 
   const runCasProbe = options.casProbe ?? probeCrossDeviceCas;
-  const runCasConcurrencyProbe = options.casConcurrencyProbe ?? probeCrossDeviceCasConcurrency;
+  const casBindingKey = storageCasProbeBindingKey({
+    endpoint: options.endpoint,
+    bucket,
+    prefix,
+  });
 
   /** @type {import("./types.mjs").StorageCapability[]} */
-  const baseCapabilities = [
-    STORAGE_CAPABILITIES.get,
-    STORAGE_CAPABILITIES.head,
-    STORAGE_CAPABILITIES.put,
-    STORAGE_CAPABILITIES.list,
-    STORAGE_CAPABILITIES.delete,
-  ];
-  let capabilityList = [...baseCapabilities];
+  let capabilityList = crossDeviceCasCapabilitiesFromProbeResult(null);
   let casProbeActive = false;
 
   /** @param {string} logicalKey */
@@ -135,7 +133,7 @@ export function createS3StorageAdapter(options) {
     serverSideTimestamps: true,
     capabilities: storageCapabilitySet(capabilityList),
 
-    async init() {
+    async init(initOptions = {}) {
       try {
         await client.send(new HeadBucketCommand({ Bucket: bucket }));
       } catch (error) {
@@ -149,28 +147,18 @@ export function createS3StorageAdapter(options) {
         }
       }
       casProbeActive = true;
-      let casOk = false;
       try {
-        const basicOk = await runCasProbe(adapter);
-        const raceRounds = Number(process.env.IC_S3_CAS_RACE_ROUNDS ?? "200");
-        const raceOk =
-          basicOk &&
-          (await runCasConcurrencyProbe(adapter, {
-            rounds: Number.isFinite(raceRounds) && raceRounds > 0 ? raceRounds : 200,
-          }));
-        casOk = basicOk && raceOk;
+        const resolved = await resolveCrossDeviceCasForAdapterInit(adapter, {
+          bindingKey: casBindingKey,
+          mode: initOptions.mode ?? "read-write",
+          cachePath: initOptions.cachePath,
+          runBasicProbe: runCasProbe,
+          sweepProbeKeys: initOptions.sweepProbeKeys,
+        });
+        capabilityList = crossDeviceCasCapabilitiesFromProbeResult(resolved.crossDeviceCas);
       } finally {
         casProbeActive = false;
       }
-      capabilityList = casOk
-        ? [
-            ...baseCapabilities,
-            STORAGE_CAPABILITIES.conditionalCreate,
-            STORAGE_CAPABILITIES.conditionalReplace,
-            STORAGE_CAPABILITIES.strongListAfterWrite,
-            STORAGE_CAPABILITIES.crossDeviceCas,
-          ]
-        : [...baseCapabilities];
       adapter.capabilities = storageCapabilitySet(capabilityList);
     },
 

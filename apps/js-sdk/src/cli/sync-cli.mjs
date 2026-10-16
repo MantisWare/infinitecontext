@@ -69,7 +69,20 @@ Environment:
   }
 
   await requireSession(baseUrl);
-  await configureObjectStoreSyncTransportIfNeeded({ mode: "cli", baseUrl });
+
+  /** @returns {'read-only' | 'read-write'} */
+  const casInitModeForCommand = () => {
+    if (cmd === "status") return "read-only";
+    if (cmd === "parked" && String(args[0] ?? "list").toLowerCase() === "list") return "read-only";
+    if (cmd === "devices" && String(args[0] ?? "").toLowerCase() !== "revoke") return "read-only";
+    return "read-write";
+  };
+
+  await configureObjectStoreSyncTransportIfNeeded({
+    mode: "cli",
+    baseUrl,
+    casInitMode: casInitModeForCommand(),
+  });
 
   if (cmd === "status") {
     return run(async () => {

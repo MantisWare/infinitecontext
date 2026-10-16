@@ -334,6 +334,57 @@ describe("storage migrate destination symlink attacks", () => {
     }
   });
 
+  it("aborts mid-copy when a parent directory becomes a symlink (no writes outside dest)", async () => {
+    const scopeKey = "migrate-symlink-mid-parent";
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-mid-src-"));
+    const folderRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-mid-d-"));
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-mid-out-"));
+    initFolderStorageRoot(folderRoot);
+    const { syncStatePath } = await seedLocalVault(localRoot, DEVICE_A);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+    const outsideBefore = countRegularFilesUnder(outsideRoot);
+
+    await assert.rejects(
+      () =>
+        runStorageMigrateLocalToFolder({
+          scopeKey,
+          dek: DEK,
+          layoutPrefix: PREFIX,
+          sourceRoot: localRoot,
+          destRoot: folderRoot,
+          deviceUuid: DEVICE_A,
+          cliStatePath: syncStatePath,
+          testBeforeDestinationWrite: ({ writeNumber, destRoot, sourceRoot, state }) => {
+            if (writeNumber !== 3) return;
+            const copiedSet = new Set(state.copiedRelativePaths ?? []);
+            const allRel = listSourceObjectRelPaths(sourceRoot);
+            const nextRel = allRel.find((rel) => !copiedSet.has(rel));
+            if (!nextRel) return;
+            const attackDir = path.join(destRoot, path.dirname(nextRel));
+            fs.mkdirSync(path.dirname(attackDir), { recursive: true, mode: 0o700 });
+            if (fs.existsSync(attackDir)) {
+              fs.rmSync(attackDir, { recursive: true, force: true });
+            }
+            fs.symlinkSync(outsideRoot, attackDir, "dir");
+          },
+        }),
+      (err) =>
+        err instanceof StorageError &&
+        String(err.message).includes(MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE),
+    );
+
+    assert.equal(countRegularFilesUnder(outsideRoot), outsideBefore);
+    try {
+      fs.unlinkSync(storageMigrateStatePath(scopeKey));
+    } catch {
+      /* ignore */
+    }
+  });
+
   it("refuses a symlinked file at an uncopied path before verify", async () => {
     const scopeKey = "migrate-symlink-uncopied";
     const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mig-slink-unc-src-"));

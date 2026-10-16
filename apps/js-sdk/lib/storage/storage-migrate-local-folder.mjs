@@ -16,7 +16,8 @@ import {
   listConflictAwareGenerationPaths,
   readConflictAwareGenerationHighWater,
 } from "./folder-conflict-files.mjs";
-import { FS_GEN_HIGH_WATER_BASENAME } from "./filesystem-object-file.mjs";
+import { assertRealpathUnderRoot, FS_GEN_HIGH_WATER_BASENAME } from "./filesystem-object-file.mjs";
+import { mapFsError } from "./filesystem-paths.mjs";
 import { initFolderStorageRoot } from "./storage-init.mjs";
 import { StorageError } from "./errors.mjs";
 import { deriveDevH } from "./layout.mjs";
@@ -89,20 +90,37 @@ function atomicCopySourceToDestinationPath(src, dest, destRoot) {
   fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
   assertMigrationDestWriteTargetSafe(destRoot, destDir);
   const tmp = migrationCopyTempPath(destDir);
+  const payload = fs.readFileSync(src);
+  let fd;
   try {
-    fs.copyFileSync(src, tmp);
-    const fd = fs.openSync(tmp, "r");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fs.renameSync(tmp, dest);
-    fsyncDirectory(destDir);
-  } finally {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      /* temp removed by rename or never created */
-    }
+    fd = fs.openSync(
+      tmp,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    throw mapFsError(error, tmp);
   }
+  try {
+    fs.writeSync(fd, payload, 0, payload.length);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  assertMigrationDestWriteTargetSafe(destRoot, tmp);
+  assertMigrationDestWriteTargetSafe(destRoot, dest);
+  fs.renameSync(tmp, dest);
+  try {
+    assertRealpathUnderRoot(dest, destRoot);
+  } catch {
+    try {
+      fs.unlinkSync(dest);
+    } catch {
+      /* ignore */
+    }
+    throw new StorageError(MIGRATION_DEST_SYMLINK_OR_ESCAPE_MESSAGE, "invalid_argument");
+  }
+  fsyncDirectory(destDir);
 }
 
 /**
