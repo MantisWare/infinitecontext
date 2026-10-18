@@ -19,6 +19,8 @@ const DB_URL = process.env.SYNC_E2E_DATABASE_URL ?? process.env.VAULT_E2E_DATABA
 let postgresReady = false;
 /** @type {Set<string>} */
 let vaultAgentPidsBaseline = new Set();
+/** @type {Set<string>} */
+const trackedVaultAgentPids = new Set();
 
 /** @type {ChildProcess[]} */
 const trackedDaemonChildren: ChildProcess[] = [];
@@ -35,9 +37,45 @@ function snapshotVaultAgentPids() {
     }
 }
 
-async function terminateNewVaultAgents() {
+function readLinuxPpid(pid: number): number | null {
+    try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const match = stat.match(/^\d+ \([^)]+\) [A-Z] (\d+)/);
+        return match ? Number(match[1]) : null;
+    } catch {
+        return null;
+    }
+}
+
+function isDescendantOf(pid: number, ancestorPid: number): boolean {
+    let current = pid;
+    for (let depth = 0; depth < 64; depth += 1) {
+        if (current === ancestorPid) return true;
+        const ppid = readLinuxPpid(current);
+        if (!ppid || ppid <= 1) return false;
+        current = ppid;
+    }
+    return false;
+}
+
+function registerVaultAgentsSpawnedByTrackedDaemons() {
+    const daemonPids = trackedDaemonChildren
+        .map((child) => child.pid)
+        .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
+    if (daemonPids.length === 0) return;
     const after = snapshotVaultAgentPids();
     for (const pid of after) {
+        const numeric = Number(pid);
+        if (!numeric) continue;
+        if (daemonPids.some((daemonPid) => isDescendantOf(numeric, daemonPid))) {
+            trackedVaultAgentPids.add(pid);
+        }
+    }
+}
+
+async function terminateTrackedVaultAgents() {
+    registerVaultAgentsSpawnedByTrackedDaemons();
+    for (const pid of trackedVaultAgentPids) {
         if (vaultAgentPidsBaseline.has(pid)) continue;
         try {
             process.kill(Number(pid), 'SIGTERM');
@@ -46,7 +84,7 @@ async function terminateNewVaultAgents() {
         }
     }
     await new Promise((r) => setTimeout(r, 500));
-    for (const pid of snapshotVaultAgentPids()) {
+    for (const pid of [...trackedVaultAgentPids]) {
         if (vaultAgentPidsBaseline.has(pid)) continue;
         try {
             process.kill(Number(pid), 'SIGKILL');
@@ -54,6 +92,7 @@ async function terminateNewVaultAgents() {
             /* ignore */
         }
     }
+    trackedVaultAgentPids.clear();
 }
 
 function trackTempHome(prefix: string) {
@@ -168,7 +207,7 @@ before(async () => {
 
 async function shutdownDaemonE2e(exitCode = 0) {
     await cleanupDaemonLeaks();
-    await terminateNewVaultAgents();
+    await terminateTrackedVaultAgents();
     server?.close?.();
     if (installRoot && fs.existsSync(installRoot)) {
         fs.rmSync(installRoot, { recursive: true, force: true });
@@ -192,7 +231,7 @@ after(async () => {
 describe('sync daemon two-device e2e (postgres)', () => {
     afterEach(async () => {
         await cleanupDaemonLeaks();
-        await terminateNewVaultAgents();
+        await terminateTrackedVaultAgents();
         assertNoDaemonLeaksAfterCleanup();
     });
 

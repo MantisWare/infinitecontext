@@ -8,14 +8,18 @@ import {
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
   assertNoNewIcTmpDirLeaks,
-  assertPostgresReachableForPremerge,
   assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
   listAllIcTmpDirs,
   parseNodeVersionParts,
+  parsePremergePackageCounts,
   resolveRepoRootsFromImportMeta,
 } from "./premerge-lib.mjs";
+import {
+  assertPremergePostgresUrlsSafe,
+  startEphemeralPostgresForPremerge,
+} from "./premerge-ephemeral-postgres.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
@@ -32,12 +36,22 @@ let shuttingDown = false;
 /** Set true before storage:emu:up so failed starts still run storage:emu:down. */
 let emuStarted = false;
 let cleaning = false;
+/** @type {null | (() => void)} */
+let pgCleanup = null;
 
 function fail(message, code = 1) {
   console.error(message);
   killActiveProcessGroup("SIGKILL");
-  cleanupEmu();
+  cleanupAll();
   process.exit(code);
+}
+
+function cleanupAll() {
+  cleanupEmu();
+  if (pgCleanup) {
+    pgCleanup();
+    pgCleanup = null;
+  }
 }
 
 function loadApiEnvFile() {
@@ -123,7 +137,7 @@ function run(cmd, args, env, cwd = sdkRoot) {
       }
       if (status !== 0) {
         killActiveProcessGroup("SIGKILL");
-        cleanupEmu();
+        cleanupAll();
         process.exit(status ?? 1);
       }
       resolve(out);
@@ -161,7 +175,7 @@ function onSignal(signal) {
   shuttingDown = true;
   killActiveProcessGroup("SIGTERM");
   setTimeout(() => killActiveProcessGroup("SIGKILL"), 5000).unref();
-  cleanupEmu();
+  cleanupAll();
   process.exit(signal === "SIGINT" ? 130 : 143);
 }
 
@@ -169,7 +183,7 @@ process.on("exit", () => {
   if (!shuttingDown) {
     killActiveProcessGroup("SIGTERM");
   }
-  cleanupEmu();
+  cleanupAll();
 });
 process.on("SIGINT", () => onSignal("SIGINT"));
 process.on("SIGTERM", () => onSignal("SIGTERM"));
@@ -198,11 +212,24 @@ try {
 await run("npm", ["run", "guard:12"]);
 await run("node", ["scripts/check-lib-no-test-env.mjs"]);
 loadApiEnvFile();
+for (const key of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
+  delete process.env[key];
+}
 try {
-  assertPostgresReachableForPremerge(repoRoot, process.env);
+  assertPremergePostgresUrlsSafe(process.env);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
+try {
+  const pg = startEphemeralPostgresForPremerge(repoRoot, process.env);
+  pgCleanup = pg.cleanup;
+  console.log(
+    `premerge: ephemeral Postgres project=${pg.project} port=${pg.port} dbs=${pg.syncDb},${pg.vaultDb}`,
+  );
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+
 await run("pnpm", ["-r", "check"], {}, repoRoot);
 
 const emuComposeEnv = {
@@ -215,7 +242,11 @@ console.log(
   `premerge: starting storage emulator (MinIO 127.0.0.1:${minioPort}, SFTP 127.0.0.1:${sftpPort})…`,
 );
 emuStarted = true;
-await run("npm", ["run", "storage:emu:up"], emuComposeEnv);
+try {
+  await run("npm", ["run", "storage:emu:up"], emuComposeEnv);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 
 const emuEnv = {
   IC_REQUIRE_MINIO: "1",
@@ -231,7 +262,13 @@ const emuEnv = {
 
 const icTmpBeforeTests = listAllIcTmpDirs();
 
-const testOut = await run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot);
+let testOut = "";
+try {
+  testOut = await run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot);
+} finally {
+  cleanupAll();
+}
+
 const parsed = absorbNodeTestTotals(testOut);
 totals.pass = parsed.pass;
 totals.fail = parsed.fail;
@@ -251,13 +288,13 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
-cleanupEmu();
-
 try {
   head = assertExpectedShaMatchesHead(repoRoot, process.env.EXPECTED_SHA);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
+
+const packageCounts = parsePremergePackageCounts(testOut);
 
 console.log("");
 console.log("premerge summary:");
@@ -266,6 +303,12 @@ console.log(`  fail: ${totals.fail}`);
 console.log(`  skipped: ${totals.skipped}`);
 console.log(`  tests: ${totals.tests}`);
 console.log(`  HEAD: ${head}`);
+console.log("  per-package:");
+for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  console.log(
+    `    ${name}: pass ${row.pass}, fail ${row.fail}, skipped ${row.skipped}, tests ${row.tests} (${row.blocks} block(s))`,
+  );
+}
 
 if (totals.fail > 0) {
   process.exit(1);

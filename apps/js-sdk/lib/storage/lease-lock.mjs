@@ -110,6 +110,18 @@ function jitterMs(maxMs) {
   return Math.floor(Math.random() * maxMs);
 }
 
+/** @type {null | (() => void | Promise<void>)} */
+let leaseLockStaleBreakBarrierForTests = null;
+
+/** Test-only: pause stale-break between the initial get() and conditional delete. */
+export function setLeaseLockStaleBreakBarrierForTests(barrier) {
+  leaseLockStaleBreakBarrierForTests = typeof barrier === "function" ? barrier : null;
+}
+
+export function resetLeaseLockStaleBreakBarrierForTests() {
+  leaseLockStaleBreakBarrierForTests = null;
+}
+
 async function acquireLeaseLockOnce(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
   const lockName = String(options.lockName ?? "").trim();
@@ -118,19 +130,20 @@ async function acquireLeaseLockOnce(options) {
   const nonce = crypto.randomBytes(16).toString("hex");
   const now = Date.now();
 
-  const existing = await readLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName);
+  const row = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, lockName);
+  const existing = row?.payload ?? null;
   if (existing && !isLeaseLockStale(existing, now)) {
     if (isLeaseLockHeldBy(existing, ownerDevH, now)) {
       throw new Error(`Lease lock ${lockName} is already held by this device; renew with nonce`);
     }
     throw new Error(`Lease lock ${lockName} is held by ${existing.owner_dev_h}`);
   }
-  if (existing && isLeaseLockStale(existing, now)) {
+  if (existing && isLeaseLockStale(existing, now) && row?.etag) {
+    if (leaseLockStaleBreakBarrierForTests) {
+      await leaseLockStaleBreakBarrierForTests();
+    }
     try {
-      const row = await options.adapter.get(key);
-      if (row?.etag) {
-        await options.adapter.delete(key, { ifMatch: row.etag });
-      }
+      await options.adapter.delete(key, { ifMatch: row.etag });
     } catch {
       /* best-effort break stale */
     }

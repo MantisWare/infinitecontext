@@ -112,34 +112,6 @@ export function assertPremergeTestTotalsValid(totals) {
 }
 
 /**
- * Each workspace package `test` script must emit a Node summary block (or pytest banner for python-sdk).
- * @param {string} output
- */
-export function assertPremergePackageTestSections(output) {
-  /** @type {string[]} */
-  const missing = [];
-  const sections = output.split(/\n(?=> .+ test )/);
-  for (const section of sections) {
-    const header = section.match(/^> (.+?) test /);
-    if (!header) {
-      continue;
-    }
-    const name = header[1];
-    const hasNodeSummary = /# duration_ms \d+/.test(section);
-    const hasPytest =
-      /(\d+) passed/.test(section) && name.includes("python-sdk");
-    if (!hasNodeSummary && !hasPytest) {
-      missing.push(name);
-    }
-  }
-  if (missing.length > 0) {
-    throw new Error(
-      `premerge missing test summary for workspace package(s): ${missing.join(", ")} (refusing false-green)`,
-    );
-  }
-}
-
-/**
  * @param {string} databaseUrl
  */
 export function postgresProbeTargetFromUrl(databaseUrl) {
@@ -151,61 +123,95 @@ export function postgresProbeTargetFromUrl(databaseUrl) {
   return { host, port, user, database };
 }
 
-/**
- * @param {string} repoRoot
- * @param {NodeJS.ProcessEnv} env
- */
-export function assertPostgresReachableForPremerge(repoRoot, env = process.env) {
-  const password = String(env.POSTGRES_PASSWORD ?? "").trim();
-  if (!password) {
-    throw new Error(
-      "premerge: POSTGRES_PASSWORD is required for API live postgres suites. Set apps/api/.env.local or export POSTGRES_PASSWORD before running premerge.",
-    );
-  }
-  const syncUrl =
-    String(env.SYNC_E2E_DATABASE_URL ?? "").trim() ||
-    `postgresql://infinitecontext@${env.PGHOST ?? "127.0.0.1"}:${env.PGPORT ?? "5433"}/infinitecontext`;
-  const vaultUrl =
-    String(env.VAULT_E2E_DATABASE_URL ?? "").trim() ||
-    `postgresql://infinitecontext@${env.PGHOST ?? "127.0.0.1"}:${env.PGPORT ?? "5433"}/infinitecontext_vault_e2e`;
+/** Minimum Node-reported tests per workspace package (QA reproducible baseline). */
+export const PREMERGE_PACKAGE_MIN_TESTS = {
+  "@infinitecontext/core": 170,
+  "@infinitecontext/crypto": 20,
+  "@infinitecontext/parsers": 65,
+  "@infinitecontext/sync": 25,
+  "@infinitecontext/auth": 10,
+  "@infinitecontext/storage": 1,
+  "infinitecontext-api": 90,
+  infinitecontext: 530,
+  "infinitecontext-mcp-server": 1,
+};
 
+/**
+ * @param {string} section
+ */
+function absorbSectionTotals(section) {
+  /** @type {{ pass: number, fail: number, skipped: number, tests: number, blocks: number }} */
+  const totals = { pass: 0, fail: 0, skipped: 0, tests: 0, blocks: 0 };
+  for (const part of section.split(/# duration_ms \d+/)) {
+    const tests = [...part.matchAll(/^# tests (\d+)$/gm)].at(-1);
+    const pass = [...part.matchAll(/^# pass (\d+)$/gm)].at(-1);
+    const fail = [...part.matchAll(/^# fail (\d+)$/gm)].at(-1);
+    const skipped = [...part.matchAll(/^# skipped (\d+)$/gm)].at(-1);
+    if (!tests || !pass || !fail || !skipped) {
+      continue;
+    }
+    totals.tests += Number(tests[1]);
+    totals.pass += Number(pass[1]);
+    totals.fail += Number(fail[1]);
+    totals.skipped += Number(skipped[1]);
+    totals.blocks += 1;
+  }
+  return totals;
+}
+
+/**
+ * @param {string} output
+ * @returns {Map<string, { pass: number, fail: number, skipped: number, tests: number, blocks: number }>}
+ */
+export function parsePremergePackageCounts(output) {
+  /** @type {Map<string, { pass: number, fail: number, skipped: number, tests: number, blocks: number }>} */
+  const byPackage = new Map();
+  const headers = [...output.matchAll(/^> (.+?) test .+$/gm)];
+  for (let i = 0; i < headers.length; i += 1) {
+    const start = headers[i].index ?? 0;
+    const end = i + 1 < headers.length ? headers[i + 1].index ?? output.length : output.length;
+    const section = output.slice(start, end);
+    const name = headers[i][1];
+    const totals = absorbSectionTotals(section);
+    if (name.includes("python-sdk") && totals.blocks === 0) {
+      const pytest = section.match(/(\d+) passed/);
+      if (pytest) {
+        totals.tests = Number(pytest[1]);
+        totals.pass = Number(pytest[1]);
+        totals.blocks = 1;
+      }
+    }
+    byPackage.set(name, totals);
+  }
+  return byPackage;
+}
+
+/**
+ * @param {string} output
+ */
+export function assertPremergePackageTestSections(output) {
+  const byPackage = parsePremergePackageCounts(output);
   /** @type {string[]} */
-  const failures = [];
-  for (const label of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
-    const url = label === "SYNC_E2E_DATABASE_URL" ? syncUrl : vaultUrl;
-    const target = postgresProbeTargetFromUrl(url);
-    const res = spawnSync(
-      "psql",
-      [
-        "-h",
-        target.host,
-        "-p",
-        target.port,
-        "-U",
-        target.user,
-        "-d",
-        target.database,
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-c",
-        "SELECT 1",
-      ],
-      {
-        encoding: "utf8",
-        env: { ...env, PGPASSWORD: password },
-      },
-    );
-    if (res.status !== 0) {
-      const detail = String(res.stderr ?? res.stdout ?? "").trim().split("\n").pop();
-      failures.push(
-        `${label} (${target.host}:${target.port}/${target.database}): ${detail || "connection failed"}`,
-      );
+  const problems = [];
+  for (const [name, totals] of byPackage) {
+    if (totals.blocks === 0) {
+      problems.push(`${name}: missing test summary block`);
+      continue;
+    }
+    if (totals.tests === 0) {
+      problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
+    }
+    const min = PREMERGE_PACKAGE_MIN_TESTS[name];
+    if (min !== undefined && totals.tests < min) {
+      problems.push(`${name}: tests ${totals.tests} < expected minimum ${min}`);
+    }
+    const accounted = totals.pass + totals.fail + totals.skipped;
+    if (accounted !== totals.tests) {
+      problems.push(`${name}: pass+fail+skipped (${accounted}) ≠ tests (${totals.tests})`);
     }
   }
-  if (failures.length > 0) {
-    throw new Error(
-      `premerge: PostgreSQL probe failed (premerge will not run docker compose or touch the shared postgres project):\n${failures.map((f) => `  - ${f}`).join("\n")}\nStart Postgres yourself and fix POSTGRES_PASSWORD / database URLs, then retry.`,
-    );
+  if (problems.length > 0) {
+    throw new Error(`premerge package test coverage failed:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   }
 }
 
