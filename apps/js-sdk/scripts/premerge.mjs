@@ -91,7 +91,34 @@ function cleanupPremergeTmpRoot() {
   }
 }
 
+function cleanupKnownPremergeTmpArtifacts() {
+  const root = premergeTmpRoot;
+  if (!root || !fs.existsSync(root)) {
+    return;
+  }
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (
+      name.startsWith("tsx-") ||
+      name.includes("sync-pack-out-") ||
+      name.includes("sync-pack-staging-")
+    ) {
+      try {
+        fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
 function finalizeTmpHygiene(icTmpBeforeTests) {
+  cleanupKnownPremergeTmpArtifacts();
   try {
     assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs(premergeTmpRoot));
   } catch (error) {

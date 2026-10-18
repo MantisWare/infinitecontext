@@ -85,19 +85,19 @@ function cleanupTrackedIcTmpDirs() {
 function cleanupLegacySyncPackOutDirs() {
   try {
     for (const name of fs.readdirSync(tmpRoot)) {
-      if (!name.startsWith("ic-sync-pack-out-")) {
+      const isLegacy = name.startsWith("ic-sync-pack-out-") || name.includes("sync-pack-out-");
+      const isStaging = name.includes("sync-pack-staging-");
+      if (!isLegacy && !isStaging) {
         continue;
       }
-      if (runTag && !name.startsWith(`${runTag}-`)) {
+      if (runTag && !name.startsWith(`${runTag}-`) && !name.startsWith("ic-sync-pack-out-")) {
         continue;
       }
       const full = path.join(tmpRoot, name);
-      if (trackedIcTmpDirs.has(full)) {
-        try {
-          fs.rmSync(full, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
+      try {
+        fs.rmSync(full, { recursive: true, force: true });
+      } catch {
+        /* ignore */
       }
     }
   } catch {
