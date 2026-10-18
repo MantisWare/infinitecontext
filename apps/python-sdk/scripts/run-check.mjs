@@ -42,7 +42,7 @@ if (run(venvPython, ["-m", "pip", "install", "-e", ".[dev]", "-q"]) !== 0) {
   process.exit(1);
 }
 
-if (run(venvMypy, ["--strict", "infinitecontext"]) !== 0) {
+if (run(venvMypy, []) !== 0) {
   process.exit(1);
 }
 

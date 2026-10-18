@@ -1,7 +1,9 @@
 """InfiniteContext API client."""
 
+from __future__ import annotations
+
 import os
-from typing import Any, Dict, List, Optional, TypeVar, Union, cast, overload
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast, overload
 from urllib.parse import quote
 
 import httpx
@@ -54,7 +56,7 @@ class _BaseClient:
         return headers
 
     @staticmethod
-    def _as_json(value: Any, _response_type: type[T]) -> T:
+    def _as_json(value: Any, _response_type: Type[T]) -> T:
         """Narrow httpx JSON payloads to declared response TypedDicts."""
         return cast(T, value)
 
