@@ -331,8 +331,13 @@ export function assertPremergePackageTestSections(output) {
  * @param {string} [runTag] IC_TEST_TMP_RUN_TAG — when set, only dirs for this premerge run.
  * @returns {Set<string>}
  */
-export function listAllIcTmpDirs() {
-  const tmpRoot = path.resolve(os.tmpdir());
+/**
+ * @param {string} [tmpRootOverride] When set (premerge private TMPDIR), scan only that directory.
+ */
+export function listAllIcTmpDirs(tmpRootOverride) {
+  const tmpRoot = path.resolve(
+    tmpRootOverride ?? process.env.IC_PREMERGE_TMPDIR ?? process.env.TMPDIR ?? os.tmpdir(),
+  );
   /** @type {Set<string>} */
   const found = new Set();
   let entries = [];

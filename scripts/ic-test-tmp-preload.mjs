@@ -31,7 +31,14 @@ function shouldTrackDir(dir) {
     return false;
   }
   const base = path.basename(resolved);
-  return basenameMatchesRunTag(base);
+  if (basenameMatchesRunTag(base)) {
+    return true;
+  }
+  // Tests often mkdtemp with an `ic-` prefix while premerge sets IC_TEST_TMP_RUN_TAG on dir names.
+  if (base.startsWith("ic-")) {
+    return true;
+  }
+  return false;
 }
 
 function trackDir(dir) {

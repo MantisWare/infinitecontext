@@ -93,7 +93,7 @@ function cleanupPremergeTmpRoot() {
 
 function finalizeTmpHygiene(icTmpBeforeTests) {
   try {
-    assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs());
+    assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs(premergeTmpRoot));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -334,7 +334,7 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
-const icTmpBeforeTests = listAllIcTmpDirs();
+const icTmpBeforeTests = listAllIcTmpDirs(premergeTmpRoot);
 
 let testOut = "";
 let testRunFailed = false;
