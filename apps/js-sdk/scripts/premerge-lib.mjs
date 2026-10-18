@@ -204,7 +204,8 @@ export function parsePremergePackageCounts(output) {
       const failed = section.match(/(\d+) failed/);
       const passed = section.match(/(\d+) passed/);
       const skippedPy = section.match(/(\d+) skipped/);
-      const failCount = failed ? Number(failed[1]) : 0;
+      const errorsPy = section.match(/(\d+) error/);
+      const failCount = (failed ? Number(failed[1]) : 0) + (errorsPy ? Number(errorsPy[1]) : 0);
       const passCount = passed ? Number(passed[1]) : 0;
       const skipCount = skippedPy ? Number(skippedPy[1]) : 0;
       if (failCount > 0 || passCount > 0 || skipCount > 0) {

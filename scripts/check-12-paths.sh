@@ -53,6 +53,17 @@ if [[ "${main_ref}" == "origin/main" ]]; then
   git fetch origin main --quiet 2>/dev/null || git fetch origin refs/heads/main:refs/remotes/origin/main --quiet 2>/dev/null || true
 fi
 
+if ! git merge-base "${main_ref}" HEAD >/dev/null 2>&1; then
+  echo "check-12-paths: no merge base yet — deepening shallow history…" >&2
+  git fetch origin --deepen=512 2>/dev/null || true
+  if [[ "${main_ref}" == "${CHECK12_TMP_REF}" ]]; then
+    git fetch origin refs/heads/main:refs/remotes/origin/main --deepen=512 2>/dev/null || true
+    if git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+      main_ref="origin/main"
+    fi
+  fi
+fi
+
 use_three_dot=0
 if git merge-base "${main_ref}" HEAD >/dev/null 2>&1; then
   use_three_dot=1

@@ -13,6 +13,7 @@ describe("check-lib-no-test-env fixtures", () => {
     assert.equal(isForbiddenTestEnvKey("LATEST_VERSION"), false);
     assert.equal(isForbiddenTestEnvKey("IC_TEST_MODE"), true);
     assert.deepEqual(hits("const x = process.env.NODE_ENV;"), []);
+    assert.deepEqual(hits("void Object.keys(process.env).length;"), []);
   });
 
   const mustCatch = [
@@ -33,6 +34,8 @@ describe("check-lib-no-test-env fixtures", () => {
     ["const env from process destructure", "const { env: e2 } = process; void e2.IC_TEST_MODE;"],
     ["Object.entries scan", 'Object.entries(process.env).find(([k]) => k.includes("TEST"));'],
     ["Reflect.get literal", 'Reflect.get(process.env, "IC_TEST_MODE");'],
+    ["spread copy env", "void ({...process.env}.IC_TEST_MODE);"],
+    ["default param env alias", "function f(env = process.env) { void env.IC_TEST_MODE; } f();"],
   ];
 
   for (const [label, src] of mustCatch) {

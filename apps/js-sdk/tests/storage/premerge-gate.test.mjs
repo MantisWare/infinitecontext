@@ -121,6 +121,19 @@ python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Ins
     assert.equal(row?.tests, 4);
   });
 
+  it("parses pytest error counts as failures", () => {
+    const out = `
+> infinitecontext-python-sdk@ test /workspace/apps/python-sdk
+> node scripts/run-pytest.mjs
+
+1 error, 2 passed in 0.01s
+`;
+    const row = parsePremergePackageCounts(out).get("infinitecontext-python-sdk");
+    assert.equal(row?.pass, 2);
+    assert.equal(row?.fail, 1);
+    assert.equal(row?.tests, 3);
+  });
+
   it("parses pytest '1 failed, 2 passed' summaries", () => {
     const out = `
 > infinitecontext-python-sdk@ test /workspace/apps/python-sdk

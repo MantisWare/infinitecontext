@@ -325,6 +325,16 @@ export function findViolations(file, src) {
     }
   }
 
+  /** @param {import('acorn').ObjectExpression} node */
+  function objectSpreadsProcessEnv(node) {
+    for (const prop of node.properties) {
+      if (prop.type === "SpreadElement" && resolveProcessEnvRef(prop.argument) === "env") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** @param {import('acorn').MemberExpression} node */
   function checkEnvMemberAccess(node) {
     if (!node?.property) {
@@ -336,6 +346,15 @@ export function findViolations(file, src) {
       resolveProcessEnvRef(node.object) === "env" ||
       (node.object?.type === "Identifier" && bindings.get(node.object.name) === "env");
     if (!onEnv) {
+      if (
+        node.object?.type === "ObjectExpression" &&
+        objectSpreadsProcessEnv(node.object) &&
+        !node.computed &&
+        node.property.type === "Identifier" &&
+        isForbiddenTestEnvKey(node.property.name)
+      ) {
+        hit(line, `{...process.env}.${node.property.name}`);
+      }
       return;
     }
 
@@ -392,15 +411,22 @@ export function findViolations(file, src) {
     hit(line, "process.env[non-literal key]");
   }
 
-  /** @param {import('acorn').CallExpression} node */
-  function checkCall(node) {
+  /** @param {import('acorn').CallExpression} node @param {import('acorn').Node | null | undefined} parent */
+  function checkCall(node, parent) {
     const line = node.loc?.start.line ?? 0;
     const callee = node.callee;
     if (callee.type === "MemberExpression" && callee.property.type === "Identifier") {
       const method = callee.property.name;
       if (["keys", "values", "entries", "getOwnPropertyNames"].includes(method)) {
         if (node.arguments[0] && resolveProcessEnvRef(node.arguments[0]) === "env") {
-          hit(line, `Object.${method}(process.env) whole-env enumeration`);
+          const lengthOnly =
+            parent?.type === "MemberExpression" &&
+            !parent.computed &&
+            parent.property.type === "Identifier" &&
+            parent.property.name === "length";
+          if (!lengthOnly) {
+            hit(line, `Object.${method}(process.env) whole-env enumeration`);
+          }
         }
       }
     }
@@ -450,16 +476,35 @@ export function findViolations(file, src) {
     }
   }
 
-  /** @param {import('acorn').Node} node */
-  function walkAudit(node) {
+  /** @param {import('acorn').Node} node @param {import('acorn').Node | null | undefined} parent */
+  function walkFunctionParams(node) {
+    if (
+      node.type !== "FunctionDeclaration" &&
+      node.type !== "FunctionExpression" &&
+      node.type !== "ArrowFunctionExpression"
+    ) {
+      return;
+    }
+    for (const param of node.params) {
+      if (param.type === "AssignmentPattern" && param.left.type === "Identifier") {
+        if (resolveProcessEnvRef(param.right) === "env") {
+          bindings.set(param.left.name, "env");
+        }
+      }
+    }
+  }
+
+  /** @param {import('acorn').Node} node @param {import('acorn').Node | null | undefined} parent */
+  function walkAudit(node, parent) {
     if (!node || typeof node !== "object") {
       return;
     }
+    walkFunctionParams(node);
     if (node.type === "MemberExpression") {
       checkEnvMemberAccess(node);
     }
     if (node.type === "CallExpression") {
-      checkCall(node);
+      checkCall(node, parent);
     }
     for (const key of Object.keys(node)) {
       if (key === "parent") {
@@ -469,17 +514,17 @@ export function findViolations(file, src) {
       if (Array.isArray(child)) {
         for (const c of child) {
           if (c && typeof c.type === "string") {
-            walkAudit(c);
+            walkAudit(c, node);
           }
         }
       } else if (child && typeof child.type === "string") {
-        walkAudit(child);
+        walkAudit(child, node);
       }
     }
   }
 
   walkCollectBindings(program);
-  walkAudit(program);
+  walkAudit(program, null);
   return hits;
 }
 

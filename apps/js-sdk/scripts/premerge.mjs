@@ -23,6 +23,7 @@ import {
   assertPremergePostgresUrlsSafe,
   startEphemeralPostgresForPremerge,
 } from "./premerge-ephemeral-postgres.mjs";
+import { createPremergeShutdown } from "./premerge-shutdown.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
@@ -44,66 +45,56 @@ const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
 /** @type {{ pass: number, fail: number, skipped: number, tests: number }} */
 const totals = { pass: 0, fail: 0, skipped: 0, tests: 0 };
 
-/** @type {import("node:child_process").ChildProcess | null} */
-let activeChild = null;
-let shuttingDown = false;
-
 /** Set true before storage:emu:up so failed starts still run storage:emu:down. */
 let emuStarted = false;
 let cleaning = false;
 /** @type {null | (() => void)} */
 let pgCleanup = null;
 
-function exitPremerge(code) {
-  if (!shuttingDown) {
-    cleanupNodeCompileCache();
-    cleanupPremergeTmpRoot();
-  }
-  process.exit(code);
-}
+/** @type {ReturnType<typeof createPremergeShutdown>} */
+let shutdown;
 
-function fail(message, code = 1) {
-  console.error(message);
-  killActiveProcessGroup("SIGKILL");
-  cleanupAll();
-  exitPremerge(code);
+/**
+ * @param {NodeJS.Signals} signal
+ */
+function killActiveProcessGroup(signal) {
+  const child = shutdown.activeChild;
+  if (!child?.pid) {
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function cleanupNodeCompileCache() {
-  const root = process.env.IC_PREMERGE_TMPDIR ?? premergeTmpRoot;
-  if (!root || !fs.existsSync(root)) {
-    return;
-  }
-  const cacheDir = path.join(root, "node-compile-cache");
-  try {
-    if (fs.existsSync(cacheDir)) {
-      fs.rmSync(cacheDir, { recursive: true, force: true });
-    }
-  } catch {
-    /* best-effort */
-  }
+  shutdown.cleanupNodeCompileCache();
 }
 
 function cleanupPremergeTmpRoot() {
-  cleanupNodeCompileCache();
-  const root = process.env.IC_PREMERGE_TMPDIR ?? premergeTmpRoot;
-  if (!root || !fs.existsSync(root)) {
-    return;
-  }
-  try {
-    fs.rmSync(root, { recursive: true, force: true });
-  } catch {
-    /* best-effort */
-  }
+  shutdown.cleanupPremergeTmpRoot();
+}
+
+function exitPremerge(code) {
+  shutdown.exitPremerge(code);
+}
+
+function fail(message, code = 1) {
+  shutdown.fail(message, code);
 }
 
 function finalizeTmpHygiene(icTmpBeforeTests) {
-  try {
-    assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs(premergeTmpRoot));
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-  }
-  cleanupPremergeTmpRoot();
+  shutdown.finalizeTmpHygiene(icTmpBeforeTests);
+}
+
+function run(cmd, args, env, cwd = sdkRoot, opts = {}) {
+  return shutdown.run(cmd, args, env, cwd, opts);
 }
 
 function cleanupAll() {
@@ -113,6 +104,43 @@ function cleanupAll() {
     pgCleanup = null;
   }
 }
+
+shutdown = createPremergeShutdown({
+  premergeTmpRoot,
+  cleanupAll,
+  killActiveProcessGroup,
+  assertNoNewIcTmpDirLeaks,
+  listAllIcTmpDirs: () => listAllIcTmpDirs(premergeTmpRoot),
+});
+
+shutdown.registerSignalHandlers();
+
+function cleanupEmu() {
+  if (cleaning) {
+    return;
+  }
+  cleaning = true;
+  if (!emuStarted) {
+    return;
+  }
+  spawnSync("npm", ["run", "storage:emu:down"], {
+    cwd: sdkRoot,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      IC_STORAGE_EMU_MINIO_PORT: minioPort,
+      IC_STORAGE_EMU_SFTP_PORT: sftpPort,
+    },
+  });
+  emuStarted = false;
+}
+
+process.on("exit", () => {
+  if (!shutdown.shuttingDown) {
+    killActiveProcessGroup("SIGTERM");
+  }
+  cleanupAll();
+});
 
 function loadApiEnvFile() {
   const envLocal = path.join(repoRoot, "apps/api/.env.local");
@@ -140,147 +168,6 @@ function loadApiEnvFile() {
     }
   }
 }
-
-/**
- * @param {NodeJS.Signals} signal
- */
-function killActiveProcessGroup(signal) {
-  const child = activeChild;
-  if (!child?.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/**
- * @param {string} cmd
- * @param {string[]} args
- * @param {Record<string, string | undefined>} [env]
- * @param {string} [cwd]
- * @param {{ allowFailure?: boolean }} [opts]
- * @returns {Promise<string>}
- */
-function run(cmd, args, env, cwd = sdkRoot, opts = {}) {
-  const { allowFailure = false } = opts;
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
-      cwd,
-      env: { ...process.env, ...env },
-      stdio: ["inherit", "pipe", "pipe"],
-      detached: true,
-    });
-    activeChild = child;
-    /** @type {string} */
-    let out = "";
-    child.stdout?.on("data", (chunk) => {
-      const text = String(chunk);
-      out += text;
-      process.stdout.write(chunk);
-    });
-    child.stderr?.on("data", (chunk) => {
-      const text = String(chunk);
-      out += text;
-      process.stderr.write(chunk);
-    });
-    child.on("error", (err) => {
-      activeChild = null;
-      reject(err);
-    });
-    child.on("close", (status, signal) => {
-      activeChild = null;
-      if (signal) {
-        reject(new Error(`${cmd} ${args.join(" ")} terminated by ${signal}`));
-        return;
-      }
-      if (status !== 0) {
-        if (allowFailure) {
-          reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
-          return;
-        }
-        killActiveProcessGroup("SIGKILL");
-        cleanupAll();
-        exitPremerge(status ?? 1);
-      }
-      resolve(out);
-    });
-  });
-}
-
-function cleanupEmu() {
-  if (cleaning) {
-    return;
-  }
-  cleaning = true;
-  if (!emuStarted) {
-    return;
-  }
-  spawnSync("npm", ["run", "storage:emu:down"], {
-    cwd: sdkRoot,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      IC_STORAGE_EMU_MINIO_PORT: minioPort,
-      IC_STORAGE_EMU_SFTP_PORT: sftpPort,
-    },
-  });
-  emuStarted = false;
-}
-
-/**
- * @param {NodeJS.Signals} signal
- */
-function waitForActiveChildExit(maxMs = 15000) {
-  return new Promise((resolve) => {
-    const child = activeChild;
-    if (!child) {
-      resolve();
-      return;
-    }
-    const done = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    child.once("close", done);
-    child.once("error", done);
-    const timer = setTimeout(done, maxMs);
-    timer.unref?.();
-  });
-}
-
-async function onSignal(signal) {
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-  killActiveProcessGroup("SIGTERM");
-  await waitForActiveChildExit();
-  killActiveProcessGroup("SIGKILL");
-  cleanupAll();
-  cleanupNodeCompileCache();
-  cleanupPremergeTmpRoot();
-  process.exit(signal === "SIGINT" ? 130 : 143);
-}
-
-process.on("exit", () => {
-  if (!shuttingDown) {
-    killActiveProcessGroup("SIGTERM");
-  }
-  cleanupAll();
-});
-process.on("SIGINT", () => {
-  void onSignal("SIGINT");
-});
-process.on("SIGTERM", () => {
-  void onSignal("SIGTERM");
-});
 
 const nodeParts = parseNodeVersionParts(process.version);
 if (!nodeParts || !isNodeVersionAtLeast(nodeParts, PREMERGE_MIN_NODE)) {
@@ -376,14 +263,22 @@ try {
     { allowFailure: true },
   );
 } catch {
-  testRunFailed = true;
+  if (!shutdown.shuttingDown) {
+    testRunFailed = true;
+  }
 } finally {
   cleanupAll();
-  finalizeTmpHygiene(icTmpBeforeTests);
+  if (!shutdown.shuttingDown) {
+    finalizeTmpHygiene(icTmpBeforeTests);
+  }
 }
 
-if (testRunFailed) {
+if (testRunFailed && !shutdown.shuttingDown) {
   exitPremerge(1);
+}
+
+if (shutdown.shuttingDown) {
+  exitPremerge(shutdown.shutdownExitCode ?? 130);
 }
 
 const parsed = absorbNodeTestTotals(testOut);
@@ -426,3 +321,5 @@ for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].local
 if (totals.fail > 0) {
   exitPremerge(1);
 }
+
+exitPremerge(0);
