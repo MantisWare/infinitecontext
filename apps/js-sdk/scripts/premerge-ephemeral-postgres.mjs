@@ -5,6 +5,34 @@ import path from "node:path";
 /**
  * @param {string} repoRoot
  */
+/**
+ * @param {string} repoRoot
+ * @param {{ port: string, dbName: string, password: string, user: string }} target
+ */
+function migrateEphemeralDatabase(repoRoot, target) {
+  const script = path.join(repoRoot, "apps/postgres/scripts/verify-migration-chain.sh");
+  const res = spawnSync("bash", [script], {
+    cwd: path.join(repoRoot, "apps/postgres"),
+    encoding: "utf8",
+    timeout: 300_000,
+    env: {
+      ...process.env,
+      MIGRATION_VERIFY_USE_HOST: "1",
+      MIGRATION_VERIFY_USE_DOCKER: "",
+      POSTGRES_PASSWORD: target.password,
+      POSTGRES_USER: target.user,
+      POSTGRES_DB: target.dbName,
+      PGHOST: "127.0.0.1",
+      PGPORT: target.port,
+    },
+  });
+  if (res.status !== 0) {
+    throw new Error(
+      `premerge: migration verify failed for ${target.dbName} on port ${target.port}: ${res.stderr || res.stdout}`,
+    );
+  }
+}
+
 function pickFreePort() {
   const res = spawnSync("python3", ["-c", "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()"], {
     encoding: "utf8",
@@ -97,6 +125,7 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
       ],
       { encoding: "utf8", env: pgEnv },
     );
+    migrateEphemeralDatabase(repoRoot, { port, dbName, password, user });
   }
 
   const syncUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${syncDb}`;

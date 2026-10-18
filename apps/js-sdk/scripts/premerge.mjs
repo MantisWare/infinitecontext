@@ -226,6 +226,8 @@ try {
   console.log(
     `premerge: ephemeral Postgres project=${pg.project} port=${pg.port} dbs=${pg.syncDb},${pg.vaultDb}`,
   );
+  process.env.MIGRATION_VERIFY_USE_HOST = "1";
+  process.env.MIGRATION_VERIFY_USE_DOCKER = "";
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
