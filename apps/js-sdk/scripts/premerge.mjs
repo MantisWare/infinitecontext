@@ -120,6 +120,7 @@ run("pnpm", ["-r", "check"], {}, repoRoot);
 const emuComposeEnv = {
   IC_STORAGE_EMU_MINIO_PORT: minioPort,
   IC_STORAGE_EMU_SFTP_PORT: sftpPort,
+  AWS_ENDPOINT_URL: `http://127.0.0.1:${minioPort}`,
 };
 
 console.log(
