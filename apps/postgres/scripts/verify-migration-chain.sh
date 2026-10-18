@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POSTGRES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATIONS_DIR="$POSTGRES_DIR/migrations"
+COMPOSE_FILE="$POSTGRES_DIR/compose.yaml"
 
 cd "$POSTGRES_DIR"
 
@@ -11,7 +12,6 @@ DB_USER="${POSTGRES_USER:-infinitecontext}"
 DB_NAME="${POSTGRES_DB:-infinitecontext_verify}"
 PG_HOST="${PGHOST:-127.0.0.1}"
 PG_PORT="${PGPORT:-5432}"
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-infinitecontext_migration_verify}"
 
 if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
   echo "POSTGRES_PASSWORD is required (no default)." >&2
@@ -19,7 +19,15 @@ if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
 fi
 DB_PASS="$POSTGRES_PASSWORD"
 
-export COMPOSE_PROJECT_NAME
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
 
 PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 export PGPASSWORD="$DB_PASS"
@@ -102,17 +110,41 @@ ensure_host_database() {
   PSQL=(psql -h "$PG_HOST" -p "$PG_PORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 }
 
+compose_cleanup() {
+  if [[ -n "${COMPOSE_PROJECT_NAME:-}" && -f "$COMPOSE_FILE" ]]; then
+    docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
+  fi
+}
+
 if [[ "$use_docker" == true ]]; then
-  echo "Starting isolated postgres via docker compose..."
-  docker compose up -d postgres
+  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-infinitecontext_mv_${$}_${RANDOM}}"
+  export COMPOSE_PROJECT_NAME
+  if [[ -z "${POSTGRES_PORT:-}" ]]; then
+    POSTGRES_PORT="$(pick_free_port)"
+    export POSTGRES_PORT
+  fi
+  PG_HOST="127.0.0.1"
+  PGPORT="$POSTGRES_PORT"
+  PGHOST="$PG_HOST"
+  export PGHOST PGPORT
+
+  trap compose_cleanup INT TERM
+  if [[ "${MIGRATION_VERIFY_TEARDOWN:-}" == "1" ]]; then
+    trap compose_cleanup EXIT INT TERM
+  fi
+
+  echo "Starting isolated postgres via docker compose (project=${COMPOSE_PROJECT_NAME}, port=${POSTGRES_PORT})..."
+  docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d postgres
   echo "Waiting for postgres..."
   for _ in {1..30}; do
-    if docker compose exec -T postgres pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+    if psql -h "$PG_HOST" -p "$PGPORT" -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
-  PSQL=(docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
+  psql -h "$PG_HOST" -p "$PGPORT" -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE \"${DB_NAME}\" OWNER \"${DB_USER}\";" 2>/dev/null || true
+  PSQL=(psql -h "$PG_HOST" -p "$PGPORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 else
   echo "Using PostgreSQL at ${PG_HOST}:${PG_PORT} (database ${DB_NAME})..."
   ensure_host_database
@@ -156,5 +188,12 @@ BEGIN
   END IF;
 END $$;
 SQL
+
+MIGRATION_VERIFY_DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@${PGHOST}:${PGPORT}/${DB_NAME}"
+export MIGRATION_VERIFY_DATABASE_URL
+echo "MIGRATION_VERIFY_DATABASE_URL=${MIGRATION_VERIFY_DATABASE_URL}"
+echo "MIGRATION_VERIFY_PGHOST=${PGHOST}"
+echo "MIGRATION_VERIFY_PGPORT=${PGPORT}"
+echo "MIGRATION_VERIFY_COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-}"
 
 echo "Migration chain init -> latest verified (up, down, up) with schema assertions."

@@ -649,36 +649,39 @@ export function clearPendingBootstrapReplica(state) {
  * @param {import('./object-store-sync.mjs').ObjectStoreSyncContext} ctx
  */
 export async function confirmObjectStorePullDelivery(ctx) {
-  let state = ctx.localState.load();
-  if (applyPendingPullDeliveryApply(state)) {
-    state.pendingPullDeliveryApply = null;
-  }
-  if (state.pendingBootstrapReplica || state.bootstrapReplicaPendingAck) {
-    clearPendingBootstrapReplica(state);
-  }
-  await ctx.localState.save(state);
-  await recordManifestAcknowledgement(ctx, state);
-  await registerManifestSyncParticipant(
-    {
-      adapter: ctx.adapter,
-      dek: ctx.dek,
-      layoutPrefix: ctx.layoutPrefix,
-      ownerDevH: ctx.selfDevH,
-      settleMs: 0,
-    },
-    ctx.selfDevH,
-  );
-  const fresh = ctx.localState.load();
-  await writeDeviceSyncAckFromState(
-    {
-      adapter: ctx.adapter,
-      dek: ctx.dek,
-      layoutPrefix: ctx.layoutPrefix,
-      ownerDevH: ctx.selfDevH,
-      deviceUuid: ctx.deviceUuid,
-    },
-    fresh,
-  );
+  const { withCasConditionalCreateFriendlyError } = await import("./cas-conditional-user-error.mjs");
+  await withCasConditionalCreateFriendlyError(async () => {
+    let state = ctx.localState.load();
+    if (applyPendingPullDeliveryApply(state)) {
+      state.pendingPullDeliveryApply = null;
+    }
+    if (state.pendingBootstrapReplica || state.bootstrapReplicaPendingAck) {
+      clearPendingBootstrapReplica(state);
+    }
+    await ctx.localState.save(state);
+    await recordManifestAcknowledgement(ctx, state);
+    await registerManifestSyncParticipant(
+      {
+        adapter: ctx.adapter,
+        dek: ctx.dek,
+        layoutPrefix: ctx.layoutPrefix,
+        ownerDevH: ctx.selfDevH,
+        settleMs: 0,
+      },
+      ctx.selfDevH,
+    );
+    const fresh = ctx.localState.load();
+    await writeDeviceSyncAckFromState(
+      {
+        adapter: ctx.adapter,
+        dek: ctx.dek,
+        layoutPrefix: ctx.layoutPrefix,
+        ownerDevH: ctx.selfDevH,
+        deviceUuid: ctx.deviceUuid,
+      },
+      fresh,
+    );
+  });
 }
 
 export { createEmptyObjectStoreLocalSyncState };
