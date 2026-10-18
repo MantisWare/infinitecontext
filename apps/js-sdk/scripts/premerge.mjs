@@ -57,6 +57,7 @@ let pgCleanup = null;
 function fail(message, code = 1) {
   console.error(message);
   killActiveProcessGroup("SIGKILL");
+  cleanupNodeCompileCache();
   cleanupAll();
   cleanupPremergeTmpRoot();
   process.exit(code);
