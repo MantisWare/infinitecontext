@@ -7,10 +7,7 @@ import {
 import { recheckStorageCasProbe } from "./storage-cas-init.mjs";
 import { probeCrossDeviceCasRace } from "./storage-cas-race-probe.mjs";
 import { sweepStaleCasProbeObjects } from "./storage-cas-probe-sweep.mjs";
-import {
-  openS3StorageCasProbeSession,
-  resetS3CasRaceDoubleWinForTests,
-} from "./storage-s3-cas-probe-session.mjs";
+import { openS3StorageCasProbeSession } from "./storage-s3-cas-probe-session.mjs";
 import { resolveS3ObjectStoreConfig } from "./s3-config.mjs";
 import { StorageError } from "./errors.mjs";
 
@@ -18,7 +15,6 @@ import { StorageError } from "./errors.mjs";
  * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, rounds?: number, cachePath?: string }} options
  */
 export async function runStorageDoctorCasRace(options = {}) {
-  resetS3CasRaceDoubleWinForTests();
   const env = options.env ?? process.env;
   const config = options.config ?? {};
   const s3 = resolveS3ObjectStoreConfig(config, env);

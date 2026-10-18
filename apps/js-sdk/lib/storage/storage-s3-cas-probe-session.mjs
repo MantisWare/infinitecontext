@@ -76,6 +76,9 @@ export function wrapCasRaceDoubleWinTestHook(adapter) {
  */
 export async function openS3StorageCasProbeSession(options = {}) {
   const env = options.env ?? process.env;
+  if (env.NODE_ENV === "production") {
+    resetS3CasRaceDoubleWinForTests();
+  }
   const config = options.config ?? {};
   const s3 = resolveS3ObjectStoreConfig(config, env);
   const adapter = createS3StorageAdapter({
