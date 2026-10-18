@@ -138,6 +138,8 @@ const response = await generateText({ model, messages: ctx.data });
 pip install infinitecontext
 ```
 
+Developing this SDK (mypy, tests): see [CONTRIBUTING.md](./CONTRIBUTING.md). Type-check via `npm run check` or a **Python 3.8** venv — not plain `mypy` on 3.9+.
+
 ```python
 from infinitecontext import InfiniteContext
 
