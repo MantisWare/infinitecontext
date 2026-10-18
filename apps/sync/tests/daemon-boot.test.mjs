@@ -81,9 +81,9 @@ describe("sync daemon boot", () => {
 
   it("starts from standalone packed tarball", async () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-daemon-pack-out-"));
-    const tgz = packSyncFromStaging({ packDestination: outDir });
-
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-daemon-pack-"));
+    try {
+    const tgz = packSyncFromStaging({ packDestination: outDir });
     fs.writeFileSync(
       path.join(installDir, "package.json"),
       JSON.stringify({ name: "ic-sync-daemon-pack", private: true, type: "module" }),
@@ -108,5 +108,9 @@ describe("sync daemon boot", () => {
     await waitForDaemonStarted(child);
     child.kill("SIGTERM");
     await mock.close();
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.rmSync(installDir, { recursive: true, force: true });
+    }
   });
 });

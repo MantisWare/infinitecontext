@@ -285,6 +285,15 @@ try {
 }
 
 try {
+  for (const dir of listAllIcTmpDirs()) {
+    if (!icTmpBeforeTests.has(dir)) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
   assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs());
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
