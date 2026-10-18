@@ -1,0 +1,28 @@
+---
+title: 'Storage backends (local object store)'
+description: 'Configure folder, filesystem, and S3-compatible backends for the InfiniteContext JS SDK'
+---
+
+Object-store sync can persist encrypted vault data on **folder**, **local filesystem**, or **S3-compatible** backends. Credentials for cloud storage use the standard AWS environment chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_REGION`) — never commit secrets to `config.json`.
+
+## Requirements
+
+- **Node.js ≥ 22.12** for the JS SDK storage stack (`apps/js-sdk/package.json` `engines`).
+- Local verification: from the repo root, `make premerge` (or `cd apps/js-sdk && EXPECTED_SHA=<git rev-parse HEAD> npm run premerge`) after starting Docker for the MinIO/SFTP emulator.
+
+## Quick setup
+
+```bash
+cd apps/js-sdk
+npm run storage:emu:up    # MinIO on 127.0.0.1:9000 + test SFTP on 127.0.0.1:2222
+infinitecontext config set storage.backend s3
+infinitecontext config set storage.s3.bucket infinitecontext-ci
+infinitecontext config set storage.s3.endpoint http://127.0.0.1:9000
+export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_REGION=us-east-1
+infinitecontext storage doctor
+npm run storage:emu:down
+```
+
+## Residual metadata
+
+Encrypted objects still expose **layout prefixes** in AAD and key paths, and small fixed-size device/manifest blobs can leak coarse counts. See `docs/design/storage-object-security.md` for the threat model.

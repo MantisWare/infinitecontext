@@ -45,6 +45,7 @@ import {
   encryptVaultPlaintextForStoragePut,
 } from "./storage/encrypt-storage-object.mjs";
 import { PreconditionFailedError, StorageError } from "./storage/errors.mjs";
+import { isInjectedTestHookActive } from "./storage/test-hooks.mjs";
 import {
   canonicalDevH,
   decryptLogSegment,
@@ -1026,10 +1027,10 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
       const key = logSegmentRelativePath(ctx.layoutPrefix, ctx.selfDevH, seq);
       try {
         await writeLayoutSegmentEnvelope(ctx, key, envelope);
-        if (ctx.testHookAfterSegmentWrite) {
+        if (isInjectedTestHookActive(ctx, "testHookAfterSegmentWrite")) {
           await ctx.testHookAfterSegmentWrite();
         }
-        if (!ctx.testHookSkipLocalSaveAfterSegmentWrite) {
+        if (!isInjectedTestHookActive(ctx, "testHookSkipLocalSaveAfterSegmentWrite")) {
           commitTrustedHeadAdvance(state, ctx.selfDevH, { seq, digest });
           state.selfNextSeq = seq + 1;
           advanceVectorCursorDevH(state.vectorCursor, ctx.selfDevH, seq);

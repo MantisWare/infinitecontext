@@ -33,8 +33,7 @@ runStorageAdapterContractSuite(
   { describe, it },
   {
     requiredCapabilities: [...FOLDER_HONEST_CAPABILITIES],
-    skipConditionalReplaceTests: true,
-    skipConditionalDeleteIfMatchTests: true,
+    conditionalReplaceExpectNotSupported: true,
   },
 );
 

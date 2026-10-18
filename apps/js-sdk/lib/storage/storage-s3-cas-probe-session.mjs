@@ -2,6 +2,7 @@ import { createS3StorageAdapter } from "./s3-adapter.mjs";
 import { resolveS3ObjectStoreConfig } from "./s3-config.mjs";
 import { StorageError } from "./errors.mjs";
 import { CAS_PROBE_OBJECT_PREFIXES } from "./storage-cas-probe-sweep.mjs";
+import { isRaceDoubleWinTestActive } from "./test-hooks.mjs";
 
 /**
  * @param {string} key
@@ -38,7 +39,25 @@ export function wrapStorageAdapterCasProbeSession(adapter) {
 }
 
 /**
- * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string }} options
+ * Test-only hook: drops ifNoneMatch:"*" on ic-cas-race/ puts (simulates broken CAS).
+ *
+ * @param {import("./types.mjs").StorageAdapter} adapter
+ */
+export function wrapCasRaceDoubleWinTestHook(adapter) {
+  const inner = adapter;
+  return {
+    ...inner,
+    put(key, body, putOptions) {
+      if (putOptions?.ifNoneMatch === "*" && String(key).includes("ic-cas-race/")) {
+        return inner.put(key, body, {});
+      }
+      return inner.put(key, body, putOptions);
+    },
+  };
+}
+
+/**
+ * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string, testHooks?: { raceDoubleWin?: boolean | string | number } }} options
  */
 export async function openS3StorageCasProbeSession(options = {}) {
   const env = options.env ?? process.env;
@@ -52,17 +71,8 @@ export async function openS3StorageCasProbeSession(options = {}) {
   });
   await adapter.init({ mode: "probe-session", cachePath: options.cachePath });
   let sessionAdapter = wrapStorageAdapterCasProbeSession(adapter);
-  if (String(env.INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST ?? "") === "1") {
-    const inner = sessionAdapter;
-    sessionAdapter = {
-      ...inner,
-      put(key, body, putOptions) {
-        if (putOptions?.ifNoneMatch === "*" && String(key).includes("ic-cas-race/")) {
-          return inner.put(key, body, {});
-        }
-        return inner.put(key, body, putOptions);
-      },
-    };
+  if (isRaceDoubleWinTestActive(options, env)) {
+    sessionAdapter = wrapCasRaceDoubleWinTestHook(sessionAdapter);
   }
   return {
     adapter: sessionAdapter,

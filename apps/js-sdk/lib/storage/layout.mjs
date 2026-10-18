@@ -34,8 +34,9 @@ const DEVICE_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PREV_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const ENVELOPE_FIELD_NAMES = new Set(["v", "alg", "nonce", "ct"]);
-const KDF_MAX_MEMORY_KIB = 524_288;
-const KDF_MAX_ITERATIONS = 100;
+/** 4× default vault KDF profile (65536 KiB × 3 iterations). */
+const KDF_MAX_MEMORY_KIB = VAULT_KDF_PARAMS.memorySizeKiB * 4;
+const KDF_MAX_ITERATIONS = VAULT_KDF_PARAMS.iterations * 4;
 
 const VAULT_KDF_FIELD_NAMES = new Set([
   "algorithm",

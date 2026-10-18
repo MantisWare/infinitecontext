@@ -91,6 +91,12 @@ async function withIsolatedInfinitecontextHome(fn) {
 const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
 
+if (requireMinio && !s3Config) {
+  throw new Error(
+    "IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable (set AWS_ENDPOINT_URL and INFINITECONTEXT_S3_TEST_BUCKET)",
+  );
+}
+
 (s3Config ? describe : describe.skip)("storage doctor CAS CLI (MinIO / CI)", () => {
   it("CLI doctor --recheck-cas clears cas_unsafe on a healthy backend", async () => {
     assert.ok(s3Config);
@@ -152,7 +158,11 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
         bucket: s3Config.bucket,
         prefix,
       });
-      spawnStorageDoctorCli(homeDir, { INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" }, ["--cas-race=5"]);
+      spawnStorageDoctorCli(
+        homeDir,
+        { NODE_ENV: "test", INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
+        ["--cas-race=5"],
+      );
       const defaultCachePath = storageCasCacheFilePath();
       const beforeMarker = readStorageCasCorruptionMarkerFile(defaultCachePath)?.corruptedAtMs ?? 0;
 
@@ -192,7 +202,7 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
 
       const race = spawnStorageDoctorCli(
         homeDir,
-        { INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
+        { NODE_ENV: "test", INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
         ["--cas-race=5"],
       );
       assert.equal(race.persistedUnsafe, true);

@@ -33,6 +33,7 @@ import {
   writeDeviceSyncAckFromState,
 } from "./storage-device-sync-ack.mjs";
 import { LEASE_DEFAULT_SETTLE_MS } from "./lease-lock.mjs";
+import { isInjectedTestHookActive } from "./test-hooks.mjs";
 import {
   readLayoutObjectPlaintext,
   storageConditionalCreate,
@@ -497,7 +498,7 @@ export async function compactObjectStoreReplica(ctx, state, replica, options = {
     await verifyOrphanSnapshotAdoptable(ctx, existing);
   }
 
-  if (options.testHookAfterSnapshotWrite) {
+  if (isInjectedTestHookActive(options, "testHookAfterSnapshotWrite")) {
     await options.testHookAfterSnapshotWrite({ epoch: nextEpoch, snapRecord });
   }
 

@@ -4,6 +4,9 @@ import path from "node:path";
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-storage-test-home-"));
 process.env.HOME = isolatedHome;
+if (process.env.NODE_ENV === undefined || process.env.NODE_ENV === "") {
+  process.env.NODE_ENV = "test";
+}
 
 function cleanupIsolatedHome() {
   try {

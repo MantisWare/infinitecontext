@@ -119,7 +119,10 @@ async function acquireLeaseLockOnce(options) {
   }
   if (existing && isLeaseLockStale(existing, now)) {
     try {
-      await options.adapter.delete(key);
+      const head = await options.adapter.head(key);
+      if (head?.etag) {
+        await options.adapter.delete(key, { ifMatch: head.etag });
+      }
     } catch {
       /* best-effort break stale */
     }
@@ -183,6 +186,9 @@ export async function renewLeaseLock(options) {
   }
   const key = lockRelativePath(options.layoutPrefix, options.lockName);
   const head = await options.adapter.head(key);
+  if (!head?.etag) {
+    throw new Error("Cannot renew lease lock: lock object missing");
+  }
   /** @type {LeaseLockPayload} */
   const payload = {
     owner_dev_h: ownerDevH,
@@ -215,7 +221,15 @@ export async function releaseLeaseLock(options) {
     return;
   }
   const key = lockRelativePath(options.layoutPrefix, options.lockName);
-  await options.adapter.delete(key);
+  const head = await options.adapter.head(key);
+  if (!head?.etag) {
+    return;
+  }
+  try {
+    await options.adapter.delete(key, { ifMatch: head.etag });
+  } catch {
+    /* owner verified payload; etag race means another holder won */
+  }
 }
 
 /**

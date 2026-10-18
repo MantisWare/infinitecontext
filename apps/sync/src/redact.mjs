@@ -12,6 +12,10 @@ const SECRET_PATTERNS = [
     regex: /\bAIza[0-9A-Za-z\-_]{20,}\b/g,
     replacement: "AIza***",
   },
+  { regex: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "AKIA***" },
+  { regex: /\bX-Amz-Signature=[A-Fa-f0-9]+/gi, replacement: "X-Amz-Signature=[redacted]" },
+  { regex: /\bX-Amz-Credential=[^&\s]+/gi, replacement: "X-Amz-Credential=[redacted]" },
+  { regex: /\bCredential=[^,\s]+/gi, replacement: "Credential=[redacted]" },
 ];
 
 function redactString(value) {

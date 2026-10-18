@@ -36,10 +36,9 @@ export function rejectSymlinkInStoreRoot(rootDir) {
  * @param {string} targetPath
  */
 export function rejectSymlinkPath(targetPath) {
+  let fd;
   try {
-    if (fs.lstatSync(targetPath).isSymbolicLink()) {
-      throw new StorageError(`Symlinks are not allowed in the storage path (${targetPath})`, "invalid_argument");
-    }
+    fd = fs.openSync(targetPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   } catch (error) {
     if (error instanceof StorageError) {
       throw error;
@@ -48,6 +47,13 @@ export function rejectSymlinkPath(targetPath) {
       return;
     }
     throw mapFsError(error, targetPath);
+  }
+  try {
+    if (fs.fstatSync(fd).isSymbolicLink()) {
+      throw new StorageError(`Symlinks are not allowed in the storage path (${targetPath})`, "invalid_argument");
+    }
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

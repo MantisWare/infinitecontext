@@ -25,6 +25,7 @@ import {
   decryptLogSegment,
   encryptLogSegment,
   encodeCrockfordBase32,
+  parseStrictVaultKdfParams,
   parseStrictWrappedDekBytes,
   layoutRootPath,
   layoutSegmentEnvelopeDigest,
@@ -281,5 +282,30 @@ describe("vault.json codec", () => {
     wrapped.extra = true;
     const wrappedBytes = new TextEncoder().encode(JSON.stringify(wrapped));
     assert.throws(() => parseStrictWrappedDekBytes(wrappedBytes), /forbidden field/);
+  });
+
+  it("caps hostile vault KDF params to 4× default profile", () => {
+    assert.throws(
+      () =>
+        parseStrictVaultKdfParams({
+          algorithm: "argon2id",
+          memorySizeKiB: 524_288,
+          iterations: 3,
+          parallelism: 4,
+          hashLength: 32,
+        }),
+      /memorySizeKiB out of allowed range/,
+    );
+    assert.throws(
+      () =>
+        parseStrictVaultKdfParams({
+          algorithm: "argon2id",
+          memorySizeKiB: 65536,
+          iterations: 100,
+          parallelism: 4,
+          hashLength: 32,
+        }),
+      /iterations out of allowed range/,
+    );
   });
 });
