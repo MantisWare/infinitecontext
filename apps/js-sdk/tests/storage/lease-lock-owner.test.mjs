@@ -22,7 +22,65 @@ const DEV_B = deriveDevH(TEST_DEK, "22222222-2222-4222-8222-222222222222");
 const LAYOUT_PREFIX = "acct/lease-owner";
 const LOCK_NAME = "shared.manifest";
 
+/**
+ * @param {import("../../lib/storage/types.mjs").StorageAdapter} inner
+ * @param {string | null} headEtagOverride
+ */
+function wrapHeadEtagDrift(inner, headEtagOverride) {
+  return {
+    ...inner,
+    async head(key, options) {
+      const row = await inner.head(key, options);
+      if (!row || headEtagOverride === null) {
+        return row;
+      }
+      return { ...row, etag: headEtagOverride };
+    },
+  };
+}
+
+/** Stale-break path from head()-based lease-lock (77db470) — must not pass drift test. */
+async function staleBreakDeleteUsingHead(adapter, key) {
+  const head = await adapter.head(key);
+  if (head?.etag) {
+    await adapter.delete(key, { ifMatch: head.etag });
+  }
+}
+
+/** Current get()-etag stale-break delete. */
+async function staleBreakDeleteUsingGet(adapter, key) {
+  const row = await adapter.get(key);
+  if (row?.etag) {
+    await adapter.delete(key, { ifMatch: row.etag });
+  }
+}
+
 describe("lease lock owner etag races (QA #4)", () => {
+  it("stale-break must delete with get() etag; head()-only delete fails when head drifts", async () => {
+    const inner = createMemoryStorageAdapter();
+    await inner.init();
+    const key = lockRelativePath(LAYOUT_PREFIX, "drift");
+    const payload = {
+      owner_dev_h: DEV_A,
+      nonce: "stale-nonce",
+      expires_at_ms: Date.now() - LEASE_LOCK_TTL_MS - LEASE_CLOCK_SKEW_MARGIN_MS - 1,
+    };
+    const sealed = encryptVaultPlaintextForStoragePut(TEST_DEK, key, {
+      ic_layout_lease_lock_v1: payload,
+    });
+    await inner.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
+    const row = await inner.get(key);
+    assert.ok(row?.etag);
+
+    const drift = wrapHeadEtagDrift(inner, '"stale-head-etag"');
+    await staleBreakDeleteUsingHead(drift, key);
+    assert.ok(await inner.get(key), "head()-etag stale-break must not remove object when head drifts");
+
+    await staleBreakDeleteUsingGet(drift, key);
+    assert.equal(await inner.get(key), null, "get()-etag stale-break must remove object");
+    await inner.close();
+  });
+
   it("concurrent renew/release vs stale-break acquire never double-holds", async () => {
     const adapter = createMemoryStorageAdapter();
     await adapter.init();

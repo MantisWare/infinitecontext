@@ -9,27 +9,61 @@ fi
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-base_ref=""
-if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
-  if git remote get-url origin >/dev/null 2>&1; then
-    if ! git fetch origin main:refs/remotes/origin/main --quiet 2>/dev/null; then
-      git fetch origin main --quiet 2>/dev/null || true
+resolve_base_ref() {
+  if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+    if git remote get-url origin >/dev/null 2>&1; then
+      git fetch origin main:refs/remotes/origin/main --quiet 2>/dev/null \
+        || git fetch origin main --quiet 2>/dev/null \
+        || true
     fi
   fi
-fi
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-  base_ref="origin/main"
-elif git rev-parse --verify main >/dev/null 2>&1; then
-  base_ref="main"
-else
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    echo "origin/main"
+    return 0
+  fi
+  if git rev-parse --verify main >/dev/null 2>&1; then
+    echo "main"
+    return 0
+  fi
   echo "check-12-paths: no resolvable base ref (fetch origin main or provide local main)" >&2
-  exit 1
-fi
+  return 1
+}
 
-if ! mapfile -t touched < <(git diff --name-only "${base_ref}...HEAD" 2>&1); then
+ensure_merge_base() {
+  local base_ref="$1"
+  if git merge-base "${base_ref}" HEAD >/dev/null 2>&1; then
+    return 0
+  fi
+  if git remote get-url origin >/dev/null 2>&1; then
+    echo "check-12-paths: shallow or missing merge base — deepening fetch of ${base_ref}…" >&2
+    git fetch origin main --deepen=200 --quiet 2>/dev/null \
+      || git fetch origin main --unshallow --quiet 2>/dev/null \
+      || git fetch origin main --quiet 2>/dev/null \
+      || true
+  fi
+  if git merge-base "${base_ref}" HEAD >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "check-12-paths: no merge base between ${base_ref} and HEAD (need full history or a deeper fetch)" >&2
+  return 1
+}
+
+base_ref="$(resolve_base_ref)" || exit 1
+ensure_merge_base "${base_ref}" || exit 1
+
+diff_out="$(mktemp)"
+diff_err="$(mktemp)"
+trap 'rm -f "$diff_out" "$diff_err"' EXIT
+
+if ! git diff --name-only "${base_ref}...HEAD" >"$diff_out" 2>"$diff_err"; then
+  if [[ -s "$diff_err" ]]; then
+    cat "$diff_err" >&2
+  fi
   echo "check-12-paths: git diff failed against ${base_ref}" >&2
   exit 1
 fi
+
+mapfile -t touched <"$diff_out"
 
 if ((${#touched[@]} == 0)); then
   echo "check-12-paths: no changed files vs ${base_ref} — ok"

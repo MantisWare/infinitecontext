@@ -7,13 +7,18 @@ import {
   absorbNodeTestTotals,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
+  assertNoNewIcTmpDirLeaks,
+  assertPostgresReachableForPremerge,
+  assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
+  listAllIcTmpDirs,
   parseNodeVersionParts,
   resolveRepoRootsFromImportMeta,
 } from "./premerge-lib.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
+const icTmpPreload = path.join(repoRoot, "scripts/ic-test-tmp-preload.mjs");
 
 const minioPort = String(process.env.IC_STORAGE_EMU_MINIO_PORT ?? "9000");
 const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
@@ -23,6 +28,7 @@ const totals = { pass: 0, fail: 0, skipped: 0, tests: 0 };
 
 /** @type {import("node:child_process").ChildProcess | null} */
 let activeChild = null;
+let shuttingDown = false;
 
 /** Set true before storage:emu:up so failed starts still run storage:emu:down. */
 let emuStarted = false;
@@ -30,6 +36,7 @@ let cleaning = false;
 
 function fail(message, code = 1) {
   console.error(message);
+  killActiveProcessGroup("SIGKILL");
   cleanupEmu();
   process.exit(code);
 }
@@ -58,78 +65,35 @@ function loadApiEnvFile() {
   }
 }
 
-function ensurePostgresEnvForPremerge() {
-  loadApiEnvFile();
-  const password = String(process.env.POSTGRES_PASSWORD ?? "").trim();
-  if (!password) {
-    fail(
-      "premerge: POSTGRES_PASSWORD is required for API live postgres suites. Set apps/api/.env.local or export POSTGRES_PASSWORD, or run `pnpm infinitecontext:db:up` with a known password.",
-    );
+/**
+ * @param {Record<string, string | undefined>} env
+ */
+function mergeTestNodeOptions(env) {
+  const prior = String(env.NODE_OPTIONS ?? "").trim();
+  if (prior.includes(icTmpPreload)) {
+    return env;
   }
-  if (!process.env.SYNC_E2E_DATABASE_URL && !process.env.VAULT_E2E_DATABASE_URL) {
-    process.env.SYNC_E2E_DATABASE_URL =
-      process.env.SYNC_E2E_DATABASE_URL ??
-      `postgresql://infinitecontext:${encodeURIComponent(password)}@127.0.0.1:5433/infinitecontext`;
-    process.env.VAULT_E2E_DATABASE_URL =
-      process.env.VAULT_E2E_DATABASE_URL ??
-      `postgresql://infinitecontext:${encodeURIComponent(password)}@127.0.0.1:5433/infinitecontext_vault_e2e`;
+  return {
+    ...env,
+    NODE_OPTIONS: prior ? `${prior} --import ${icTmpPreload}` : `--import ${icTmpPreload}`,
+  };
+}
+
+/**
+ * @param {NodeJS.Signals} signal
+ */
+function killActiveProcessGroup(signal) {
+  const child = activeChild;
+  if (!child?.pid) {
+    return;
   }
-  const probe = spawnSync(
-    "psql",
-    [
-      "-h",
-      "127.0.0.1",
-      "-p",
-      "5433",
-      "-U",
-      "infinitecontext",
-      "-d",
-      "postgres",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-c",
-      "SELECT 1",
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PGPASSWORD: password },
-    },
-  );
-  if (probe.status !== 0) {
-    const up = spawnSync("pnpm", ["infinitecontext:db:up"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      stdio: "inherit",
-    });
-    if (up.status !== 0) {
-      fail(
-        "premerge: PostgreSQL at 127.0.0.1:5433 is unreachable and `pnpm infinitecontext:db:up` failed. Fix Postgres before premerge.",
-      );
-    }
-    spawnSync("pnpm", ["infinitecontext:db:migrate"], { cwd: repoRoot, stdio: "inherit" });
-    const retry = spawnSync(
-      "psql",
-      [
-        "-h",
-        "127.0.0.1",
-        "-p",
-        "5433",
-        "-U",
-        "infinitecontext",
-        "-d",
-        "postgres",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-c",
-        "SELECT 1",
-      ],
-      {
-        encoding: "utf8",
-        env: { ...process.env, PGPASSWORD: password },
-      },
-    );
-    if (retry.status !== 0) {
-      fail("premerge: PostgreSQL still unreachable after db:up — check POSTGRES_PASSWORD and port 5433.");
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      /* ignore */
     }
   }
 }
@@ -145,8 +109,9 @@ function run(cmd, args, env, cwd = sdkRoot) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: mergeTestNodeOptions({ ...process.env, ...env }),
       stdio: ["inherit", "pipe", "pipe"],
+      detached: true,
     });
     activeChild = child;
     /** @type {string} */
@@ -172,6 +137,7 @@ function run(cmd, args, env, cwd = sdkRoot) {
         return;
       }
       if (status !== 0) {
+        killActiveProcessGroup("SIGKILL");
         cleanupEmu();
         process.exit(status ?? 1);
       }
@@ -200,19 +166,24 @@ function cleanupEmu() {
   emuStarted = false;
 }
 
+/**
+ * @param {NodeJS.Signals} signal
+ */
 function onSignal(signal) {
-  if (activeChild?.pid) {
-    try {
-      activeChild.kill("SIGTERM");
-    } catch {
-      /* ignore */
-    }
+  if (shuttingDown) {
+    return;
   }
+  shuttingDown = true;
+  killActiveProcessGroup("SIGTERM");
+  setTimeout(() => killActiveProcessGroup("SIGKILL"), 5000).unref();
   cleanupEmu();
   process.exit(signal === "SIGINT" ? 130 : 143);
 }
 
 process.on("exit", () => {
+  if (!shuttingDown) {
+    killActiveProcessGroup("SIGTERM");
+  }
   cleanupEmu();
 });
 process.on("SIGINT", () => onSignal("SIGINT"));
@@ -241,7 +212,12 @@ try {
 
 await run("npm", ["run", "guard:12"]);
 await run("node", ["scripts/check-lib-no-test-env.mjs"]);
-ensurePostgresEnvForPremerge();
+loadApiEnvFile();
+try {
+  assertPostgresReachableForPremerge(repoRoot, process.env);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 await run("pnpm", ["-r", "check"], {}, repoRoot);
 
 const emuComposeEnv = {
@@ -268,6 +244,8 @@ const emuEnv = {
   INFINITECONTEXT_S3_TEST_PREFIX: "premerge-local",
 };
 
+const icTmpBeforeTests = listAllIcTmpDirs();
+
 const testOut = await run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot);
 const parsed = absorbNodeTestTotals(testOut);
 totals.pass = parsed.pass;
@@ -277,6 +255,13 @@ totals.tests = parsed.tests;
 
 try {
   assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
+  assertPremergePackageTestSections(testOut);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+
+try {
+  assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs());
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }

@@ -11,9 +11,12 @@ if (process.env.ALLOW_LIB_TEST_ENV === "1") {
 
 /** @type {string[]} */
 const patterns = [
-  String.raw`process\.env\.\w*TEST\b`,
+  String.raw`process\.env\.[A-Z0-9_]*TEST[A-Z0-9_]*`,
   String.raw`process\.env\[[^\]]*TEST[^\]]*\]`,
-  String.raw`\{\s*[^}]*\b\w*TEST\b[^}]*\}\s*=\s*process\.env`,
+  String.raw`process\.env\s*\[`,
+  String.raw`\{\s*env\s*\}\s*=\s*process`,
+  String.raw`\bIC_TESTING\b`,
+  String.raw`\{\s*[^}]*\b[A-Z0-9_]*TEST[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env`,
 ];
 
 /** @type {string[]} */
@@ -44,7 +47,27 @@ if (aliased.status === 0) {
     if (!line.trim()) continue;
     const file = line.split(":")[0];
     if (!file) continue;
-    const follow = spawnSync("rg", ["-n", String.raw`\.\w*TEST\b`, file], {
+    const follow = spawnSync("rg", ["-n", String.raw`\.[A-Z0-9_]*TEST[A-Z0-9_]*\b`, file], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+    });
+    if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
+      hits.push(String(follow.stdout ?? "").trim());
+    }
+  }
+}
+
+const envDestructure = spawnSync(
+  "rg",
+  ["-n", String.raw`(const|let|var)\s*\{\s*env\s*\}\s*=\s*process`, "lib/"],
+  { cwd: sdkRoot, encoding: "utf8" },
+);
+if (envDestructure.status === 0) {
+  for (const line of String(envDestructure.stdout ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    const file = line.split(":")[0];
+    if (!file) continue;
+    const follow = spawnSync("rg", ["-n", String.raw`env\.[A-Z0-9_]*TEST[A-Z0-9_]*`, file], {
       cwd: sdkRoot,
       encoding: "utf8",
     });

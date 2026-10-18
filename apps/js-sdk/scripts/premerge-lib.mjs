@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,6 +107,143 @@ export function assertPremergeTestTotalsValid(totals) {
   if (accounted !== totals.tests) {
     throw new Error(
       `premerge test totals inconsistent: pass+fail+skipped=${accounted} but tests=${totals.tests}`,
+    );
+  }
+}
+
+/**
+ * Each workspace package `test` script must emit a Node summary block (or pytest banner for python-sdk).
+ * @param {string} output
+ */
+export function assertPremergePackageTestSections(output) {
+  /** @type {string[]} */
+  const missing = [];
+  const sections = output.split(/\n(?=> .+ test )/);
+  for (const section of sections) {
+    const header = section.match(/^> (.+?) test /);
+    if (!header) {
+      continue;
+    }
+    const name = header[1];
+    const hasNodeSummary = /# duration_ms \d+/.test(section);
+    const hasPytest =
+      /(\d+) passed/.test(section) && name.includes("python-sdk");
+    if (!hasNodeSummary && !hasPytest) {
+      missing.push(name);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `premerge missing test summary for workspace package(s): ${missing.join(", ")} (refusing false-green)`,
+    );
+  }
+}
+
+/**
+ * @param {string} databaseUrl
+ */
+export function postgresProbeTargetFromUrl(databaseUrl) {
+  const parsed = new URL(String(databaseUrl).replace(/^postgres:/, "postgresql:"));
+  const host = parsed.hostname || "127.0.0.1";
+  const port = parsed.port || "5432";
+  const user = decodeURIComponent(parsed.username || "infinitecontext");
+  const database = parsed.pathname.replace(/^\//, "") || "postgres";
+  return { host, port, user, database };
+}
+
+/**
+ * @param {string} repoRoot
+ * @param {NodeJS.ProcessEnv} env
+ */
+export function assertPostgresReachableForPremerge(repoRoot, env = process.env) {
+  const password = String(env.POSTGRES_PASSWORD ?? "").trim();
+  if (!password) {
+    throw new Error(
+      "premerge: POSTGRES_PASSWORD is required for API live postgres suites. Set apps/api/.env.local or export POSTGRES_PASSWORD before running premerge.",
+    );
+  }
+  const syncUrl =
+    String(env.SYNC_E2E_DATABASE_URL ?? "").trim() ||
+    `postgresql://infinitecontext@${env.PGHOST ?? "127.0.0.1"}:${env.PGPORT ?? "5433"}/infinitecontext`;
+  const vaultUrl =
+    String(env.VAULT_E2E_DATABASE_URL ?? "").trim() ||
+    `postgresql://infinitecontext@${env.PGHOST ?? "127.0.0.1"}:${env.PGPORT ?? "5433"}/infinitecontext_vault_e2e`;
+
+  /** @type {string[]} */
+  const failures = [];
+  for (const label of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
+    const url = label === "SYNC_E2E_DATABASE_URL" ? syncUrl : vaultUrl;
+    const target = postgresProbeTargetFromUrl(url);
+    const res = spawnSync(
+      "psql",
+      [
+        "-h",
+        target.host,
+        "-p",
+        target.port,
+        "-U",
+        target.user,
+        "-d",
+        target.database,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        "SELECT 1",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...env, PGPASSWORD: password },
+      },
+    );
+    if (res.status !== 0) {
+      const detail = String(res.stderr ?? res.stdout ?? "").trim().split("\n").pop();
+      failures.push(
+        `${label} (${target.host}:${target.port}/${target.database}): ${detail || "connection failed"}`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `premerge: PostgreSQL probe failed (premerge will not run docker compose or touch the shared postgres project):\n${failures.map((f) => `  - ${f}`).join("\n")}\nStart Postgres yourself and fix POSTGRES_PASSWORD / database URLs, then retry.`,
+    );
+  }
+}
+
+/** @returns {Set<string>} */
+export function listAllIcTmpDirs() {
+  const tmpRoot = path.resolve(os.tmpdir());
+  /** @type {Set<string>} */
+  const found = new Set();
+  let entries = [];
+  try {
+    entries = fs.readdirSync(tmpRoot);
+  } catch {
+    return found;
+  }
+  for (const name of entries) {
+    if (!name.startsWith("ic-")) {
+      continue;
+    }
+    found.add(path.join(tmpRoot, name));
+  }
+  return found;
+}
+
+/**
+ * @param {Set<string>} before
+ * @param {Set<string>} after
+ */
+export function assertNoNewIcTmpDirLeaks(before, after) {
+  /** @type {string[]} */
+  const leaked = [];
+  for (const dir of after) {
+    if (!before.has(dir)) {
+      leaked.push(dir);
+    }
+  }
+  if (leaked.length > 0) {
+    throw new Error(
+      `premerge left new /tmp/ic-* directories behind (${leaked.length}): ${leaked.slice(0, 8).join(", ")}${leaked.length > 8 ? "…" : ""}`,
     );
   }
 }
