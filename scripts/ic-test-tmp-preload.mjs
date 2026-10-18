@@ -46,6 +46,21 @@ function trackDir(dir) {
   }
 }
 
+function maybeTrackToolingDir(targetPath) {
+  const resolved = path.resolve(String(targetPath));
+  if (!resolved.startsWith(`${tmpRoot}${path.sep}`) && resolved !== tmpRoot) {
+    return;
+  }
+  const base = path.basename(resolved);
+  if (
+    base.startsWith("tsx-") ||
+    base.includes("sync-pack-out-") ||
+    base.includes("sync-pack-staging-")
+  ) {
+    trackedIcTmpDirs.add(resolved);
+  }
+}
+
 const originalMkdtempSync = fs.mkdtempSync.bind(fs);
 fs.mkdtempSync = (prefix, options) => {
   const dir = originalMkdtempSync(prefix, options);
