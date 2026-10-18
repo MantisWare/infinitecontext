@@ -48,8 +48,10 @@ describe("sync pack staging", () => {
     }).trim();
     assert.ok(fs.existsSync(tgz));
     try {
-      fs.rmSync(tgz, { force: true });
-    } catch {}
+      fs.rmSync(path.dirname(tgz), { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
     const after = syncGitPorcelain();
     assert.deepEqual(after, before);
   });

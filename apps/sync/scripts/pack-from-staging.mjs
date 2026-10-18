@@ -87,6 +87,8 @@ if (isMain) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   } finally {
-    fs.rmSync(packDestination, { recursive: true, force: true });
+    if (injectFailure) {
+      fs.rmSync(packDestination, { recursive: true, force: true });
+    }
   }
 }
