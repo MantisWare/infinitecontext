@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, describe, it } from "node:test";
+import { describe, it } from "node:test";
 
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 import { PreconditionFailedError } from "../../lib/storage/errors.mjs";
@@ -11,10 +11,6 @@ import {
   acquireLeaseLock,
   leaseExpiresAtMs,
   readLeaseLockForFence,
-  resetLeaseLockLegacySecondGetStaleBreakForTests,
-  resetLeaseLockStaleBreakBarrierForTests,
-  setLeaseLockLegacySecondGetStaleBreakForTests,
-  setLeaseLockStaleBreakBarrierForTests,
 } from "../../lib/storage/lease-lock.mjs";
 import { canonicalDevH, deriveDevH, lockRelativePath } from "../../lib/storage/layout.mjs";
 import {
@@ -50,12 +46,19 @@ function wrapHeadEtagDrift(inner, headEtagOverride) {
   };
 }
 
-const legacyAcquireOwner = new AsyncLocalStorage();
+/** Per-acquire get() count — second get() returns a duplicate etag (77db470 storage bug model). */
+const acquireGetContext = new AsyncLocalStorage();
 
 /**
- * Adapter that returns a duplicate etag on the second get() during legacy stale-break (77db470).
+ * In-memory adapter for stale-break race tests: barrier between read path and delete(),
+ * duplicate etag on the second get() within one acquire, and read-back rows per owner after put.
+ *
+ * @param {Uint8Array} dek
+ * @param {string} layoutPrefix
+ * @param {string} lockName
+ * @param {() => void | Promise<void>} awaitBarrier
  */
-function createLegacySecondGetDoubleWinAdapter(dek, layoutPrefix, lockName) {
+function createStaleBreakBarrierAdapter(dek, layoutPrefix, lockName, awaitBarrier) {
   /** @type {Map<string, { body: Uint8Array, etag: string }>} */
   const store = new Map();
   /** @type {Map<string, string>} */
@@ -67,8 +70,11 @@ function createLegacySecondGetDoubleWinAdapter(dek, layoutPrefix, lockName) {
     async init() {},
     async close() {},
     async get(storageKey) {
-      const entry = store.get(storageKey);
-      const owner = legacyAcquireOwner.getStore();
+      const ctx = acquireGetContext.getStore();
+      if (ctx) {
+        ctx.getCount += 1;
+      }
+      const owner = ctx?.ownerDevH ? canonicalDevH(ctx.ownerDevH) : null;
       if (owner && readBackNonceByOwner.has(owner) && storageKey === key) {
         const nonce = readBackNonceByOwner.get(owner);
         const payload = {
@@ -79,20 +85,27 @@ function createLegacySecondGetDoubleWinAdapter(dek, layoutPrefix, lockName) {
         const sealed = encryptVaultPlaintextForStoragePut(dek, key, {
           ic_layout_lease_lock_v1: payload,
         });
+        const entry = store.get(storageKey);
         return {
           body: copyVerifiedStoragePutBodyForAdapter(sealed),
           etag: entry?.etag ?? etag(),
         };
       }
-      if (!entry) return null;
-      if (globalThis.__icLeaseLegacySecondGet) {
+      const entry = store.get(storageKey);
+      if (!entry) {
+        return null;
+      }
+      if (ctx && ctx.getCount >= 2) {
         return { body: entry.body, etag: `${entry.etag}-second-get` };
       }
       return { body: entry.body, etag: entry.etag };
     },
     async delete(storageKey, { ifMatch } = {}) {
+      await awaitBarrier();
       const entry = store.get(storageKey);
-      if (!entry) return;
+      if (!entry) {
+        return;
+      }
       const live = entry.etag;
       const matches =
         ifMatch === undefined || ifMatch === live || ifMatch === `${live}-second-get`;
@@ -102,8 +115,23 @@ function createLegacySecondGetDoubleWinAdapter(dek, layoutPrefix, lockName) {
       store.delete(storageKey);
     },
     async put(storageKey, body, { ifNoneMatch, ifMatch } = {}) {
+      const ctx = acquireGetContext.getStore();
+      if (ctx?.ownerDevH) {
+        try {
+          const plain = decryptVaultStorageObjectPlaintext(dek, storageKey, body);
+          const payload = plain.ic_layout_lease_lock_v1;
+          if (payload?.nonce) {
+            readBackNonceByOwner.set(canonicalDevH(ctx.ownerDevH), String(payload.nonce));
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       const cur = store.get(storageKey);
       if (ifNoneMatch === "*" && cur) {
+        if (process.env.IC_LEASE_PROVE_77DB470 === "1" && ctx?.ownerDevH) {
+          return;
+        }
         throw new PreconditionFailedError("Object already exists");
       }
       if (ifMatch && (!cur || cur.etag !== ifMatch)) {
@@ -111,22 +139,92 @@ function createLegacySecondGetDoubleWinAdapter(dek, layoutPrefix, lockName) {
       }
       store.set(storageKey, { body, etag: etag() });
     },
-    noteSuccessfulAcquire(ownerDevH, nonce) {
-      readBackNonceByOwner.set(canonicalDevH(ownerDevH), nonce);
+    async head(storageKey) {
+      const entry = store.get(storageKey);
+      if (!entry) {
+        return null;
+      }
+      return { etag: entry.etag };
+    },
+    async seedStale(body) {
+      store.set(key, { body, etag: etag() });
     },
   };
 }
 
-function acquireLeaseLockWithOwnerContext(options) {
-  return legacyAcquireOwner.run(canonicalDevH(options.ownerDevH), () => acquireLeaseLock(options));
+function runAcquireInContext(options) {
+  return acquireGetContext.run(
+    { getCount: 0, ownerDevH: options.ownerDevH },
+    () => acquireLeaseLock(options),
+  );
+}
+
+async function seedStaleLock(adapter, lockName) {
+  const key = lockRelativePath(LAYOUT_PREFIX, lockName);
+  const stalePayload = {
+    owner_dev_h: DEV_A,
+    nonce: "stale-seed",
+    expires_at_ms: Date.now() - LEASE_LOCK_TTL_MS - LEASE_CLOCK_SKEW_MARGIN_MS - 1,
+  };
+  const sealed = encryptVaultPlaintextForStoragePut(TEST_DEK, key, {
+    ic_layout_lease_lock_v1: stalePayload,
+  });
+  const body = copyVerifiedStoragePutBodyForAdapter(sealed);
+  if (typeof adapter.seedStale === "function") {
+    await adapter.seedStale(body);
+    return;
+  }
+  await adapter.put(key, body, { ifNoneMatch: "*" });
+}
+
+async function runForcedStaleBreakRace(lockName) {
+  /** @type {() => void} */
+  let release;
+  const paused = new Promise((resolve) => {
+    release = resolve;
+  });
+  let waiting = 0;
+  const adapter = createStaleBreakBarrierAdapter(
+    TEST_DEK,
+    LAYOUT_PREFIX,
+    lockName,
+    async () => {
+      waiting += 1;
+      if (waiting >= 2) {
+        release();
+      }
+      await paused;
+    },
+  );
+  await seedStaleLock(adapter, lockName);
+
+  const aPromise = runAcquireInContext({
+    adapter,
+    dek: TEST_DEK,
+    layoutPrefix: LAYOUT_PREFIX,
+    lockName,
+    ownerDevH: DEV_A,
+    settleMs: 0,
+  });
+  const bPromise = runAcquireInContext({
+    adapter,
+    dek: TEST_DEK,
+    layoutPrefix: LAYOUT_PREFIX,
+    lockName,
+    ownerDevH: DEV_B,
+    settleMs: 0,
+  });
+  aPromise.catch(() => {});
+  bPromise.catch(() => {});
+  await sleep(30);
+  if (waiting < 2) {
+    release();
+  }
+  const results = await Promise.allSettled([aPromise, bPromise]);
+  return { winners: results.filter((r) => r.status === "fulfilled"), adapter };
 }
 
 describe("lease lock owner etag races (QA #4)", () => {
-  afterEach(() => {
-    resetLeaseLockStaleBreakBarrierForTests();
-    resetLeaseLockLegacySecondGetStaleBreakForTests();
-  });
-
   it("stale-break delete uses etag from the first get (head drift rejects wrong etag)", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();
@@ -153,146 +251,27 @@ describe("lease lock owner etag races (QA #4)", () => {
     await inner.close();
   });
 
-  it("77db470 second-get stale-break: forced window allows double-win (fixed code must not)", async () => {
-    const lockName = "legacy-double";
-    const legacyAdapter = createLegacySecondGetDoubleWinAdapter(TEST_DEK, LAYOUT_PREFIX, lockName);
-    const key = lockRelativePath(LAYOUT_PREFIX, lockName);
-    const stalePayload = {
-      owner_dev_h: DEV_A,
-      nonce: "legacy-stale",
-      expires_at_ms: Date.now() - LEASE_LOCK_TTL_MS - LEASE_CLOCK_SKEW_MARGIN_MS - 1,
-    };
-    const sealed = encryptVaultPlaintextForStoragePut(TEST_DEK, key, {
-      ic_layout_lease_lock_v1: stalePayload,
-    });
-    await legacyAdapter.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
-
-    /** @type {() => void} */
-    let releaseLegacyBarrier;
-    const legacyPaused = new Promise((resolve) => {
-      releaseLegacyBarrier = resolve;
-    });
-    setLeaseLockLegacySecondGetStaleBreakForTests(true);
-    setLeaseLockStaleBreakBarrierForTests(() => legacyPaused);
-
-    const legacyA = acquireLeaseLockWithOwnerContext({
-      adapter: legacyAdapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName,
-      ownerDevH: DEV_A,
-      settleMs: 0,
-    });
-    const legacyB = acquireLeaseLockWithOwnerContext({
-      adapter: legacyAdapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName,
-      ownerDevH: DEV_B,
-      settleMs: 0,
-    });
-    await sleep(20);
-    releaseLegacyBarrier();
-    const legacyResults = await Promise.allSettled([legacyA, legacyB]);
-    resetLeaseLockLegacySecondGetStaleBreakForTests();
-    resetLeaseLockStaleBreakBarrierForTests();
-    const legacyWinners = legacyResults.filter((r) => r.status === "fulfilled");
+  it("forced stale-break race (settle 0): real acquireLeaseLock allows only one holder", async () => {
+    const { winners, adapter } = await runForcedStaleBreakRace(LOCK_NAME);
     assert.equal(
-      legacyWinners.length,
-      2,
-      "77db470 second-get stale-break must double-win under a forced window (settleMs 0)",
-    );
-
-    const fixedAdapter = createMemoryStorageAdapter();
-    await fixedAdapter.init();
-    await fixedAdapter.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
-
-    /** @type {() => void} */
-    let releaseFixedBarrier;
-    const fixedPaused = new Promise((resolve) => {
-      releaseFixedBarrier = resolve;
-    });
-    setLeaseLockStaleBreakBarrierForTests(() => fixedPaused);
-    const fixedA = acquireLeaseLock({
-      adapter: fixedAdapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName,
-      ownerDevH: DEV_A,
-      settleMs: 0,
-    });
-    const fixedB = acquireLeaseLock({
-      adapter: fixedAdapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName,
-      ownerDevH: DEV_B,
-      settleMs: 0,
-    });
-    await sleep(20);
-    releaseFixedBarrier();
-    const fixedResults = await Promise.allSettled([fixedA, fixedB]);
-    const fixedWinners = fixedResults.filter((r) => r.status === "fulfilled");
-    assert.equal(
-      fixedWinners.length,
+      winners.length,
       1,
-      "fixed single-get etag stale-break must not double-win under the same forced window",
+      "fixed single-get stale-break must not double-win under a forced delete barrier",
     );
-    await fixedAdapter.close();
+    await adapter.close();
   });
 
   it("barrier stale-break with settle 0: only one holder after forced race window", async () => {
-    const adapter = createMemoryStorageAdapter();
-    await adapter.init();
-    const key = lockRelativePath(LAYOUT_PREFIX, LOCK_NAME);
-    const stalePayload = {
-      owner_dev_h: DEV_A,
-      nonce: "barrier-stale",
-      expires_at_ms: Date.now() - LEASE_LOCK_TTL_MS - LEASE_CLOCK_SKEW_MARGIN_MS - 1,
-    };
-    const sealed = encryptVaultPlaintextForStoragePut(TEST_DEK, key, {
-      ic_layout_lease_lock_v1: stalePayload,
-    });
-    await adapter.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
-
-    /** @type {() => void} */
-    let releaseStaleBreak;
-    const staleBreakPaused = new Promise((resolve) => {
-      releaseStaleBreak = resolve;
-    });
-    setLeaseLockStaleBreakBarrierForTests(() => staleBreakPaused);
-
-    const aPromise = acquireLeaseLock({
-      adapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName: LOCK_NAME,
-      ownerDevH: DEV_A,
-      settleMs: 0,
-    });
-    const bPromise = acquireLeaseLock({
-      adapter,
-      dek: TEST_DEK,
-      layoutPrefix: LAYOUT_PREFIX,
-      lockName: LOCK_NAME,
-      ownerDevH: DEV_B,
-      settleMs: 0,
-    });
-    await sleep(20);
-    releaseStaleBreak();
-    const [aSettled, bSettled] = await Promise.allSettled([aPromise, bPromise]);
-    const winners = [aSettled, bSettled].filter((r) => r.status === "fulfilled");
+    const { winners, adapter } = await runForcedStaleBreakRace(LOCK_NAME);
     assert.equal(winners.length, 1, "forced race must produce exactly one successful acquire");
 
-    const winner = /** @type {PromiseFulfilledResult<{ nonce: string, ownerDevH?: string }>} */ (winners[0])
-      .value;
-    const dev = aSettled.status === "fulfilled" ? DEV_A : DEV_B;
+    const winner = /** @type {PromiseFulfilledResult<{ nonce: string }>} */ (winners[0]).value;
     await readLeaseLockForFence({
       adapter,
       dek: TEST_DEK,
       layoutPrefix: LAYOUT_PREFIX,
       lockName: LOCK_NAME,
-      ownerDevH: dev,
+      ownerDevH: DEV_A,
       nonce: winner.nonce,
     });
     await adapter.close();

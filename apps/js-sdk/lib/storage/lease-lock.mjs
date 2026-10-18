@@ -38,12 +38,6 @@ export function isLeaseLockHeldBy(payload, ownerDevH, nowMs = Date.now()) {
 }
 
 /**
- * @param {import('./types.mjs').StorageAdapter} adapter
- * @param {Uint8Array} dek
- * @param {string} layoutPrefix
- * @param {string} lockName
- */
-/**
  * @returns {Promise<{ key: string, payload: LeaseLockPayload, etag: string } | null>}
  */
 async function readLeaseObject(adapter, dek, layoutPrefix, lockName) {
@@ -61,13 +55,6 @@ async function readLeasePayload(adapter, dek, layoutPrefix, lockName) {
   return row?.payload ?? null;
 }
 
-/**
- * @param {import('./types.mjs').StorageAdapter} adapter
- * @param {Uint8Array} dek
- * @param {string} layoutPrefix
- * @param {string} lockName
- * @param {LeaseLockPayload} payload
- */
 async function writeLeasePayload(adapter, dek, layoutPrefix, lockName, payload) {
   const key = lockRelativePath(layoutPrefix, lockName);
   const sealed = encryptVaultPlaintextForStoragePut(dek, key, {
@@ -76,14 +63,6 @@ async function writeLeasePayload(adapter, dek, layoutPrefix, lockName, payload) 
   await adapter.put(key, copyVerifiedStoragePutBodyForAdapter(sealed), { ifNoneMatch: "*" });
 }
 
-/**
- * @param {import('./types.mjs').StorageAdapter} adapter
- * @param {Uint8Array} dek
- * @param {string} layoutPrefix
- * @param {string} lockName
- * @param {LeaseLockPayload} payload
- * @param {string | undefined} ifMatch
- */
 async function replaceLeasePayload(adapter, dek, layoutPrefix, lockName, payload, ifMatch) {
   const key = lockRelativePath(layoutPrefix, lockName);
   const sealed = encryptVaultPlaintextForStoragePut(dek, key, {
@@ -96,42 +75,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * @param {Object} options
- * @param {import('./types.mjs').StorageAdapter} options.adapter
- * @param {Uint8Array} options.dek
- * @param {string} options.layoutPrefix
- * @param {string} options.lockName
- * @param {string} options.ownerDevH canonical
- * @param {number} [options.settleMs]
- * @param {AbortSignal} [options.signal]
- */
 function jitterMs(maxMs) {
   return Math.floor(Math.random() * maxMs);
-}
-
-/** @type {null | (() => void | Promise<void>)} */
-let leaseLockStaleBreakBarrierForTests = null;
-
-/** Test-only: 77db470 stale-break used a second get() before delete (duplicate etag race). */
-let leaseLockLegacySecondGetStaleBreakForTests = false;
-
-/** Test-only: pause stale-break between the initial get() and conditional delete. */
-export function setLeaseLockStaleBreakBarrierForTests(barrier) {
-  leaseLockStaleBreakBarrierForTests = typeof barrier === "function" ? barrier : null;
-}
-
-export function resetLeaseLockStaleBreakBarrierForTests() {
-  leaseLockStaleBreakBarrierForTests = null;
-}
-
-/** Test-only: enable 77db470 second-get stale-break path in the real acquire implementation. */
-export function setLeaseLockLegacySecondGetStaleBreakForTests(enabled) {
-  leaseLockLegacySecondGetStaleBreakForTests = Boolean(enabled);
-}
-
-export function resetLeaseLockLegacySecondGetStaleBreakForTests() {
-  leaseLockLegacySecondGetStaleBreakForTests = false;
 }
 
 async function acquireLeaseLockOnce(options) {
@@ -150,26 +95,11 @@ async function acquireLeaseLockOnce(options) {
     }
     throw new Error(`Lease lock ${lockName} is held by ${existing.owner_dev_h}`);
   }
-  if (existing && isLeaseLockStale(existing, now)) {
-    let etagForDelete = row?.etag;
-    if (leaseLockLegacySecondGetStaleBreakForTests) {
-      globalThis.__icLeaseLegacySecondGet = true;
-      try {
-        const row2 = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, lockName);
-        etagForDelete = row2?.etag ?? etagForDelete;
-      } finally {
-        globalThis.__icLeaseLegacySecondGet = false;
-      }
-    }
-    if (leaseLockStaleBreakBarrierForTests) {
-      await leaseLockStaleBreakBarrierForTests();
-    }
-    if (etagForDelete) {
-      try {
-        await options.adapter.delete(key, { ifMatch: etagForDelete });
-      } catch {
-        /* best-effort break stale */
-      }
+  if (existing && isLeaseLockStale(existing, now) && row?.etag) {
+    try {
+      await options.adapter.delete(key, { ifMatch: row.etag });
+    } catch {
+      /* best-effort break stale */
     }
   }
 
@@ -180,18 +110,7 @@ async function acquireLeaseLockOnce(options) {
     expires_at_ms: leaseExpiresAtMs(now),
   };
 
-  if (leaseLockLegacySecondGetStaleBreakForTests) {
-    try {
-      await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
-    } catch {
-      /* 77db470 best-effort put after stale-break race */
-    }
-    if (typeof options.adapter.noteSuccessfulAcquire === "function") {
-      options.adapter.noteSuccessfulAcquire(options.ownerDevH, nonce);
-    }
-  } else {
-    await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
-  }
+  await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
 
   if (settleMs > 0) await sleep(settleMs);
 
@@ -225,15 +144,6 @@ export async function acquireLeaseLock(options) {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-/**
- * @param {Object} options
- * @param {import('./types.mjs').StorageAdapter} options.adapter
- * @param {Uint8Array} options.dek
- * @param {string} options.layoutPrefix
- * @param {string} options.lockName
- * @param {string} options.ownerDevH
- * @param {string} options.nonce
- */
 export async function renewLeaseLock(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
   const row = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, options.lockName);
@@ -260,15 +170,6 @@ export async function renewLeaseLock(options) {
   );
 }
 
-/**
- * @param {Object} options
- * @param {import('./types.mjs').StorageAdapter} options.adapter
- * @param {Uint8Array} options.dek
- * @param {string} options.layoutPrefix
- * @param {string} options.lockName
- * @param {string} options.ownerDevH
- * @param {string} options.nonce
- */
 export async function releaseLeaseLock(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
   const row = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, options.lockName);
@@ -286,18 +187,6 @@ export async function releaseLeaseLock(options) {
   }
 }
 
-/**
- * Run `fn` while holding a lease lock (advisory).
- * @template T
- * @param {Object} options
- * @param {import('./types.mjs').StorageAdapter} options.adapter
- * @param {Uint8Array} options.dek
- * @param {string} options.layoutPrefix
- * @param {string} options.lockName
- * @param {string} options.ownerDevH
- * @param {number} [options.settleMs]
- * @param {() => Promise<T>} options.fn
- */
 export async function verifyLeaseLockAfterWrite(options) {
   await readLeaseLockForFence(options);
 }

@@ -6,15 +6,14 @@ import path from "node:path";
 import {
   PREMERGE_MIN_NODE,
   absorbNodeTestTotals,
-  applyInfinitecontextDescribeSkipAdjustment,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
   assertNoNewIcTmpDirLeaks,
   assertPremergeExpectedPackagesDefineTestScript,
   assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
-  countOnboardingWizardDescribeSkipTests,
   isNodeVersionAtLeast,
+  PREMERGE_PACKAGE_MIN_PASS,
   listAllIcTmpDirs,
   parseNodeVersionParts,
   parsePremergePackageCounts,
@@ -30,9 +29,9 @@ const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 const icTestTmpRunTag = `ic-premerge-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 process.env.IC_TEST_TMP_RUN_TAG = icTestTmpRunTag;
 
-const systemTmpRoot = path.resolve("/tmp");
+const callerTmpRoot = path.resolve(process.env.TMPDIR ?? os.tmpdir());
 /** @type {string} */
-const premergeTmpRoot = fs.mkdtempSync(path.join(systemTmpRoot, `${icTestTmpRunTag}-tmpdir-`));
+const premergeTmpRoot = fs.mkdtempSync(path.join(callerTmpRoot, `${icTestTmpRunTag}-tmpdir-`));
 process.env.TMPDIR = premergeTmpRoot;
 process.env.TMP = premergeTmpRoot;
 process.env.TEMP = premergeTmpRoot;
@@ -63,7 +62,23 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
+function cleanupNodeCompileCache() {
+  const root = process.env.IC_PREMERGE_TMPDIR ?? premergeTmpRoot;
+  if (!root || !fs.existsSync(root)) {
+    return;
+  }
+  const cacheDir = path.join(root, "node-compile-cache");
+  try {
+    if (fs.existsSync(cacheDir)) {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 function cleanupPremergeTmpRoot() {
+  cleanupNodeCompileCache();
   const root = process.env.IC_PREMERGE_TMPDIR ?? premergeTmpRoot;
   if (!root || !fs.existsSync(root)) {
     return;
@@ -219,6 +234,7 @@ function onSignal(signal) {
   shuttingDown = true;
   killActiveProcessGroup("SIGTERM");
   setTimeout(() => killActiveProcessGroup("SIGKILL"), 5000).unref();
+  cleanupNodeCompileCache();
   cleanupPremergeTmpRoot();
   cleanupAll();
   process.exit(signal === "SIGINT" ? 130 : 143);
@@ -338,15 +354,14 @@ if (testRunFailed) {
 }
 
 const parsed = absorbNodeTestTotals(testOut);
-const describeSkipHidden = countOnboardingWizardDescribeSkipTests(repoRoot);
 totals.pass = parsed.pass;
 totals.fail = parsed.fail;
-totals.skipped = parsed.skipped + describeSkipHidden;
-totals.tests = parsed.tests + describeSkipHidden;
+totals.skipped = parsed.skipped;
+totals.tests = parsed.tests;
 
 try {
   assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
-  assertPremergePackageTestSections(testOut, repoRoot);
+  assertPremergePackageTestSections(testOut);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
@@ -366,15 +381,12 @@ console.log(`  fail: ${totals.fail}`);
 console.log(`  skipped: ${totals.skipped}`);
 console.log(`  tests: ${totals.tests}`);
 console.log(`  HEAD: ${head}`);
-console.log(`  describe.skip adjustment (onboarding-wizard, no node-pty): +${describeSkipHidden} skipped`);
-console.log("  per-package:");
+console.log("  per-package (floor pass):");
 for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-  const display =
-    name === "infinitecontext"
-      ? applyInfinitecontextDescribeSkipAdjustment({ ...row }, repoRoot)
-      : row;
+  const floor = PREMERGE_PACKAGE_MIN_PASS[name];
+  const floorLabel = floor !== undefined ? ` floor ${floor}` : "";
   console.log(
-    `    ${name}: pass ${display.pass}, fail ${display.fail}, skipped ${display.skipped}, tests ${display.tests} (${row.blocks} block(s))`,
+    `    ${name}: pass ${row.pass}, fail ${row.fail}, skipped ${row.skipped}, tests ${row.tests} (${row.blocks} block(s))${floorLabel}`,
   );
 }
 
