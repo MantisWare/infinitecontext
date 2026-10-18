@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Guard #12 paths vs origin/main. Shallow or single-commit HEADs use a depth-1 fetch of main
-# into a temp ref and a two-dot tree diff (main..HEAD), not a merge base.
+# Guard #12 paths vs origin/main. Uses three-dot (merge-base..HEAD) when a merge base exists;
+# shallow/single-commit HEADs fall back to depth-1 main fetch + two-dot diff.
 set -euo pipefail
 
 if [[ "${ALLOW_12_PATHS:-}" == "1" ]]; then
@@ -28,7 +28,7 @@ resolve_main_snapshot_ref() {
     return 1
   fi
   echo "check-12-paths: fetching origin/main (depth 1) into ${CHECK12_TMP_REF}…" >&2
-  if ! git fetch origin main:"${CHECK12_TMP_REF}" --depth=1 --quiet 2>/dev/null; then
+  if ! git fetch origin refs/heads/main:"${CHECK12_TMP_REF}" --depth=1 --quiet 2>/dev/null; then
     git fetch origin main:"${CHECK12_TMP_REF}" --quiet 2>/dev/null || true
   fi
   if git rev-parse --verify "${CHECK12_TMP_REF}" >/dev/null 2>&1; then
@@ -49,18 +49,36 @@ trap 'rm -f "$diff_out" "$diff_err"; cleanup_check12_ref' EXIT
 
 main_ref="$(resolve_main_snapshot_ref)" || exit 1
 
-if ! git diff --name-only "${main_ref}" HEAD >"$diff_out" 2>"$diff_err"; then
-  if [[ -s "$diff_err" ]]; then
-    cat "$diff_err" >&2
+use_three_dot=0
+if git merge-base "${main_ref}" HEAD >/dev/null 2>&1; then
+  use_three_dot=1
+  echo "check-12-paths: using three-dot diff (${main_ref}...HEAD)" >&2
+  if ! git diff --name-only "${main_ref}"...HEAD >"$diff_out" 2>"$diff_err"; then
+    if [[ -s "$diff_err" ]]; then
+      cat "$diff_err" >&2
+    fi
+    echo "check-12-paths: git diff failed (${main_ref}...HEAD)" >&2
+    exit 1
   fi
-  echo "check-12-paths: git diff failed (${main_ref}..HEAD)" >&2
-  exit 1
+else
+  echo "check-12-paths: using two-dot diff (${main_ref}..HEAD, no merge base)" >&2
+  if ! git diff --name-only "${main_ref}" HEAD >"$diff_out" 2>"$diff_err"; then
+    if [[ -s "$diff_err" ]]; then
+      cat "$diff_err" >&2
+    fi
+    echo "check-12-paths: git diff failed (${main_ref}..HEAD)" >&2
+    exit 1
+  fi
 fi
 
 mapfile -t touched <"$diff_out"
 
 if ((${#touched[@]} == 0)); then
-  echo "check-12-paths: no changed files vs ${main_ref} — ok"
+  if ((use_three_dot)); then
+    echo "check-12-paths: no changed files vs ${main_ref}...HEAD — ok"
+  else
+    echo "check-12-paths: no changed files vs ${main_ref}..HEAD — ok"
+  fi
   exit 0
 fi
 

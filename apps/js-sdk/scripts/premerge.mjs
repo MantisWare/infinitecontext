@@ -54,13 +54,19 @@ let cleaning = false;
 /** @type {null | (() => void)} */
 let pgCleanup = null;
 
+function exitPremerge(code) {
+  if (!shuttingDown) {
+    cleanupNodeCompileCache();
+    cleanupPremergeTmpRoot();
+  }
+  process.exit(code);
+}
+
 function fail(message, code = 1) {
   console.error(message);
   killActiveProcessGroup("SIGKILL");
-  cleanupNodeCompileCache();
   cleanupAll();
-  cleanupPremergeTmpRoot();
-  process.exit(code);
+  exitPremerge(code);
 }
 
 function cleanupNodeCompileCache() {
@@ -228,7 +234,7 @@ function run(cmd, args, env, cwd = sdkRoot, opts = {}) {
         }
         killActiveProcessGroup("SIGKILL");
         cleanupAll();
-        process.exit(status ?? 1);
+        exitPremerge(status ?? 1);
       }
       resolve(out);
     });
@@ -381,7 +387,7 @@ try {
 }
 
 if (testRunFailed) {
-  process.exit(1);
+  exitPremerge(1);
 }
 
 const parsed = absorbNodeTestTotals(testOut);
@@ -422,5 +428,5 @@ for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].local
 }
 
 if (totals.fail > 0) {
-  process.exit(1);
+  exitPremerge(1);
 }
