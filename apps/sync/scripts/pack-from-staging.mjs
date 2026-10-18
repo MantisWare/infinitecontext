@@ -79,11 +79,14 @@ export function packSyncFromStaging(opts = {}) {
 const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
   const injectFailure = process.argv.includes("--inject-failure");
+  const packDestination = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-out-"));
   try {
-    const tgz = packSyncFromStaging({ injectFailure });
+    const tgz = packSyncFromStaging({ packDestination, injectFailure });
     console.log(tgz);
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
+  } finally {
+    fs.rmSync(packDestination, { recursive: true, force: true });
   }
 }
