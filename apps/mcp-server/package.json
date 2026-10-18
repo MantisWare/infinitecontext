@@ -19,7 +19,7 @@
     "prepack": "pnpm --filter infinitecontext run build && pnpm run build",
     "check": "pnpm run build",
     "dev": "tsx src/stdio.ts",
-    "test": "node --import tsx --test src/**/*.test.ts tests/**/*.test.mjs"
+    "test": "node --import ../../scripts/ic-test-tmp-preload.mjs --import tsx --test src/**/*.test.ts tests/**/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

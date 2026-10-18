@@ -28,6 +28,7 @@ describe("sync pack staging", () => {
       execSync("node scripts/pack-from-staging.mjs --inject-failure", {
         cwd: syncRoot,
         stdio: "pipe",
+        env: { ...process.env, NODE_OPTIONS: "" },
       });
       assert.fail("expected pack to fail");
     } catch {
@@ -43,6 +44,7 @@ describe("sync pack staging", () => {
     const tgz = execSync("node scripts/pack-from-staging.mjs", {
       cwd: syncRoot,
       encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "" },
     }).trim();
     assert.ok(fs.existsSync(tgz));
     try {

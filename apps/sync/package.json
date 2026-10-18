@@ -15,7 +15,7 @@
     "dev:daemon": "node --watch src/index.mjs",
     "dev:tui": "node --watch -e \"await import('./src/env.mjs'); const {tuiBoot} = await import('./src/tui.mjs'); const {resolveHostAuthHooks}=await import('./src/host-auth.mjs'); tuiBoot({...(await resolveHostAuthHooks())});\"",
     "check": "node scripts/check-syntax.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --import ../../scripts/ic-test-tmp-preload.mjs --test tests/*.test.mjs"
   },
   "exports": {
     "./sync": "./src/daemon.mjs",

@@ -18,7 +18,6 @@ import {
 } from "./premerge-lib.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
-const icTmpPreload = path.join(repoRoot, "scripts/ic-test-tmp-preload.mjs");
 
 const minioPort = String(process.env.IC_STORAGE_EMU_MINIO_PORT ?? "9000");
 const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
@@ -66,20 +65,6 @@ function loadApiEnvFile() {
 }
 
 /**
- * @param {Record<string, string | undefined>} env
- */
-function mergeTestNodeOptions(env) {
-  const prior = String(env.NODE_OPTIONS ?? "").trim();
-  if (prior.includes(icTmpPreload)) {
-    return env;
-  }
-  return {
-    ...env,
-    NODE_OPTIONS: prior ? `${prior} --import ${icTmpPreload}` : `--import ${icTmpPreload}`,
-  };
-}
-
-/**
  * @param {NodeJS.Signals} signal
  */
 function killActiveProcessGroup(signal) {
@@ -109,7 +94,7 @@ function run(cmd, args, env, cwd = sdkRoot) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
-      env: mergeTestNodeOptions({ ...process.env, ...env }),
+      env: { ...process.env, ...env },
       stdio: ["inherit", "pipe", "pipe"],
       detached: true,
     });

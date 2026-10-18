@@ -14,7 +14,7 @@
         "./testing": "./src/testing/index.ts"
     },
     "scripts": {
-        "test": "node --import tsx --test src/**/*.test.ts",
+        "test": "node --import ../../scripts/ic-test-tmp-preload.mjs --import tsx --test src/**/*.test.ts",
         "check": "tsc --noEmit"
     },
     "devDependencies": {
