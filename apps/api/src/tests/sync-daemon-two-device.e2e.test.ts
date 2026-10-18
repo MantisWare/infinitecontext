@@ -17,20 +17,42 @@ const execFileAsync = promisify(execFile);
 
 const DB_URL = process.env.SYNC_E2E_DATABASE_URL ?? process.env.VAULT_E2E_DATABASE_URL;
 let postgresReady = false;
-let vaultAgentCountBefore = 0;
+/** @type {Set<string>} */
+let vaultAgentPidsBaseline = new Set();
 
 /** @type {ChildProcess[]} */
 const trackedDaemonChildren: ChildProcess[] = [];
 /** @type {string[]} */
 const trackedTempHomes: string[] = [];
 
-function countVaultAgentProcesses() {
+function snapshotVaultAgentPids() {
     try {
         const out = execSync('pgrep -f vault-agent-serve.mjs || true', { encoding: 'utf8' }).trim();
-        if (!out) return 0;
-        return out.split('\n').filter(Boolean).length;
+        if (!out) return new Set<string>();
+        return new Set(out.split('\n').filter(Boolean));
     } catch {
-        return 0;
+        return new Set<string>();
+    }
+}
+
+async function terminateNewVaultAgents() {
+    const after = snapshotVaultAgentPids();
+    for (const pid of after) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
+        try {
+            process.kill(Number(pid), 'SIGTERM');
+        } catch {
+            /* ignore */
+        }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    for (const pid of snapshotVaultAgentPids()) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
+        try {
+            process.kill(Number(pid), 'SIGKILL');
+        } catch {
+            /* ignore */
+        }
     }
 }
 
@@ -89,9 +111,10 @@ async function cleanupDaemonLeaks() {
 }
 
 function assertNoDaemonLeaksAfterCleanup() {
+    const after = snapshotVaultAgentPids();
     assert.equal(
-        countVaultAgentProcesses(),
-        vaultAgentCountBefore,
+        after.size,
+        vaultAgentPidsBaseline.size,
         'vault-agent-serve.mjs process count changed during test',
     );
 }
@@ -130,7 +153,7 @@ before(async () => {
     await new Promise<void>((resolve) => {
         server = serve({ fetch: app.fetch, port }, () => resolve());
     });
-    vaultAgentCountBefore = countVaultAgentProcesses();
+    vaultAgentPidsBaseline = snapshotVaultAgentPids();
 
     apiJson = async (method, urlPath, body, token) => {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -154,6 +177,7 @@ after(async () => {
 describe('sync daemon two-device e2e (postgres)', () => {
     afterEach(async () => {
         await cleanupDaemonLeaks();
+        await terminateNewVaultAgents();
         assertNoDaemonLeaksAfterCleanup();
     });
 

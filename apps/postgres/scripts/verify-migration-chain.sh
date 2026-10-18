@@ -76,10 +76,10 @@ apply_down() {
 }
 
 docker_compose() {
-  if docker compose "$@" 2>/dev/null; then
+  if docker compose "$@"; then
     return 0
   fi
-  if sudo docker compose "$@" 2>/dev/null; then
+  if command -v sudo >/dev/null 2>&1 && sudo -E docker compose "$@"; then
     return 0
   fi
   return 1
