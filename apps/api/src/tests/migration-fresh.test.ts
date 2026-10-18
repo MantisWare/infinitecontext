@@ -11,10 +11,21 @@ function expectedIcn(publicId: string): string {
     return `icn_${hex}`;
 }
 
-function parseMigrationVerifyUrl(stdout: string): string {
-    const line = (stdout ?? '').split('\n').find((row) => row.startsWith('MIGRATION_VERIFY_DATABASE_URL='));
-    assert.ok(line, 'verify-migration-chain.sh must print MIGRATION_VERIFY_DATABASE_URL');
-    return line.slice('MIGRATION_VERIFY_DATABASE_URL='.length).trim();
+function parseMigrationStdoutValue(stdout: string, key: string): string {
+    const prefix = `${key}=`;
+    const line = (stdout ?? '').split('\n').find((row) => row.startsWith(prefix));
+    assert.ok(line, `verify-migration-chain.sh must print ${key}`);
+    return line.slice(prefix.length).trim();
+}
+
+function teardownMigrationCompose(stdout: string) {
+    const project = parseMigrationStdoutValue(stdout, 'MIGRATION_VERIFY_COMPOSE_PROJECT');
+    const scriptDir = path.resolve(process.cwd(), '../postgres');
+    spawnSync(
+        'bash',
+        ['-lc', `docker compose -f compose.yaml -p "${project}" down -v --remove-orphans 2>/dev/null || sudo -E docker compose -f compose.yaml -p "${project}" down -v --remove-orphans`],
+        { cwd: scriptDir, encoding: 'utf8', env: process.env },
+    );
 }
 
 function dropFreshDatabase(dbUrl: string, dbName: string) {
@@ -36,6 +47,7 @@ describe('postgres migration chain (fresh DB)', () => {
 
         const dbName = `ic_migrate_fresh_${Date.now()}`;
         let dbUrlForCleanup = '';
+        let migrationStdout = '';
         try {
             const res = spawnSync('bash', [script], {
                 encoding: 'utf8',
@@ -43,13 +55,13 @@ describe('postgres migration chain (fresh DB)', () => {
                 env: {
                     ...process.env,
                     POSTGRES_DB: dbName,
-                    MIGRATION_VERIFY_TEARDOWN: '1',
                 },
             });
             assert.equal(res.status, 0, res.stderr || res.stdout);
             assert.match(res.stdout ?? '', /Migration chain init/);
 
-            const dbUrl = parseMigrationVerifyUrl(res.stdout ?? '');
+            migrationStdout = res.stdout ?? '';
+            const dbUrl = parseMigrationStdoutValue(migrationStdout, 'MIGRATION_VERIFY_DATABASE_URL');
             dbUrlForCleanup = dbUrl;
 
             const legacyMsgId = 'msg_migration_icn_legacy_round7';
@@ -106,6 +118,9 @@ VALUES (
         } finally {
             if (dbUrlForCleanup) {
                 dropFreshDatabase(dbUrlForCleanup, dbName);
+            }
+            if (migrationStdout) {
+                teardownMigrationCompose(migrationStdout);
             }
         }
     });

@@ -141,3 +141,7 @@ console.log(`  fail: ${totals.fail}`);
 console.log(`  skipped: ${totals.skipped}`);
 console.log(`  tests: ${totals.tests}`);
 console.log(`  HEAD: ${head}`);
+
+if (totals.fail > 0) {
+  process.exit(1);
+}
