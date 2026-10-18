@@ -266,7 +266,7 @@ describe("vault.json codec", () => {
         decodeVaultJson(
           json.replace('"memorySizeKiB":65536', '"memorySizeKiB":1024'),
         ),
-      /memorySizeKiB out of allowed range/,
+      /below floor/,
     );
     assert.throws(
       () => decodeVaultJson('{"ic_vault_v":1,"kdf_salt_b64":"x","kdf":{},"wrapped_dek_b64":"x","extra":1}'),
@@ -284,7 +284,7 @@ describe("vault.json codec", () => {
     assert.throws(() => parseStrictWrappedDekBytes(wrappedBytes), /forbidden field/);
   });
 
-  it("caps hostile vault KDF params to 4× default profile", () => {
+  it("caps hostile vault KDF params to QA #11 ceiling", () => {
     assert.throws(
       () =>
         parseStrictVaultKdfParams({
@@ -294,7 +294,7 @@ describe("vault.json codec", () => {
           parallelism: 4,
           hashLength: 32,
         }),
-      /memorySizeKiB out of allowed range/,
+      /above ceiling/,
     );
     assert.throws(
       () =>
@@ -305,7 +305,7 @@ describe("vault.json codec", () => {
           parallelism: 4,
           hashLength: 32,
         }),
-      /iterations out of allowed range/,
+      /iterations above ceiling/,
     );
   });
 });

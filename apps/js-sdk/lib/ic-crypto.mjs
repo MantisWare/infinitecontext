@@ -126,9 +126,8 @@ function serializeKdfParams() {
 		hashLength: VAULT_KDF_PARAMS.hashLength
 	};
 }
-/** Upper bound on memorySizeKiB × iterations (65536×3 profile = 196608). */
-/** 4× default profile cost (65536 KiB × 3 iterations). */
-const VAULT_KDF_MAX_COST_PRODUCT = 786432;
+/** Upper bound on memorySizeKiB × iterations (256 MiB × 10 iterations = 2621440). */
+const VAULT_KDF_MAX_COST_PRODUCT = 2621440;
 function assertVaultKdfCostWithinCap(params) {
 	const product = params.memorySizeKiB * params.iterations;
 	if (!Number.isSafeInteger(product) || product > VAULT_KDF_MAX_COST_PRODUCT) throw new Error("vault.json kdf memorySizeKiB × iterations exceeds allowed cost cap");

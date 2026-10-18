@@ -11,16 +11,18 @@ function expectedIcn(publicId: string): string {
     return `icn_${hex}`;
 }
 
-function dropFreshDatabase(dbName: string) {
-    const pgHost = process.env.PGHOST ?? '127.0.0.1';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.POSTGRES_USER ?? 'infinitecontext';
+function parseMigrationVerifyUrl(stdout: string): string {
+    const line = (stdout ?? '').split('\n').find((row) => row.startsWith('MIGRATION_VERIFY_DATABASE_URL='));
+    assert.ok(line, 'verify-migration-chain.sh must print MIGRATION_VERIFY_DATABASE_URL');
+    return line.slice('MIGRATION_VERIFY_DATABASE_URL='.length).trim();
+}
+
+function dropFreshDatabase(dbUrl: string, dbName: string) {
     const pgPassword = process.env.POSTGRES_PASSWORD;
     if (!pgPassword) return;
-    const adminUrl = `postgresql://${pgUser}:${pgPassword}@${pgHost}:${pgPort}/postgres`;
     spawnSync(
         'psql',
-        [adminUrl, '-v', 'ON_ERROR_STOP=1', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`],
+        [dbUrl.replace(/\/[^/]+$/, '/postgres'), '-v', 'ON_ERROR_STOP=1', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`],
         { encoding: 'utf8', env: { ...process.env, PGPASSWORD: pgPassword } },
     );
 }
@@ -33,6 +35,7 @@ describe('postgres migration chain (fresh DB)', () => {
         );
 
         const dbName = `ic_migrate_fresh_${Date.now()}`;
+        let dbUrlForCleanup = '';
         try {
             const res = spawnSync('bash', [script], {
                 encoding: 'utf8',
@@ -40,14 +43,15 @@ describe('postgres migration chain (fresh DB)', () => {
                 env: {
                     ...process.env,
                     POSTGRES_DB: dbName,
-                    PGHOST: process.env.PGHOST ?? '127.0.0.1',
-                    PGPORT: process.env.PGPORT ?? '5432',
+                    MIGRATION_VERIFY_TEARDOWN: '1',
                 },
             });
             assert.equal(res.status, 0, res.stderr || res.stdout);
             assert.match(res.stdout ?? '', /Migration chain init/);
 
-            const dbUrl = `postgresql://${process.env.POSTGRES_USER ?? 'infinitecontext'}:${process.env.POSTGRES_PASSWORD}@${process.env.PGHOST ?? '127.0.0.1'}:${process.env.PGPORT ?? '5432'}/${dbName}`;
+            const dbUrl = parseMigrationVerifyUrl(res.stdout ?? '');
+            dbUrlForCleanup = dbUrl;
+
             const legacyMsgId = 'msg_migration_icn_legacy_round7';
             const seed = spawnSync(
                 'psql',
@@ -100,7 +104,9 @@ VALUES (
             assert.equal(check.status, 0, check.stderr || check.stdout);
             assert.equal(String(check.stdout ?? '').trim(), expectedIcn(legacyMsgId));
         } finally {
-            dropFreshDatabase(dbName);
+            if (dbUrlForCleanup) {
+                dropFreshDatabase(dbUrlForCleanup, dbName);
+            }
         }
     });
 });

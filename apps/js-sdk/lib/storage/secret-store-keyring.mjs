@@ -1,4 +1,5 @@
 import { StorageError } from "./errors.mjs";
+import { isTestRuntime } from "./test-hooks.mjs";
 import {
   assertDbusSendAvailableOnLinux,
   isLinuxSecretServiceOnSessionBus,
@@ -67,10 +68,7 @@ export async function isKeyringUsableForAuto() {
   if (!platformKeychainMarkerId()) {
     return false;
   }
-  if (process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
-    console.warn(
-      "[infinitecontext] INFINITECONTEXT_KEYRING_DURABLE=0 disables OS keychain auto-selection (support/testing opt-out only).",
-    );
+  if (isTestRuntime() && process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
     return false;
   }
   return probeKeyringSecretService();

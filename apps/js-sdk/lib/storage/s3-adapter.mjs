@@ -15,7 +15,12 @@ import {
   keyMatchesListPrefix,
   normalizeListPrefix,
 } from "./filesystem-keys.mjs";
-import { PreconditionFailedError, RateLimitedError, StorageError } from "./errors.mjs";
+import {
+  AuthExpiredError,
+  PreconditionFailedError,
+  RateLimitedError,
+  StorageError,
+} from "./errors.mjs";
 import {
   crossDeviceCasCapabilitiesFromProbeResult,
   resolveCrossDeviceCasForAdapterInit,
@@ -27,100 +32,33 @@ import {
   assertStoragePutPreconditionsSupported,
 } from "./storage-put-preconditions.mjs";
 import { S3_OBJECT_STORE_BACKEND_ID } from "./s3-config.mjs";
-import { redactS3ErrorMessage } from "./s3-error-sanitize.mjs";
 import { STORAGE_CAPABILITIES, assertNotAborted, storageCapabilitySet } from "./types.mjs";
-
-/** @param {unknown} error */
-function s3HttpStatus(error) {
-  if (!error || typeof error !== "object" || !("$metadata" in error)) {
-    return undefined;
-  }
-  const meta = error.$metadata;
-  if (!meta || typeof meta !== "object") {
-    return undefined;
-  }
-  return Number(/** @type {{ httpStatusCode?: number }} */ (meta).httpStatusCode);
-}
-
-/** @param {unknown} error */
-function s3RetryAfterMs(error) {
-  if (!error || typeof error !== "object" || !("$metadata" in error)) {
-    return undefined;
-  }
-  const meta = error.$metadata;
-  if (!meta || typeof meta !== "object") {
-    return undefined;
-  }
-  const headers = /** @type {{ httpHeaders?: Record<string, string> }} */ (meta).httpHeaders;
-  const raw = headers?.["retry-after"] ?? headers?.["Retry-After"];
-  if (!raw) {
-    return undefined;
-  }
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.ceil(seconds * 1000);
-  }
-  return undefined;
-}
-
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * @param {{ send: (cmd: unknown) => Promise<unknown> }} client
- * @param {unknown} command
- * @param {number} [attempt]
- */
-async function sendS3Command(client, command, attempt = 0) {
-  try {
-    return await client.send(command);
-  } catch (error) {
-    const status = s3HttpStatus(error);
-    const name = error && typeof error === "object" && "name" in error ? String(error.name) : "";
-    const retryable =
-      status === 429 ||
-      status === 503 ||
-      name === "SlowDown" ||
-      name === "ServiceUnavailable" ||
-      name === "RequestTimeout" ||
-      (status !== undefined && status >= 500 && status < 600);
-    if (retryable && attempt < 4) {
-      const delay = s3RetryAfterMs(error) ?? 100 * 2 ** attempt;
-      await sleepMs(delay);
-      return sendS3Command(client, command, attempt + 1);
-    }
-    throw error;
-  }
-}
 
 /** @param {unknown} error */
 function mapS3Error(error) {
   if (!error || typeof error !== "object") {
-    return new StorageError(redactS3ErrorMessage(String(error)), "storage_error");
+    return new StorageError(String(error), "storage_error");
   }
   const name = "name" in error ? String(error.name) : "";
-  const code = s3HttpStatus(error);
+  const code =
+    "$metadata" in error && error.$metadata && typeof error.$metadata === "object"
+      ? Number(/** @type {{ httpStatusCode?: number }} */ (error.$metadata).httpStatusCode)
+      : undefined;
   if (name === "PreconditionFailed" || code === 412) {
     return new PreconditionFailedError(
-      redactS3ErrorMessage("message" in error && error.message ? String(error.message) : "Precondition failed"),
+      "message" in error && error.message ? String(error.message) : "Precondition failed",
     );
   }
   if (name === "NotFound" || name === "NoSuchKey" || code === 404) {
     return null;
   }
   if (name === "Forbidden" || code === 403) {
-    return new StorageError(redactS3ErrorMessage("S3 access denied"), "permission_denied");
+    return new AuthExpiredError("S3 access denied");
   }
-  if (code === 429 || name === "SlowDown" || name === "Throttling" || code === 503) {
-    return new RateLimitedError(redactS3ErrorMessage("S3 rate limit exceeded"));
+  if (code === 429) {
+    return new RateLimitedError("S3 rate limit exceeded");
   }
-  if (code !== undefined && code >= 500 && code < 600) {
-    return new RateLimitedError(redactS3ErrorMessage("S3 service unavailable"));
-  }
-  const message = redactS3ErrorMessage(
-    "message" in error && error.message ? String(error.message) : "S3 request failed",
-  );
+  const message = "message" in error && error.message ? String(error.message) : "S3 request failed";
   return new StorageError(message, "storage_error");
 }
 
@@ -157,17 +95,13 @@ export function createS3StorageAdapter(options) {
     .replace(/^\/+|\/+$/g, "");
   const maxObjectBytes = options.maxObjectBytes ?? 8 * 1024 * 1024;
 
-  const innerClient =
+  const client =
     options.client ??
     new S3Client({
       region: options.region,
       endpoint: options.endpoint,
       forcePathStyle: Boolean(options.endpoint),
     });
-  const client = {
-    send: (command) => sendS3Command(innerClient, command),
-    destroy: () => innerClient.destroy(),
-  };
 
   const runCasProbe = options.casProbe ?? probeCrossDeviceCas;
   const casBindingKey = storageCasProbeBindingKey({
@@ -334,7 +268,6 @@ export function createS3StorageAdapter(options) {
       const objects = [];
       let startAfter = listOptions.cursor ? toObjectKey(String(listOptions.cursor)) : undefined;
       let continuationToken;
-      let listTruncated = false;
       while (objects.length < limit) {
         const out = await client.send(
           new ListObjectsV2Command({
@@ -363,14 +296,13 @@ export function createS3StorageAdapter(options) {
           });
           if (objects.length >= limit) break;
         }
-        listTruncated = Boolean(out.IsTruncated);
         if (objects.length >= limit || !out.IsTruncated) {
           break;
         }
         continuationToken = out.NextContinuationToken;
         startAfter = undefined;
       }
-      const nextCursor = objects.length >= limit && listTruncated ? objects.at(-1)?.key : undefined;
+      const nextCursor = objects.length >= limit ? objects.at(-1)?.key : undefined;
       return { objects, nextCursor };
     },
 
@@ -398,13 +330,7 @@ export function createS3StorageAdapter(options) {
         await client.send(new DeleteObjectCommand(input));
       } catch (error) {
         const mapped = mapS3Error(error);
-        if (mapped === null && deleteOptions.ifMatch !== undefined) {
-          throw new PreconditionFailedError("ifMatch precondition failed");
-        }
-        if (mapped === null) {
-          return;
-        }
-        throw mapped;
+        throw mapped ?? error;
       }
     },
   };

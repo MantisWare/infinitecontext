@@ -75,8 +75,20 @@ apply_down() {
   done < <(find "$MIGRATIONS_DIR" -maxdepth 1 -name '*.down.sql' | sort -r)
 }
 
+docker_compose() {
+  if docker compose "$@" 2>/dev/null; then
+    return 0
+  fi
+  if sudo docker compose "$@" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 use_docker=false
 if [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  use_docker=true
+elif [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v sudo >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
   use_docker=true
 fi
 
@@ -112,7 +124,7 @@ ensure_host_database() {
 
 compose_cleanup() {
   if [[ -n "${COMPOSE_PROJECT_NAME:-}" && -f "$COMPOSE_FILE" ]]; then
-    docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
+    docker_compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
   fi
 }
 
@@ -134,7 +146,7 @@ if [[ "$use_docker" == true ]]; then
   fi
 
   echo "Starting isolated postgres via docker compose (project=${COMPOSE_PROJECT_NAME}, port=${POSTGRES_PORT})..."
-  docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d postgres
+  docker_compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d postgres
   echo "Waiting for postgres..."
   for _ in {1..30}; do
     if psql -h "$PG_HOST" -p "$PGPORT" -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null 2>&1; then

@@ -103,7 +103,7 @@ try {
 
 run("npm", ["run", "guard:12"]);
 run("node", ["scripts/check-lib-no-test-env.mjs"]);
-run("npm", ["run", "check"]);
+run("pnpm", ["-r", "check"], {}, repoRoot);
 
 console.log("premerge: starting storage emulator (MinIO + SFTP)…");
 run("npm", ["run", "storage:emu:up"]);
@@ -126,25 +126,11 @@ function mergeTotals(chunk) {
   totals.tests += chunk.tests;
 }
 
-mergeTotals(absorbNodeTestTotals(run("npm", ["test"], emuEnv)));
-
 mergeTotals(
   absorbNodeTestTotals(
-    run(
-      "node",
-      [
-        "--import",
-        "./tests/storage/preload-isolate-home.mjs",
-        "--test",
-        "--test-concurrency=1",
-        "tests/storage/s3-precondition-fail-closed.test.mjs",
-      ],
-      emuEnv,
-    ),
+    run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot),
   ),
 );
-
-mergeTotals(absorbNodeTestTotals(run("pnpm", ["run", "test"], {}, path.join(repoRoot, "apps/sync"))));
 
 cleanupEmu();
 
