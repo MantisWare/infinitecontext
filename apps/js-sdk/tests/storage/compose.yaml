@@ -8,7 +8,10 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "127.0.0.1:${IC_STORAGE_EMU_MINIO_PORT:-9000}:9000"
+      - target: 9000
+        published: "${IC_STORAGE_EMU_MINIO_PORT:-9000}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     volumes:
       - minio-data:/data
     healthcheck:
@@ -21,7 +24,10 @@ services:
   sftp:
     image: atmoz/sftp@sha256:7e439fabeae536fa254340724c042e11999924d906417dbb5c73602ad518813f
     ports:
-      - "127.0.0.1:${IC_STORAGE_EMU_SFTP_PORT:-2222}:22"
+      - target: 22
+        published: "${IC_STORAGE_EMU_SFTP_PORT:-2222}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     volumes:
       - ./fixtures/ssh/generated/id_ed25519.pub:/home/ic/.ssh/keys/id_ed25519.pub:ro
     # atmoz/sftp user:pass:uid:gid:writable-dirs — key auth via mounted .ssh/keys; chroot write dir must be `upload`
