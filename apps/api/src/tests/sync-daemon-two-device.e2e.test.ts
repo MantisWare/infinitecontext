@@ -166,12 +166,27 @@ before(async () => {
     };
 });
 
-after(async () => {
+async function shutdownDaemonE2e(exitCode = 0) {
     await cleanupDaemonLeaks();
+    await terminateNewVaultAgents();
     server?.close?.();
     if (installRoot && fs.existsSync(installRoot)) {
         fs.rmSync(installRoot, { recursive: true, force: true });
     }
+    if (exitCode !== 0) {
+        process.exit(exitCode);
+    }
+}
+
+process.on('SIGINT', () => {
+    void shutdownDaemonE2e(130);
+});
+process.on('SIGTERM', () => {
+    void shutdownDaemonE2e(143);
+});
+
+after(async () => {
+    await shutdownDaemonE2e(0);
 });
 
 describe('sync daemon two-device e2e (postgres)', () => {

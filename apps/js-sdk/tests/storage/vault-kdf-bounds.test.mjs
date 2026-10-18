@@ -71,6 +71,17 @@ describe("vault.json KDF bounds (QA #11)", () => {
     );
   });
 
+  it("rejects string-typed numeric kdf fields", () => {
+    assert.throws(
+      () =>
+        parseStrictVaultKdfParams({
+          ...BASE_KDF,
+          iterations: "3",
+        }),
+      /iterations must be a safe integer/,
+    );
+  });
+
   it("rejects under-floor params before KDF runs", async () => {
     const cases = [
       { memorySizeKiB: 32_768, iterations: 3, parallelism: 4, match: /below floor.*64 MiB/ },

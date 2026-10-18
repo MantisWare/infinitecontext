@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+  echo "storage:emu requires openssh-client (ssh-keygen). Install it (e.g. apt install openssh-client)." >&2
+  exit 1
+fi
+
 here="$(cd "$(dirname "$0")" && pwd)"
 out="${here}/generated"
 mkdir -p "$out"

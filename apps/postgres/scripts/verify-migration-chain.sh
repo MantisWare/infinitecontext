@@ -86,7 +86,18 @@ docker_compose() {
 }
 
 use_docker=false
-if [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+if [[ "${MIGRATION_VERIFY_USE_HOST:-}" == "1" ]]; then
+  use_docker=false
+elif [[ "${MIGRATION_VERIFY_USE_DOCKER:-}" == "1" ]] && [[ -z "${GITHUB_ACTIONS:-}" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    use_docker=true
+  elif command -v sudo >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
+    use_docker=true
+  else
+    echo "MIGRATION_VERIFY_USE_DOCKER=1 but docker compose is unavailable." >&2
+    exit 1
+  fi
+elif [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   use_docker=true
 elif [[ -z "${GITHUB_ACTIONS:-}" ]] && command -v sudo >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; then
   use_docker=true
@@ -144,10 +155,7 @@ if [[ "$use_docker" == true ]]; then
   PGHOST="$PG_HOST"
   export PGHOST PGPORT
 
-  trap compose_cleanup INT TERM
-  if [[ "${MIGRATION_VERIFY_TEARDOWN:-}" == "1" ]]; then
-    trap compose_cleanup EXIT INT TERM
-  fi
+  trap compose_cleanup EXIT INT TERM
 
   echo "Starting isolated postgres via docker compose (project=${COMPOSE_PROJECT_NAME}, port=${POSTGRES_PORT})..."
   docker_compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d postgres
@@ -163,6 +171,8 @@ if [[ "$use_docker" == true ]]; then
   PSQL=(psql -h "$PG_HOST" -p "$PGPORT" -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME")
 else
   echo "Using PostgreSQL at ${PG_HOST}:${PG_PORT} (database ${DB_NAME})..."
+  export PGHOST="${PGHOST:-$PG_HOST}"
+  export PGPORT="${PGPORT:-$PG_PORT}"
   ensure_host_database
 fi
 

@@ -13,12 +13,16 @@ import {
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
+const minioPort = String(process.env.IC_STORAGE_EMU_MINIO_PORT ?? "9000");
+const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
+
 /** @type {{ pass: number, fail: number, skipped: number, tests: number }} */
 const totals = { pass: 0, fail: 0, skipped: 0, tests: 0 };
 
 /** @type {0 | 1 | 2 | 130 | 143} */
 let exitCode = 0;
 
+/** Set true before storage:emu:up so failed starts still run storage:emu:down. */
 let emuStarted = false;
 let cleaning = false;
 
@@ -65,7 +69,15 @@ function cleanupEmu() {
   if (!emuStarted) {
     return;
   }
-  spawnSync("npm", ["run", "storage:emu:down"], { cwd: sdkRoot, stdio: "inherit" });
+  spawnSync("npm", ["run", "storage:emu:down"], {
+    cwd: sdkRoot,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      IC_STORAGE_EMU_MINIO_PORT: minioPort,
+      IC_STORAGE_EMU_SFTP_PORT: sftpPort,
+    },
+  });
   emuStarted = false;
 }
 
@@ -105,16 +117,25 @@ run("npm", ["run", "guard:12"]);
 run("node", ["scripts/check-lib-no-test-env.mjs"]);
 run("pnpm", ["-r", "check"], {}, repoRoot);
 
-console.log("premerge: starting storage emulator (MinIO + SFTP)…");
-run("npm", ["run", "storage:emu:up"]);
+const emuComposeEnv = {
+  IC_STORAGE_EMU_MINIO_PORT: minioPort,
+  IC_STORAGE_EMU_SFTP_PORT: sftpPort,
+};
+
+console.log(
+  `premerge: starting storage emulator (MinIO 127.0.0.1:${minioPort}, SFTP 127.0.0.1:${sftpPort})…`,
+);
 emuStarted = true;
+run("npm", ["run", "storage:emu:up"], emuComposeEnv);
 
 const emuEnv = {
   IC_REQUIRE_MINIO: "1",
+  IC_STORAGE_EMU_MINIO_PORT: minioPort,
+  IC_STORAGE_EMU_SFTP_PORT: sftpPort,
   AWS_ACCESS_KEY_ID: "minioadmin",
   AWS_SECRET_ACCESS_KEY: "minioadmin",
   AWS_REGION: "us-east-1",
-  AWS_ENDPOINT_URL: "http://127.0.0.1:9000",
+  AWS_ENDPOINT_URL: `http://127.0.0.1:${minioPort}`,
   INFINITECONTEXT_S3_TEST_BUCKET: "infinitecontext-ci",
   INFINITECONTEXT_S3_TEST_PREFIX: "premerge-local",
 };

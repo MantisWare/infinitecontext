@@ -9,14 +9,20 @@ fi
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-base_ref="origin/main"
-if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+base_ref=""
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+  base_ref="origin/main"
+elif git rev-parse --verify main >/dev/null 2>&1; then
   base_ref="main"
+else
+  echo "check-12-paths: no resolvable base ref (origin/main or main)" >&2
+  exit 1
 fi
 
-mapfile -t touched < <(
-  git diff --name-only "${base_ref}...HEAD" 2>/dev/null || git diff --name-only "${base_ref}" HEAD
-)
+if ! mapfile -t touched < <(git diff --name-only "${base_ref}...HEAD" 2>&1); then
+  echo "check-12-paths: git diff failed against ${base_ref}" >&2
+  exit 1
+fi
 
 if ((${#touched[@]} == 0)); then
   echo "check-12-paths: no changed files vs ${base_ref} — ok"

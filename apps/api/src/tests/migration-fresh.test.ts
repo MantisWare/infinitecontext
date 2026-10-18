@@ -18,22 +18,16 @@ function parseMigrationStdoutValue(stdout: string, key: string): string {
     return line.slice(prefix.length).trim();
 }
 
-function teardownMigrationCompose(stdout: string) {
-    const project = parseMigrationStdoutValue(stdout, 'MIGRATION_VERIFY_COMPOSE_PROJECT');
-    const scriptDir = path.resolve(process.cwd(), '../postgres');
-    spawnSync(
-        'bash',
-        ['-lc', `docker compose -f compose.yaml -p "${project}" down -v --remove-orphans 2>/dev/null || sudo -E docker compose -f compose.yaml -p "${project}" down -v --remove-orphans`],
-        { cwd: scriptDir, encoding: 'utf8', env: process.env },
-    );
-}
-
-function dropFreshDatabase(dbUrl: string, dbName: string) {
+function dropFreshDatabase(dbName: string) {
     const pgPassword = process.env.POSTGRES_PASSWORD;
     if (!pgPassword) return;
+    const pgHost = process.env.PGHOST ?? '127.0.0.1';
+    const pgPort = process.env.PGPORT ?? '5433';
+    const pgUser = process.env.POSTGRES_USER ?? 'infinitecontext';
+    const adminUrl = `postgresql://${pgUser}:${pgPassword}@${pgHost}:${pgPort}/postgres`;
     spawnSync(
         'psql',
-        [dbUrl.replace(/\/[^/]+$/, '/postgres'), '-v', 'ON_ERROR_STOP=1', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`],
+        [adminUrl, '-v', 'ON_ERROR_STOP=1', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`],
         { encoding: 'utf8', env: { ...process.env, PGPASSWORD: pgPassword } },
     );
 }
@@ -46,23 +40,23 @@ describe('postgres migration chain (fresh DB)', () => {
         );
 
         const dbName = `ic_migrate_fresh_${Date.now()}`;
-        let dbUrlForCleanup = '';
-        let migrationStdout = '';
+        let dbUrl = '';
         try {
             const res = spawnSync('bash', [script], {
                 encoding: 'utf8',
                 timeout: 180_000,
                 env: {
                     ...process.env,
+                    MIGRATION_VERIFY_USE_HOST: '1',
                     POSTGRES_DB: dbName,
+                    PGHOST: process.env.PGHOST ?? '127.0.0.1',
+                    PGPORT: process.env.PGPORT ?? '5433',
                 },
             });
             assert.equal(res.status, 0, res.stderr || res.stdout);
             assert.match(res.stdout ?? '', /Migration chain init/);
 
-            migrationStdout = res.stdout ?? '';
-            const dbUrl = parseMigrationStdoutValue(migrationStdout, 'MIGRATION_VERIFY_DATABASE_URL');
-            dbUrlForCleanup = dbUrl;
+            dbUrl = parseMigrationStdoutValue(res.stdout ?? '', 'MIGRATION_VERIFY_DATABASE_URL');
 
             const legacyMsgId = 'msg_migration_icn_legacy_round7';
             const seed = spawnSync(
@@ -116,12 +110,7 @@ VALUES (
             assert.equal(check.status, 0, check.stderr || check.stdout);
             assert.equal(String(check.stdout ?? '').trim(), expectedIcn(legacyMsgId));
         } finally {
-            if (dbUrlForCleanup) {
-                dropFreshDatabase(dbUrlForCleanup, dbName);
-            }
-            if (migrationStdout) {
-                teardownMigrationCompose(migrationStdout);
-            }
+            dropFreshDatabase(dbName);
         }
     });
 });
