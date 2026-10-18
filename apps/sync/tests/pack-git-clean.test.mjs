@@ -7,6 +7,14 @@ import { describe, it } from "node:test";
 
 const syncRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(syncRoot, "../..");
+const preloadImport = path.join(repoRoot, "scripts/ic-test-tmp-preload.mjs");
+
+function packCliEnv() {
+  return {
+    ...process.env,
+    NODE_OPTIONS: `--import ${preloadImport}`,
+  };
+}
 
 function syncGitPorcelain() {
   const out = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf8" }).trim();
@@ -28,7 +36,7 @@ describe("sync pack staging", () => {
       execSync("node scripts/pack-from-staging.mjs --inject-failure", {
         cwd: syncRoot,
         stdio: "pipe",
-        env: { ...process.env, NODE_OPTIONS: "" },
+        env: packCliEnv(),
       });
       assert.fail("expected pack to fail");
     } catch {
@@ -44,7 +52,7 @@ describe("sync pack staging", () => {
     const tgz = execSync("node scripts/pack-from-staging.mjs", {
       cwd: syncRoot,
       encoding: "utf8",
-      env: { ...process.env, NODE_OPTIONS: "" },
+      env: packCliEnv(),
     }).trim();
     assert.ok(fs.existsSync(tgz));
     try {
