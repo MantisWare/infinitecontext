@@ -94,8 +94,6 @@ if (isMain) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   } finally {
-    if (injectFailure) {
-      fs.rmSync(packDestination, { recursive: true, force: true });
-    }
+    fs.rmSync(packDestination, { recursive: true, force: true });
   }
 }
