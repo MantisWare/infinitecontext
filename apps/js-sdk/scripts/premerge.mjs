@@ -97,34 +97,7 @@ function cleanupPremergeTmpRoot() {
   }
 }
 
-function cleanupKnownPremergeTmpArtifacts() {
-  const root = premergeTmpRoot;
-  if (!root || !fs.existsSync(root)) {
-    return;
-  }
-  let entries = [];
-  try {
-    entries = fs.readdirSync(root);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (
-      name.startsWith("tsx-") ||
-      name.includes("sync-pack-out-") ||
-      name.includes("sync-pack-staging-")
-    ) {
-      try {
-        fs.rmSync(path.join(root, name), { recursive: true, force: true });
-      } catch {
-        /* best-effort */
-      }
-    }
-  }
-}
-
 function finalizeTmpHygiene(icTmpBeforeTests) {
-  cleanupKnownPremergeTmpArtifacts();
   try {
     assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs(premergeTmpRoot));
   } catch (error) {
@@ -264,16 +237,35 @@ function cleanupEmu() {
 /**
  * @param {NodeJS.Signals} signal
  */
-function onSignal(signal) {
+function waitForActiveChildExit(maxMs = 15000) {
+  return new Promise((resolve) => {
+    const child = activeChild;
+    if (!child) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    child.once("close", done);
+    child.once("error", done);
+    const timer = setTimeout(done, maxMs);
+    timer.unref?.();
+  });
+}
+
+async function onSignal(signal) {
   if (shuttingDown) {
     return;
   }
   shuttingDown = true;
   killActiveProcessGroup("SIGTERM");
-  setTimeout(() => killActiveProcessGroup("SIGKILL"), 5000).unref();
+  await waitForActiveChildExit();
+  killActiveProcessGroup("SIGKILL");
+  cleanupAll();
   cleanupNodeCompileCache();
   cleanupPremergeTmpRoot();
-  cleanupAll();
   process.exit(signal === "SIGINT" ? 130 : 143);
 }
 
@@ -283,8 +275,12 @@ process.on("exit", () => {
   }
   cleanupAll();
 });
-process.on("SIGINT", () => onSignal("SIGINT"));
-process.on("SIGTERM", () => onSignal("SIGTERM"));
+process.on("SIGINT", () => {
+  void onSignal("SIGINT");
+});
+process.on("SIGTERM", () => {
+  void onSignal("SIGTERM");
+});
 
 const nodeParts = parseNodeVersionParts(process.version);
 if (!nodeParts || !isNodeVersionAtLeast(nodeParts, PREMERGE_MIN_NODE)) {

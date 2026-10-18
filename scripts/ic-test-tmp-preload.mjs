@@ -34,7 +34,6 @@ function shouldTrackDir(dir) {
   if (basenameMatchesRunTag(base)) {
     return true;
   }
-  // Tests often mkdtemp with an `ic-` prefix while premerge sets IC_TEST_TMP_RUN_TAG on dir names.
   if (base.startsWith("ic-")) {
     return true;
   }
@@ -82,37 +81,12 @@ function cleanupTrackedIcTmpDirs() {
   trackedIcTmpDirs.clear();
 }
 
-function cleanupLegacySyncPackOutDirs() {
-  try {
-    for (const name of fs.readdirSync(tmpRoot)) {
-      const isLegacy = name.startsWith("ic-sync-pack-out-") || name.includes("sync-pack-out-");
-      const isStaging = name.includes("sync-pack-staging-");
-      if (!isLegacy && !isStaging) {
-        continue;
-      }
-      if (runTag && !name.startsWith(`${runTag}-`) && !name.startsWith("ic-sync-pack-out-")) {
-        continue;
-      }
-      const full = path.join(tmpRoot, name);
-      try {
-        fs.rmSync(full, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
 function onSignalCleanup() {
   cleanupTrackedIcTmpDirs();
-  cleanupLegacySyncPackOutDirs();
 }
 
 process.once("exit", () => {
   cleanupTrackedIcTmpDirs();
-  cleanupLegacySyncPackOutDirs();
 });
 process.once("SIGINT", () => {
   onSignalCleanup();

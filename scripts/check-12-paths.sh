@@ -49,6 +49,10 @@ trap 'rm -f "$diff_out" "$diff_err"; cleanup_check12_ref' EXIT
 
 main_ref="$(resolve_main_snapshot_ref)" || exit 1
 
+if [[ "${main_ref}" == "origin/main" ]]; then
+  git fetch origin main --quiet 2>/dev/null || git fetch origin refs/heads/main:refs/remotes/origin/main --quiet 2>/dev/null || true
+fi
+
 use_three_dot=0
 if git merge-base "${main_ref}" HEAD >/dev/null 2>&1; then
   use_three_dot=1

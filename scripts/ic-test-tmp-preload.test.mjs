@@ -29,4 +29,19 @@ describe("ic-test-tmp-preload", () => {
     assert.ok(fs.existsSync(path.join(injected, "marker")), "pre-existing tagged dir must survive preload exit");
     fs.rmSync(tmp, { recursive: true, force: true });
   });
+
+  it("does not delete pre-existing ic-sync-pack-out dirs on exit", () => {
+    const decoy = path.join(os.tmpdir(), "ic-sync-pack-out-zzdecoy-preload-test");
+    fs.mkdirSync(decoy, { recursive: true });
+    fs.writeFileSync(path.join(decoy, "marker"), "keep");
+    try {
+      const res = spawnSync(process.execPath, ["--import", preload, "-e", "process.exit(0)"], {
+        encoding: "utf8",
+      });
+      assert.equal(res.status, 0, res.stderr);
+      assert.ok(fs.existsSync(path.join(decoy, "marker")), "decoy sync-pack dir must survive preload exit");
+    } finally {
+      fs.rmSync(decoy, { recursive: true, force: true });
+    }
+  });
 });

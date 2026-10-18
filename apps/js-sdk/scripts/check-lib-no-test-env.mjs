@@ -12,7 +12,7 @@ if (process.env.ALLOW_LIB_TEST_ENV === "1") {
 }
 
 /** @param {string} name */
-function isForbiddenTestEnvKey(name) {
+export function isForbiddenTestEnvKey(name) {
   if (typeof name !== "string" || !name) {
     return false;
   }
@@ -32,15 +32,31 @@ function isForbiddenTestEnvKey(name) {
 }
 
 /** @param {import('acorn').Node | null | undefined} node */
-function literalKey(node) {
+function literalString(node) {
   if (!node) {
     return null;
   }
   if (node.type === "Literal" && typeof node.value === "string") {
     return node.value;
   }
-  if (node.type === "Identifier") {
-    return node.name;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0 && node.quasis.length === 1) {
+    return node.quasis[0].value.cooked;
+  }
+  return null;
+}
+
+/** @param {import('acorn').Node | null | undefined} node */
+function concatStringLiteral(node) {
+  const lit = literalString(node);
+  if (lit !== null) {
+    return lit;
+  }
+  if (node?.type === "BinaryExpression" && node.operator === "+") {
+    const left = concatStringLiteral(node.left);
+    const right = concatStringLiteral(node.right);
+    if (left !== null && right !== null) {
+      return left + right;
+    }
   }
   return null;
 }
@@ -50,11 +66,13 @@ function literalKey(node) {
  * @param {string} src
  * @returns {string[]}
  */
-function findViolations(file, src) {
+export function findViolations(file, src) {
   /** @type {string[]} */
   const hits = [];
+  /** @type {Map<string, "env" | "processEnv" | "processModule" | "processAlias" | "globalThisAlias">} */
+  const bindings = new Map();
   /** @type {Map<string, string>} */
-  const envBindings = new Map();
+  const stringConstBindings = new Map();
 
   let program;
   try {
@@ -68,170 +86,378 @@ function findViolations(file, src) {
     return hits;
   }
 
-  /** @param {import('acorn').Node} node */
-  function noteImport(node) {
-    if (node.type !== "ImportDeclaration") {
-      return;
+  /** @param {number} line */
+  function hit(line, msg) {
+    hits.push(`${file}:${line}: ${msg}`);
+  }
+
+  /** @param {import('acorn').Node | null | undefined} node */
+  function isProcessIdentifier(node) {
+    return node?.type === "Identifier" && node.name === "process";
+  }
+
+  /** @param {import('acorn').Node | null | undefined} node */
+  function isGlobalThis(node) {
+    return node?.type === "Identifier" && node.name === "globalThis";
+  }
+
+  /** @param {import('acorn').MemberExpression} node */
+  function memberPropName(node) {
+    if (node.computed) {
+      return null;
     }
-    const from = node.source.value;
-    if (from !== "node:process" && from !== "process") {
-      return;
+    if (node.property.type === "Identifier") {
+      return node.property.name;
     }
-    for (const spec of node.specifiers) {
-      if (spec.type === "ImportDefaultSpecifier") {
-        envBindings.set(spec.local.name, "processModule");
-      } else if (spec.type === "ImportNamespaceSpecifier") {
-        envBindings.set(spec.local.name, "processModule");
-      } else if (spec.type === "ImportSpecifier") {
-        if (spec.imported.name === "env") {
-          envBindings.set(spec.local.name, "env");
-        }
+    return null;
+  }
+
+  /** @param {import('acorn').Node | null | undefined} node */
+  function isEnvMember(node) {
+    if (!node || node.type !== "MemberExpression" || !node.property) {
+      return false;
+    }
+    const envKey =
+      (!node.computed && node.property.type === "Identifier" && node.property.name === "env") ||
+      (node.computed && literalString(node.property) === "env");
+    if (!envKey) {
+      return false;
+    }
+    const base = node.object;
+    if (isProcessIdentifier(base)) {
+      return true;
+    }
+    if (base.type === "CallExpression" && isProcessRequireOrImport(base)) {
+      return true;
+    }
+    if (base.type === "AwaitExpression" && isProcessDynamicImport(base.argument)) {
+      return true;
+    }
+    if (base.type === "Identifier") {
+      const b = bindings.get(base.name);
+      if (b === "env" || b === "processAlias") {
+        return true;
+      }
+      if (b === "processModule" && envKey) {
+        return true;
       }
     }
+    if (base.type === "MemberExpression" && memberPropName(base) === "process") {
+      if (isGlobalThis(base.object)) {
+        return true;
+      }
+      if (base.object.type === "Identifier" && bindings.get(base.object.name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** @param {import('acorn').Node | null | undefined} node @returns {"env" | null} */
+  function resolveProcessEnvRef(node) {
+    if (!node) {
+      return null;
+    }
+    if (node.type === "MemberExpression" && isEnvMember(node)) {
+      return "env";
+    }
+    if (node.type === "Identifier" && bindings.get(node.name) === "env") {
+      return "env";
+    }
+    return null;
   }
 
   /** @param {import('acorn').Node} node */
-  function noteTopLevel(node) {
-    if (node.type === "VariableDeclaration") {
-      for (const decl of node.declarations) {
-        if (decl.init?.type === "Identifier" && decl.init.name === "process") {
-          for (const id of [decl.id].flat()) {
-            if (id.type === "Identifier") {
-              envBindings.set(id.name, "processAlias");
-            }
-            if (id.type === "ObjectPattern") {
-              for (const prop of id.properties) {
-                if (prop.type === "Property") {
-                  const key = literalKey(prop.key);
-                  if (key === "env") {
-                    const local = prop.value.type === "Identifier" ? prop.value.name : null;
-                    if (local) {
-                      envBindings.set(local, "env");
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        if (decl.init?.type === "MemberExpression") {
-          const mem = decl.init;
-          if (
-            mem.object.type === "Identifier" &&
-            mem.object.name === "globalThis" &&
-            mem.property.type === "Identifier" &&
-            mem.property.name === "process"
-          ) {
-            if (decl.id.type === "Identifier") {
-              envBindings.set(decl.id.name, "processAlias");
-            }
-          }
+  function isProcessRequireOrImport(node) {
+    if (node.type === "ImportExpression") {
+      const src = node.source;
+      return (
+        src?.type === "Literal" &&
+        (src.value === "process" || src.value === "node:process")
+      );
+    }
+    if (node.type !== "CallExpression") {
+      return false;
+    }
+    if (
+      node.callee.type === "Identifier" &&
+      node.callee.name === "require" &&
+      node.arguments[0]?.type === "Literal" &&
+      (node.arguments[0].value === "process" || node.arguments[0].value === "node:process")
+    ) {
+      return true;
+    }
+    if (
+      node.callee.type === "Import" &&
+      node.arguments[0]?.type === "Literal" &&
+      (node.arguments[0].value === "process" || node.arguments[0].value === "node:process")
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /** @param {import('acorn').Node | null | undefined} node */
+  function isProcessDynamicImport(node) {
+    return isProcessRequireOrImport(node);
+  }
+
+  /** @param {import('acorn').Node} node */
+  function noteBindings(node) {
+    if (node.type === "ImportDeclaration") {
+      const from = node.source.value;
+      if (from !== "node:process" && from !== "process") {
+        return;
+      }
+      for (const spec of node.specifiers) {
+        if (spec.type === "ImportDefaultSpecifier" || spec.type === "ImportNamespaceSpecifier") {
+          bindings.set(spec.local.name, "processModule");
+        } else if (spec.type === "ImportSpecifier" && spec.imported.name === "env") {
+          bindings.set(spec.local.name, "env");
         }
       }
     }
-  }
-
-  /** @param {import('acorn').MemberExpression} node @param {number} line */
-  function checkMember(node, line) {
-    const key = literalKey(node.property);
-    if (node.object.type === "MemberExpression") {
-      const inner = node.object;
+    if (node.type === "VariableDeclarator" && node.init) {
+      if (node.id.type === "Identifier") {
+        const folded = concatStringLiteral(node.init);
+        if (folded !== null) {
+          stringConstBindings.set(node.id.name, folded);
+        }
+      }
+      const envRef = resolveProcessEnvRef(node.init);
+      if (envRef === "env" && node.id.type === "Identifier") {
+        bindings.set(node.id.name, "env");
+      }
+      if (node.init.type === "MemberExpression" && memberPropName(node.init) === "process") {
+        if (isGlobalThis(node.init.object) && node.id.type === "Identifier") {
+          bindings.set(node.id.name, "processAlias");
+        }
+      }
+      if (node.id.type === "ObjectPattern" && resolveProcessEnvRef(node.init) === "env") {
+        hit(node.loc?.start.line ?? 0, "destructuring from process.env");
+      }
       if (
-        inner.object.type === "Identifier" &&
-        inner.object.name === "process" &&
-        inner.property.type === "Identifier" &&
-        inner.property.name === "env" &&
-        key &&
-        isForbiddenTestEnvKey(key)
+        node.id.type === "ObjectPattern" &&
+        node.init?.type === "Identifier" &&
+        node.init.name === "process"
       ) {
-        hits.push(`${file}:${line}: process.env.${key}`);
-        return;
+        for (const prop of node.id.properties) {
+          if (prop.type === "Property") {
+            const key = literalString(prop.key) ?? (prop.key.type === "Identifier" ? prop.key.name : null);
+            if (key === "env" && prop.value.type === "Identifier") {
+              bindings.set(prop.value.name, "env");
+            }
+          }
+        }
+      }
+      if (
+        node.id.type === "ObjectPattern" &&
+        node.init?.type === "MemberExpression" &&
+        memberPropName(node.init) === "process" &&
+        isGlobalThis(node.init.object)
+      ) {
+        for (const prop of node.id.properties) {
+          if (prop.type === "Property") {
+            const key = literalString(prop.key) ?? (prop.key.type === "Identifier" ? prop.key.name : null);
+            if (key === "env" && prop.value.type === "Identifier") {
+              bindings.set(prop.value.name, "env");
+            }
+          }
+        }
+      }
+      if (node.init.type === "MemberExpression" && memberPropName(node.init) === "env") {
+        const obj = node.init.object;
+        if (obj.type === "MemberExpression" && memberPropName(obj) === "process" && isGlobalThis(obj.object)) {
+          if (node.id.type === "ObjectPattern") {
+            hit(node.loc?.start.line ?? 0, "destructuring from globalThis.process.env");
+          }
+          if (node.id.type === "Identifier") {
+            bindings.set(node.id.name, "env");
+          }
+        }
+      }
+      if (isProcessRequireOrImport(node.init) && node.id.type === "Identifier") {
+        bindings.set(node.id.name, "processModule");
+      }
+      if (node.init.type === "AwaitExpression" && isProcessDynamicImport(node.init.argument)) {
+        if (node.id.type === "Identifier") {
+          bindings.set(node.id.name, "processModule");
+        }
+      }
+      if (
+        node.init.type === "MemberExpression" &&
+        memberPropName(node.init) === "env" &&
+        node.init.object.type === "AwaitExpression"
+      ) {
+        if (node.id.type === "Identifier") {
+          bindings.set(node.id.name, "env");
+        }
+      }
+      if (node.init.type === "Identifier" && bindings.get(node.init.name) === "processAlias") {
+        if (node.id.type === "Identifier") {
+          bindings.set(node.id.name, "processAlias");
+        }
+      }
+      if (
+        node.init.type === "MemberExpression" &&
+        memberPropName(node.init) === "process" &&
+        node.init.object.type === "Identifier" &&
+        (bindings.get(node.init.object.name) === "globalThisAlias" ||
+          bindings.get(node.init.object.name) === "processAlias")
+      ) {
+        if (node.id.type === "Identifier") {
+          bindings.set(node.id.name, "processAlias");
+        }
+      }
+      if (node.init.type === "Identifier" && node.init.name === "globalThis" && node.id.type === "Identifier") {
+        bindings.set(node.id.name, "globalThisAlias");
+      }
+      if (
+        node.init.type === "MemberExpression" &&
+        memberPropName(node.init) === "env" &&
+        isEnvMember(node.init) &&
+        node.id.type === "Identifier"
+      ) {
+        bindings.set(node.id.name, "env");
       }
     }
-    if (node.object.type === "Identifier") {
-      const binding = envBindings.get(node.object.name);
-      if (binding === "env" && key && isForbiddenTestEnvKey(key)) {
-        hits.push(`${file}:${line}: ${node.object.name}.${key}`);
+  }
+
+  /** @param {import('acorn').MemberExpression} node */
+  function checkEnvMemberAccess(node) {
+    if (!node?.property) {
+      return;
+    }
+    const line = node.loc?.start.line ?? 0;
+    const onEnv =
+      isEnvMember(node.object) ||
+      resolveProcessEnvRef(node.object) === "env" ||
+      (node.object?.type === "Identifier" && bindings.get(node.object.name) === "env");
+    if (!onEnv) {
+      return;
+    }
+
+    if (
+      node.computed &&
+      node.property.type === "MemberExpression" &&
+      node.property.object.type === "Identifier" &&
+      node.property.object.name === "keyDef" &&
+      node.property.property.type === "Identifier" &&
+      node.property.property.name === "env"
+    ) {
+      return;
+    }
+    if (node.computed) {
+      const keyLit = concatStringLiteral(node.property);
+      if (keyLit !== null) {
+        if (isForbiddenTestEnvKey(keyLit)) {
+          hit(line, `process.env[${JSON.stringify(keyLit)}]`);
+        }
         return;
       }
-      if (binding === "processModule" || binding === "processAlias") {
-        if (node.property.type === "Identifier" && node.property.name === "env") {
-          const innerKey = node.parent?.type === "MemberExpression" ? literalKey(node.parent.property) : null;
-          if (innerKey && isForbiddenTestEnvKey(innerKey)) {
-            hits.push(`${file}:${line}: ${node.object.name}.env.${innerKey}`);
+      if (node.property.type === "Identifier") {
+        const bound = stringConstBindings.get(node.property.name);
+        if (bound !== undefined) {
+          if (isForbiddenTestEnvKey(bound)) {
+            hit(line, `process.env[${node.property.name} → ${JSON.stringify(bound)}]`);
           }
+          return;
+        }
+      }
+      hit(line, "process.env[non-literal key]");
+      return;
+    }
+    if (!node.computed && node.property.type === "Identifier") {
+      if (node.property.name === "env") {
+        return;
+      }
+      if (isForbiddenTestEnvKey(node.property.name)) {
+        hit(line, `process.env.${node.property.name}`);
+      }
+      return;
+    }
+    if (node.property.type === "Literal") {
+      const key = String(node.property.value);
+      if (isForbiddenTestEnvKey(key)) {
+        hit(line, `process.env.${key}`);
+      }
+      return;
+    }
+    if (node.property.type === "TemplateLiteral") {
+      hit(line, "process.env[template-literal key]");
+      return;
+    }
+    hit(line, "process.env[non-literal key]");
+  }
+
+  /** @param {import('acorn').CallExpression} node */
+  function checkCall(node) {
+    const line = node.loc?.start.line ?? 0;
+    const callee = node.callee;
+    if (callee.type === "MemberExpression" && callee.property.type === "Identifier") {
+      const method = callee.property.name;
+      if (["keys", "values", "entries", "getOwnPropertyNames"].includes(method)) {
+        if (node.arguments[0] && resolveProcessEnvRef(node.arguments[0]) === "env") {
+          hit(line, `Object.${method}(process.env) whole-env enumeration`);
         }
       }
     }
     if (
-      node.object.type === "MemberExpression" &&
-      node.object.object.type === "Identifier" &&
-      envBindings.get(node.object.object.name) === "processModule" &&
-      node.object.property.type === "Identifier" &&
-      node.object.property.name === "env"
+      callee.type === "MemberExpression" &&
+      callee.object.type === "Identifier" &&
+      callee.object.name === "Reflect" &&
+      callee.property.type === "Identifier" &&
+      callee.property.name === "get" &&
+      node.arguments.length >= 2
     ) {
-      hits.push(`${file}:${line}: imported process env.${key}`);
+      const envArg = node.arguments[0];
+      if (resolveProcessEnvRef(envArg) === "env") {
+        const keyLit = concatStringLiteral(node.arguments[1]);
+        if (keyLit !== null && isForbiddenTestEnvKey(keyLit)) {
+          hit(line, `Reflect.get(process.env, ${JSON.stringify(keyLit)})`);
+        } else if (keyLit === null) {
+          hit(line, "Reflect.get(process.env, non-literal key)");
+        }
+      }
+    }
+    if (isProcessRequireOrImport(node) && node.parent?.type === "MemberExpression") {
+      return;
     }
   }
 
   /** @param {import('acorn').Node} node */
-  function walk(node, parent = null) {
+  function walkCollectBindings(node) {
     if (!node || typeof node !== "object") {
       return;
     }
-    node.parent = parent;
-    if (node.type === "ImportDeclaration") {
-      noteImport(node);
-    }
-    if (node.type === "VariableDeclaration" && (!parent || parent.type === "Program")) {
-      noteTopLevel(node);
-    }
-    if (node.type === "MemberExpression" && !node.computed) {
-      checkMember(node, node.loc?.start.line ?? 0);
-    }
-    if (node.type === "MemberExpression" && node.computed && node.property.type === "Literal") {
-      checkMember(node, node.loc?.start.line ?? 0);
-    }
-    if (node.type === "CallExpression") {
-      if (
-        node.callee.type === "MemberExpression" &&
-        node.callee.object.type === "Identifier" &&
-        node.callee.object.name === "Reflect" &&
-        node.callee.property.type === "Identifier" &&
-        node.callee.property.name === "get" &&
-        node.arguments.length >= 2
-      ) {
-        const obj = node.arguments[0];
-        const prop = node.arguments[1];
-        if (
-          obj.type === "MemberExpression" &&
-          obj.object.type === "Identifier" &&
-          obj.object.name === "process" &&
-          obj.property.type === "Identifier" &&
-          obj.property.name === "env"
-        ) {
-          const key = literalKey(prop);
-          if (key && isForbiddenTestEnvKey(key)) {
-            hits.push(`${file}:${node.loc?.start.line ?? 0}: Reflect.get(process.env, ${key})`);
+    noteBindings(node);
+    for (const key of Object.keys(node)) {
+      if (key === "parent") {
+        continue;
+      }
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const c of child) {
+          if (c && typeof c.type === "string") {
+            walkCollectBindings(c);
           }
         }
+      } else if (child && typeof child.type === "string") {
+        walkCollectBindings(child);
       }
-      if (
-        node.callee.type === "MemberExpression" &&
-        node.callee.property.type === "Identifier" &&
-        node.callee.property.name === "entries" &&
-        node.arguments[0]?.type === "MemberExpression"
-      ) {
-        const arg = node.arguments[0];
-        if (
-          arg.object.type === "Identifier" &&
-          arg.object.name === "process" &&
-          arg.property.type === "Identifier" &&
-          arg.property.name === "env"
-        ) {
-          hits.push(`${file}:${node.loc?.start.line ?? 0}: Object.entries(process.env) scan`);
-        }
-      }
+    }
+  }
+
+  /** @param {import('acorn').Node} node */
+  function walkAudit(node) {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    if (node.type === "MemberExpression") {
+      checkEnvMemberAccess(node);
+    }
+    if (node.type === "CallExpression") {
+      checkCall(node);
     }
     for (const key of Object.keys(node)) {
       if (key === "parent") {
@@ -241,16 +467,17 @@ function findViolations(file, src) {
       if (Array.isArray(child)) {
         for (const c of child) {
           if (c && typeof c.type === "string") {
-            walk(c, node);
+            walkAudit(c);
           }
         }
       } else if (child && typeof child.type === "string") {
-        walk(child, node);
+        walkAudit(child);
       }
     }
   }
 
-  walk(program);
+  walkCollectBindings(program);
+  walkAudit(program);
   return hits;
 }
 
@@ -270,23 +497,31 @@ function walkLib(dir, out) {
   }
 }
 
-/** @type {string[]} */
-const files = [];
-walkLib(libRoot, files);
+function runLibScan() {
+  /** @type {string[]} */
+  const files = [];
+  walkLib(libRoot, files);
 
-/** @type {string[]} */
-const allHits = [];
-for (const file of files) {
-  const rel = path.relative(sdkRoot, file);
-  const src = fs.readFileSync(file, "utf8");
-  allHits.push(...findViolations(rel, src));
+  /** @type {string[]} */
+  const allHits = [];
+  for (const file of files) {
+    const rel = path.relative(sdkRoot, file);
+    const src = fs.readFileSync(file, "utf8");
+    allHits.push(...findViolations(rel, src));
+  }
+
+  const unique = [...new Set(allHits)];
+  if (unique.length > 0) {
+    console.error("check-lib-no-test-env: lib/ must not read process.env.*TEST (use *ForTests setters in tests):\n");
+    console.error(unique.join("\n"));
+    process.exit(1);
+  }
+
+  console.log("check-lib-no-test-env: ok");
 }
 
-const unique = [...new Set(allHits)];
-if (unique.length > 0) {
-  console.error("check-lib-no-test-env: lib/ must not read process.env.*TEST (use *ForTests setters in tests):\n");
-  console.error(unique.join("\n"));
-  process.exit(1);
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isDirectRun && process.env.ALLOW_LIB_TEST_ENV !== "1") {
+  runLibScan();
 }
-
-console.log("check-lib-no-test-env: ok");

@@ -42,7 +42,7 @@ function wrapHeadEtagDrift(inner, headEtagOverride) {
   };
 }
 
-describe("lease lock owner etag races (QA #4)", () => {
+describe("lease lock stale-break regression guard (honest memory adapter)", () => {
   it("stale-break delete uses etag from the first get (head drift rejects wrong etag)", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();
@@ -69,7 +69,7 @@ describe("lease lock owner etag races (QA #4)", () => {
     await inner.close();
   });
 
-  it("forced stale-break race (first-get barrier, settle 0): exactly one holder at head", async () => {
+  it("regression guard: first-get barrier race (settle 0) allows only one holder at head", async () => {
     const { winners, adapter } = await runFirstGetBarrierStaleBreakRace();
     assert.equal(
       winners.length,
