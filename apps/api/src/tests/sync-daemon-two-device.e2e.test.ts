@@ -177,12 +177,38 @@ async function cleanupDaemonLeaks() {
     }
 }
 
+function vaultAgentPidsScopedToTrackedHomes(): Set<string> {
+    const scoped = new Set<string>();
+    for (const pid of snapshotVaultAgentPids()) {
+        if (vaultAgentPidsBaseline.has(pid)) {
+            continue;
+        }
+        const numeric = Number(pid);
+        if (!numeric) {
+            continue;
+        }
+        if (trackedVaultAgentPids.has(pid)) {
+            scoped.add(pid);
+            continue;
+        }
+        try {
+            const cmdline = fs.readFileSync(`/proc/${numeric}/cmdline`, 'utf8');
+            if (trackedTempHomes.some((home) => cmdline.includes(home))) {
+                scoped.add(pid);
+            }
+        } catch {
+            /* exited */
+        }
+    }
+    return scoped;
+}
+
 function assertNoDaemonLeaksAfterCleanup() {
-    const after = snapshotVaultAgentPids();
+    const scoped = vaultAgentPidsScopedToTrackedHomes();
     assert.equal(
-        after.size,
-        vaultAgentPidsBaseline.size,
-        'vault-agent-serve.mjs process count changed during test',
+        scoped.size,
+        0,
+        `vault-agent-serve.mjs still running for this test's temp homes: ${[...scoped].join(', ')}`,
     );
 }
 let server: ReturnType<typeof serve> | null = null;

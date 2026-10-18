@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
 
 export const PREMERGE_MIN_NODE = [22, 12, 0];
 
@@ -123,19 +126,24 @@ export function postgresProbeTargetFromUrl(databaseUrl) {
   return { host, port, user, database };
 }
 
-/** Minimum Node-reported tests per workspace package (QA reproducible baseline). */
-export const PREMERGE_PACKAGE_MIN_TESTS = {
-  "@infinitecontext/core": 170,
-  "@infinitecontext/crypto": 20,
-  "@infinitecontext/parsers": 65,
-  "@infinitecontext/sync": 25,
-  "@infinitecontext/auth": 10,
-  "@infinitecontext/storage": 1,
-  "infinitecontext-api": 90,
-  infinitecontext: 530,
-  "infinitecontext-mcp-server": 1,
-  "infinitecontext-python-sdk": 2,
+/**
+ * Exact expected per-package totals (QA reproducible). Updated when tests are added/removed intentionally.
+ * @type {Record<string, { pass: number, fail: number, skipped: number, tests: number }>}
+ */
+export const PREMERGE_PACKAGE_EXPECTED = {
+  "@infinitecontext/auth": { pass: 11, fail: 0, skipped: 0, tests: 11 },
+  "@infinitecontext/core": { pass: 179, fail: 0, skipped: 0, tests: 179 },
+  "@infinitecontext/crypto": { pass: 23, fail: 0, skipped: 0, tests: 23 },
+  "@infinitecontext/parsers": { pass: 115, fail: 0, skipped: 2, tests: 117 },
+  "@infinitecontext/storage": { pass: 3, fail: 0, skipped: 0, tests: 3 },
+  "@infinitecontext/sync": { pass: 27, fail: 0, skipped: 0, tests: 27 },
+  infinitecontext: { pass: 560, fail: 0, skipped: 15, tests: 575 },
+  "infinitecontext-api": { pass: 93, fail: 0, skipped: 0, tests: 93 },
+  "infinitecontext-mcp-server": { pass: 2, fail: 0, skipped: 0, tests: 2 },
+  "infinitecontext-python-sdk": { pass: 2, fail: 0, skipped: 0, tests: 2 },
 };
+
+export const PREMERGE_EXPECTED_PACKAGE_NAMES = Object.keys(PREMERGE_PACKAGE_EXPECTED);
 
 export const PREMERGE_PYTHON_SDK_VENV_FAIL_HINT =
   "premerge: infinitecontext-python-sdk did not run pytest — Python 3.8 .venv is required (0 tests is never a pass). " +
@@ -184,6 +192,39 @@ function absorbSectionTotals(section) {
  * @param {string} output
  * @returns {Map<string, { pass: number, fail: number, skipped: number, tests: number, blocks: number }>}
  */
+/**
+ * @param {string} repoRoot
+ */
+export function countOnboardingWizardDescribeSkipTests(repoRoot) {
+  const file = path.join(repoRoot, "apps/js-sdk/tests/onboarding-wizard.e2e.test.mjs");
+  if (!fs.existsSync(file)) {
+    return 0;
+  }
+  try {
+    require("node-pty");
+    return 0;
+  } catch {
+    const src = fs.readFileSync(file, "utf8");
+    return (src.match(/\bit\s*\(/g) ?? []).length;
+  }
+}
+
+/**
+ * @param {{ pass: number, fail: number, skipped: number, tests: number }} totals
+ * @param {string} repoRoot
+ */
+export function applyInfinitecontextDescribeSkipAdjustment(totals, repoRoot) {
+  const hidden = countOnboardingWizardDescribeSkipTests(repoRoot);
+  if (hidden <= 0) {
+    return totals;
+  }
+  return {
+    ...totals,
+    skipped: totals.skipped + hidden,
+    tests: totals.tests + hidden,
+  };
+}
+
 export function parsePremergePackageCounts(output) {
   /** @type {Map<string, { pass: number, fail: number, skipped: number, tests: number, blocks: number }>} */
   const byPackage = new Map();
@@ -195,12 +236,17 @@ export function parsePremergePackageCounts(output) {
     const name = normalizePremergePackageName(headers[i][1]);
     const totals = absorbSectionTotals(section);
     if (name.includes("python-sdk") && totals.blocks === 0) {
-      const pytest = section.match(/(\d+) passed/);
-      if (pytest) {
-        totals.tests = Number(pytest[1]);
-        totals.pass = Number(pytest[1]);
+      const failed = section.match(/(\d+) failed/);
+      const passed = section.match(/(\d+) passed/);
+      const failCount = failed ? Number(failed[1]) : 0;
+      const passCount = passed ? Number(passed[1]) : 0;
+      if (failCount > 0 || passCount > 0) {
+        totals.tests = passCount + failCount;
+        totals.pass = passCount;
+        totals.fail = failCount;
         totals.blocks = 1;
       } else if (
+        /python-sdk: (test|check) failed/.test(section) ||
         /python-sdk: FAIL — Python 3\.8 .venv is required/.test(section) ||
         /python-sdk: skipping tests/.test(section)
       ) {
@@ -220,11 +266,75 @@ export function parsePremergePackageCounts(output) {
 /**
  * @param {string} output
  */
-export function assertPremergePackageTestSections(output) {
+/**
+ * @param {string} output
+ * @param {string} [repoRoot]
+ */
+/**
+ * @param {string} repoRoot
+ */
+export function assertPremergeExpectedPackagesDefineTestScript(repoRoot) {
+  /** @type {Map<string, string>} */
+  const nameToDir = new Map();
+  for (const base of ["apps", "packages"]) {
+    const basePath = path.join(repoRoot, base);
+    if (!fs.existsSync(basePath)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const dir = path.join(basePath, entry.name);
+      const pkgPath = path.join(dir, "package.json");
+      if (!fs.existsSync(pkgPath)) {
+        continue;
+      }
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        if (typeof pkg.name === "string" && pkg.name.trim()) {
+          nameToDir.set(pkg.name.trim(), dir);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  /** @type {string[]} */
+  const problems = [];
+  for (const expectedName of PREMERGE_EXPECTED_PACKAGE_NAMES) {
+    const dir = nameToDir.get(expectedName);
+    if (!dir) {
+      problems.push(`${expectedName}: no workspace package.json found`);
+      continue;
+    }
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    const testScript = pkg.scripts?.test;
+    if (typeof testScript !== "string" || !testScript.trim()) {
+      problems.push(`${expectedName}: missing scripts.test (${path.relative(repoRoot, dir)})`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `premerge expected packages must define scripts.test:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+}
+
+export function assertPremergePackageTestSections(output, repoRoot) {
   const byPackage = parsePremergePackageCounts(output);
   /** @type {string[]} */
   const problems = [];
-  for (const [name, totals] of byPackage) {
+  for (const expectedName of PREMERGE_EXPECTED_PACKAGE_NAMES) {
+    if (!byPackage.has(expectedName)) {
+      problems.push(`${expectedName}: missing from pnpm test output (no > pkg test section)`);
+    }
+  }
+  for (const [name, rawTotals] of byPackage) {
+    let totals = rawTotals;
+    if (name === "infinitecontext" && repoRoot) {
+      totals = applyInfinitecontextDescribeSkipAdjustment({ ...rawTotals }, repoRoot);
+    }
     if (totals.blocks === 0) {
       problems.push(`${name}: missing test summary block`);
       continue;
@@ -236,9 +346,15 @@ export function assertPremergePackageTestSections(output) {
     if (totals.tests === 0) {
       problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
     }
-    const min = PREMERGE_PACKAGE_MIN_TESTS[name];
-    if (min !== undefined && totals.tests < min) {
-      problems.push(`${name}: tests ${totals.tests} < expected minimum ${min}`);
+    const expected = PREMERGE_PACKAGE_EXPECTED[name];
+    if (expected) {
+      for (const key of ["pass", "fail", "skipped", "tests"]) {
+        if (totals[key] !== expected[key]) {
+          problems.push(
+            `${name}: ${key} ${totals[key]} ≠ expected ${expected[key]} (QA reproducible baseline)`,
+          );
+        }
+      }
     }
     const accounted = totals.pass + totals.fail + totals.skipped;
     if (accounted !== totals.tests) {
@@ -250,8 +366,11 @@ export function assertPremergePackageTestSections(output) {
   }
 }
 
-/** @returns {Set<string>} */
-export function listAllIcTmpDirs() {
+/**
+ * @param {string} [runTag] IC_TEST_TMP_RUN_TAG — when set, only dirs for this premerge run.
+ * @returns {Set<string>}
+ */
+export function listAllIcTmpDirs(runTag = process.env.IC_TEST_TMP_RUN_TAG) {
   const tmpRoot = path.resolve(os.tmpdir());
   /** @type {Set<string>} */
   const found = new Set();
@@ -261,8 +380,13 @@ export function listAllIcTmpDirs() {
   } catch {
     return found;
   }
+  const tag = String(runTag ?? "").trim();
   for (const name of entries) {
-    if (!name.startsWith("ic-")) {
+    if (tag) {
+      if (!name.startsWith(`${tag}-`) && name !== tag) {
+        continue;
+      }
+    } else if (!name.startsWith("ic-")) {
       continue;
     }
     found.add(path.join(tmpRoot, name));
@@ -284,7 +408,7 @@ export function assertNoNewIcTmpDirLeaks(before, after) {
   }
   if (leaked.length > 0) {
     throw new Error(
-      `premerge left new /tmp/ic-* directories behind (${leaked.length}): ${leaked.slice(0, 8).join(", ")}${leaked.length > 8 ? "…" : ""}`,
+      `premerge left new temp directories behind in private TMPDIR (${leaked.length}): ${leaked.slice(0, 8).join(", ")}${leaked.length > 8 ? "…" : ""}`,
     );
   }
 }

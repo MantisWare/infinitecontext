@@ -5,7 +5,7 @@
     "scripts": {
         "check": "tsc --noEmit",
         "dev": "tsx watch src/server.ts",
-        "test": "pnpm --filter @infinitecontext/crypto run build && node --import ../../scripts/ic-test-tmp-preload.mjs --import tsx --test --test-concurrency=1 src/tests/**/*.test.ts",
+        "test": "pnpm --filter @infinitecontext/crypto run build && node ../../scripts/run-node-test.mjs --import ../../scripts/ic-test-tmp-preload.mjs --import tsx -- 'src/tests/**/*.test.ts'",
         "test:watch": "node --import tsx --test --watch src/tests/**/*.test.ts"
     },
     "dependencies": {

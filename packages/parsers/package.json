@@ -13,7 +13,7 @@
     "./utils": "./src/utils.mjs"
   },
   "scripts": {
-    "test": "node --import ../../scripts/ic-test-tmp-preload.mjs --test tests/**/*.test.mjs"
+    "test": "node ../../scripts/run-node-test.mjs --import ../../scripts/ic-test-tmp-preload.mjs -- 'tests/**/*.test.mjs' 'tests/*.test.mjs'"
   },
   "dependencies": {
     "fast-glob": "^3.3.3"

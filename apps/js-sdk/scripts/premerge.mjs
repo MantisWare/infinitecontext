@@ -1,15 +1,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
   PREMERGE_MIN_NODE,
   absorbNodeTestTotals,
+  applyInfinitecontextDescribeSkipAdjustment,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
   assertNoNewIcTmpDirLeaks,
+  assertPremergeExpectedPackagesDefineTestScript,
   assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
+  countOnboardingWizardDescribeSkipTests,
   isNodeVersionAtLeast,
   listAllIcTmpDirs,
   parseNodeVersionParts,
@@ -22,6 +26,18 @@ import {
 } from "./premerge-ephemeral-postgres.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
+
+const icTestTmpRunTag = `ic-premerge-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+process.env.IC_TEST_TMP_RUN_TAG = icTestTmpRunTag;
+
+const systemTmpRoot = path.resolve("/tmp");
+/** @type {string} */
+const premergeTmpRoot = fs.mkdtempSync(path.join(systemTmpRoot, `${icTestTmpRunTag}-tmpdir-`));
+process.env.TMPDIR = premergeTmpRoot;
+process.env.TMP = premergeTmpRoot;
+process.env.TEMP = premergeTmpRoot;
+process.env.IC_PREMERGE_TMPDIR = premergeTmpRoot;
+console.log(`premerge: private TMPDIR=${premergeTmpRoot}`);
 
 const minioPort = String(process.env.IC_STORAGE_EMU_MINIO_PORT ?? "9000");
 const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
@@ -43,7 +59,29 @@ function fail(message, code = 1) {
   console.error(message);
   killActiveProcessGroup("SIGKILL");
   cleanupAll();
+  cleanupPremergeTmpRoot();
   process.exit(code);
+}
+
+function cleanupPremergeTmpRoot() {
+  const root = process.env.IC_PREMERGE_TMPDIR ?? premergeTmpRoot;
+  if (!root || !fs.existsSync(root)) {
+    return;
+  }
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+function finalizeTmpHygiene(icTmpBeforeTests) {
+  try {
+    assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs(icTestTmpRunTag));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  cleanupPremergeTmpRoot();
 }
 
 function cleanupAll() {
@@ -102,9 +140,11 @@ function killActiveProcessGroup(signal) {
  * @param {string[]} args
  * @param {Record<string, string | undefined>} [env]
  * @param {string} [cwd]
+ * @param {{ allowFailure?: boolean }} [opts]
  * @returns {Promise<string>}
  */
-function run(cmd, args, env, cwd = sdkRoot) {
+function run(cmd, args, env, cwd = sdkRoot, opts = {}) {
+  const { allowFailure = false } = opts;
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
@@ -136,6 +176,10 @@ function run(cmd, args, env, cwd = sdkRoot) {
         return;
       }
       if (status !== 0) {
+        if (allowFailure) {
+          reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
+          return;
+        }
         killActiveProcessGroup("SIGKILL");
         cleanupAll();
         process.exit(status ?? 1);
@@ -175,6 +219,7 @@ function onSignal(signal) {
   shuttingDown = true;
   killActiveProcessGroup("SIGTERM");
   setTimeout(() => killActiveProcessGroup("SIGKILL"), 5000).unref();
+  cleanupPremergeTmpRoot();
   cleanupAll();
   process.exit(signal === "SIGINT" ? 130 : 143);
 }
@@ -251,6 +296,7 @@ try {
 }
 
 const emuEnv = {
+  IC_TEST_TMP_RUN_TAG: icTestTmpRunTag,
   IC_REQUIRE_MINIO: "1",
   IC_STORAGE_EMU_MINIO_PORT: minioPort,
   IC_STORAGE_EMU_SFTP_PORT: sftpPort,
@@ -262,39 +308,45 @@ const emuEnv = {
   INFINITECONTEXT_S3_TEST_PREFIX: "premerge-local",
 };
 
-const icTmpBeforeTests = listAllIcTmpDirs();
-
-let testOut = "";
 try {
-  testOut = await run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot);
-} finally {
-  cleanupAll();
-}
-
-const parsed = absorbNodeTestTotals(testOut);
-totals.pass = parsed.pass;
-totals.fail = parsed.fail;
-totals.skipped = parsed.skipped;
-totals.tests = parsed.tests;
-
-try {
-  assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
-  assertPremergePackageTestSections(testOut);
+  assertPremergeExpectedPackagesDefineTestScript(repoRoot);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
 
+const icTmpBeforeTests = listAllIcTmpDirs(icTestTmpRunTag);
+
+let testOut = "";
+let testRunFailed = false;
 try {
-  for (const dir of listAllIcTmpDirs()) {
-    if (!icTmpBeforeTests.has(dir)) {
-      try {
-        fs.rmSync(dir, { recursive: true, force: true });
-      } catch {
-        /* best-effort */
-      }
-    }
-  }
-  assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs());
+  testOut = await run(
+    "pnpm",
+    ["-r", "--workspace-concurrency=1", "test"],
+    emuEnv,
+    repoRoot,
+    { allowFailure: true },
+  );
+} catch {
+  testRunFailed = true;
+} finally {
+  cleanupAll();
+  finalizeTmpHygiene(icTmpBeforeTests);
+}
+
+if (testRunFailed) {
+  process.exit(1);
+}
+
+const parsed = absorbNodeTestTotals(testOut);
+const describeSkipHidden = countOnboardingWizardDescribeSkipTests(repoRoot);
+totals.pass = parsed.pass;
+totals.fail = parsed.fail;
+totals.skipped = parsed.skipped + describeSkipHidden;
+totals.tests = parsed.tests + describeSkipHidden;
+
+try {
+  assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
+  assertPremergePackageTestSections(testOut, repoRoot);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
@@ -314,10 +366,15 @@ console.log(`  fail: ${totals.fail}`);
 console.log(`  skipped: ${totals.skipped}`);
 console.log(`  tests: ${totals.tests}`);
 console.log(`  HEAD: ${head}`);
+console.log(`  describe.skip adjustment (onboarding-wizard, no node-pty): +${describeSkipHidden} skipped`);
 console.log("  per-package:");
 for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  const display =
+    name === "infinitecontext"
+      ? applyInfinitecontextDescribeSkipAdjustment({ ...row }, repoRoot)
+      : row;
   console.log(
-    `    ${name}: pass ${row.pass}, fail ${row.fail}, skipped ${row.skipped}, tests ${row.tests} (${row.blocks} block(s))`,
+    `    ${name}: pass ${display.pass}, fail ${display.fail}, skipped ${display.skipped}, tests ${display.tests} (${row.blocks} block(s))`,
   );
 }
 

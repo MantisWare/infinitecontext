@@ -73,19 +73,11 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
   };
 
   function dockerCompose(args) {
-    let res = spawnSync("docker", ["compose", ...args], {
+    return spawnSync("docker", ["compose", ...args], {
       cwd: path.dirname(composeFile),
       env: composeEnv,
       encoding: "utf8",
     });
-    if (res.status !== 0 && process.platform !== "win32") {
-      res = spawnSync("sudo", ["-E", "docker", "compose", ...args], {
-        cwd: path.dirname(composeFile),
-        env: composeEnv,
-        encoding: "utf8",
-      });
-    }
-    return res;
   }
 
   const up = dockerCompose(["-f", composeFile, "-p", project, "up", "-d", "postgres"]);
@@ -96,14 +88,24 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
   }
 
   const pgEnv = { ...env, PGPASSWORD: password };
+  let pgReady = false;
   for (let i = 0; i < 40; i += 1) {
     const ready = spawnSync(
       "psql",
       ["-h", "127.0.0.1", "-p", port, "-U", user, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "SELECT 1"],
       { encoding: "utf8", env: pgEnv },
     );
-    if (ready.status === 0) break;
+    if (ready.status === 0) {
+      pgReady = true;
+      break;
+    }
     spawnSync("sleep", ["1"]);
+  }
+  if (!pgReady) {
+    dockerCompose(["-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"]);
+    throw new Error(
+      `premerge: ephemeral Postgres not ready on 127.0.0.1:${port} after 40s (project=${project})`,
+    );
   }
 
   for (const dbName of [syncDb, vaultDb]) {

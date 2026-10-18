@@ -14,7 +14,10 @@ import {
   assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
   parseNodeVersionParts,
+  parsePremergePackageCounts,
 } from "../../scripts/premerge-lib.mjs";
+
+const sdkRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 
 describe("premerge gate helpers", () => {
   it("requires Node >=22.12", () => {
@@ -74,13 +77,47 @@ describe("premerge gate helpers", () => {
 
 python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Install: uv python install 3.8
 `;
-    assert.throws(() => assertPremergePackageTestSections(fakePnpmOut), (err) => {
+    const row = parsePremergePackageCounts(fakePnpmOut).get("infinitecontext-python-sdk");
+    assert.ok(row?.pythonVenvUnavailable);
+    assert.throws(() => assertPremergePackageTestSections(fakePnpmOut, "/workspace"), (err) => {
       const text = String(err);
       assert.match(text, /0 tests is never a pass/);
       assert.match(text, /Python 3\.8 .venv/);
-      assert.ok(text.includes("infinitecontext-python-sdk did not run pytest"));
       return true;
     });
+  });
+
+  it("parses pytest '1 failed, 2 passed' summaries", () => {
+    const out = `
+> infinitecontext-python-sdk@ test /workspace/apps/python-sdk
+> node scripts/run-pytest.mjs
+
+1 failed, 2 passed in 0.01s
+`;
+    const row = parsePremergePackageCounts(out).get("infinitecontext-python-sdk");
+    assert.equal(row?.pass, 2);
+    assert.equal(row?.fail, 1);
+    assert.equal(row?.tests, 3);
+  });
+
+  it("requires every expected package in pnpm test output", () => {
+    const partial = `
+> @infinitecontext/core@0.1.0 test /workspace/packages/core
+# tests 1
+# pass 1
+# fail 0
+# skipped 0
+# duration_ms 1
+`;
+    assert.throws(() => assertPremergePackageTestSections(partial, "/workspace"), /missing from pnpm test output/);
+  });
+
+  it("core uses run-node-test so top-level src tests execute", () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.resolve(sdkRoot, "../../packages/core/package.json"), "utf8"),
+    );
+    assert.match(pkg.scripts.test, /run-node-test\.mjs/);
+    assert.match(pkg.scripts.test, /src\/\*\*\/\*\.test\.ts/);
   });
 });
 

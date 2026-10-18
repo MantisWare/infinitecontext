@@ -113,6 +113,9 @@ function jitterMs(maxMs) {
 /** @type {null | (() => void | Promise<void>)} */
 let leaseLockStaleBreakBarrierForTests = null;
 
+/** Test-only: 77db470 stale-break used a second get() before delete (duplicate etag race). */
+let leaseLockLegacySecondGetStaleBreakForTests = false;
+
 /** Test-only: pause stale-break between the initial get() and conditional delete. */
 export function setLeaseLockStaleBreakBarrierForTests(barrier) {
   leaseLockStaleBreakBarrierForTests = typeof barrier === "function" ? barrier : null;
@@ -120,6 +123,15 @@ export function setLeaseLockStaleBreakBarrierForTests(barrier) {
 
 export function resetLeaseLockStaleBreakBarrierForTests() {
   leaseLockStaleBreakBarrierForTests = null;
+}
+
+/** Test-only: enable 77db470 second-get stale-break path in the real acquire implementation. */
+export function setLeaseLockLegacySecondGetStaleBreakForTests(enabled) {
+  leaseLockLegacySecondGetStaleBreakForTests = Boolean(enabled);
+}
+
+export function resetLeaseLockLegacySecondGetStaleBreakForTests() {
+  leaseLockLegacySecondGetStaleBreakForTests = false;
 }
 
 async function acquireLeaseLockOnce(options) {
@@ -138,14 +150,26 @@ async function acquireLeaseLockOnce(options) {
     }
     throw new Error(`Lease lock ${lockName} is held by ${existing.owner_dev_h}`);
   }
-  if (existing && isLeaseLockStale(existing, now) && row?.etag) {
+  if (existing && isLeaseLockStale(existing, now)) {
+    let etagForDelete = row?.etag;
+    if (leaseLockLegacySecondGetStaleBreakForTests) {
+      globalThis.__icLeaseLegacySecondGet = true;
+      try {
+        const row2 = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, lockName);
+        etagForDelete = row2?.etag ?? etagForDelete;
+      } finally {
+        globalThis.__icLeaseLegacySecondGet = false;
+      }
+    }
     if (leaseLockStaleBreakBarrierForTests) {
       await leaseLockStaleBreakBarrierForTests();
     }
-    try {
-      await options.adapter.delete(key, { ifMatch: row.etag });
-    } catch {
-      /* best-effort break stale */
+    if (etagForDelete) {
+      try {
+        await options.adapter.delete(key, { ifMatch: etagForDelete });
+      } catch {
+        /* best-effort break stale */
+      }
     }
   }
 
@@ -156,7 +180,18 @@ async function acquireLeaseLockOnce(options) {
     expires_at_ms: leaseExpiresAtMs(now),
   };
 
-  await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
+  if (leaseLockLegacySecondGetStaleBreakForTests) {
+    try {
+      await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
+    } catch {
+      /* 77db470 best-effort put after stale-break race */
+    }
+    if (typeof options.adapter.noteSuccessfulAcquire === "function") {
+      options.adapter.noteSuccessfulAcquire(options.ownerDevH, nonce);
+    }
+  } else {
+    await writeLeasePayload(options.adapter, options.dek, options.layoutPrefix, lockName, payload);
+  }
 
   if (settleMs > 0) await sleep(settleMs);
 

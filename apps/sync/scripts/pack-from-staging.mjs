@@ -55,10 +55,17 @@ export function prepareSyncPublishTree(stagingRoot) {
  * @param {{ packDestination?: string, injectFailure?: boolean }} [opts]
  * @returns {string} absolute path to .tgz
  */
+function tmpPrefix(label) {
+  const tag = String(process.env.IC_TEST_TMP_RUN_TAG ?? "").trim();
+  if (tag) {
+    return path.join(os.tmpdir(), `${tag}-${label}-`);
+  }
+  return path.join(os.tmpdir(), `ic-${label}-`);
+}
+
 export function packSyncFromStaging(opts = {}) {
-  const packDestination =
-    opts.packDestination ?? fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-out-"));
-  const staging = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-staging-"));
+  const packDestination = opts.packDestination ?? fs.mkdtempSync(tmpPrefix("sync-pack-out"));
+  const staging = fs.mkdtempSync(tmpPrefix("sync-pack-staging"));
 
   try {
     prepareSyncPublishTree(staging);
@@ -79,7 +86,7 @@ export function packSyncFromStaging(opts = {}) {
 const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (isMain) {
   const injectFailure = process.argv.includes("--inject-failure");
-  const packDestination = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-out-"));
+  const packDestination = fs.mkdtempSync(tmpPrefix("sync-pack-out"));
   try {
     const tgz = packSyncFromStaging({ packDestination, injectFailure });
     console.log(tgz);

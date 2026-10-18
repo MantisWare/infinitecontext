@@ -1,6 +1,6 @@
 /**
- * Tracks mkdtemp dirs under os.tmpdir() with an `ic-` prefix and removes them on exit/signal.
- * Loaded via NODE_OPTIONS or test --import hooks.
+ * Tracks mkdtemp dirs for this premerge/test run and removes them on exit/signal.
+ * When IC_TEST_TMP_RUN_TAG is set, only dirs with that prefix are tracked/cleaned.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -10,6 +10,21 @@ import path from "node:path";
 const trackedIcTmpDirs = new Set();
 
 const tmpRoot = path.resolve(os.tmpdir());
+const runTag = String(process.env.IC_TEST_TMP_RUN_TAG ?? "").trim();
+
+function basenameMatchesRunTag(base) {
+  if (!runTag) {
+    return base.startsWith("ic-");
+  }
+  return base.startsWith(`${runTag}-`) || base === runTag;
+}
+
+function mkdtempPrefix(label) {
+  if (runTag) {
+    return path.join(tmpRoot, `${runTag}-${label}-`);
+  }
+  return path.join(tmpRoot, "ic-");
+}
 
 function shouldTrackDir(dir) {
   const resolved = path.resolve(String(dir));
@@ -17,7 +32,7 @@ function shouldTrackDir(dir) {
     return false;
   }
   const base = path.basename(resolved);
-  return base.startsWith("ic-");
+  return basenameMatchesRunTag(base);
 }
 
 function trackDir(dir) {
@@ -42,6 +57,14 @@ if (fs.promises?.mkdtemp) {
   };
 }
 
+export function icTestTmpMkdtempPrefix(label = "") {
+  return mkdtempPrefix(label);
+}
+
+export function listTrackedIcTmpDirsForRun() {
+  return new Set(trackedIcTmpDirs);
+}
+
 function cleanupTrackedIcTmpDirs() {
   for (const dir of trackedIcTmpDirs) {
     try {
@@ -51,18 +74,48 @@ function cleanupTrackedIcTmpDirs() {
     }
   }
   trackedIcTmpDirs.clear();
+  if (runTag) {
+    try {
+      for (const name of fs.readdirSync(tmpRoot)) {
+        if (!basenameMatchesRunTag(name)) continue;
+        fs.rmSync(path.join(tmpRoot, name), { recursive: true, force: true });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
-process.once("exit", cleanupTrackedIcTmpDirs);
-process.once("SIGINT", () => {
+function cleanupLegacySyncPackOutDirs() {
+  try {
+    for (const name of fs.readdirSync(tmpRoot)) {
+      if (!name.startsWith("ic-sync-pack-out-")) continue;
+      if (runTag && !name.startsWith(`${runTag}-`)) continue;
+      fs.rmSync(path.join(tmpRoot, name), { recursive: true, force: true });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function onSignalCleanup() {
   cleanupTrackedIcTmpDirs();
+  cleanupLegacySyncPackOutDirs();
+}
+
+process.once("exit", () => {
+  cleanupTrackedIcTmpDirs();
+  cleanupLegacySyncPackOutDirs();
+});
+process.once("SIGINT", () => {
+  onSignalCleanup();
   const listeners = process.listeners("SIGINT");
   if (listeners.length <= 1) {
     process.exit(130);
   }
 });
 process.once("SIGTERM", () => {
-  cleanupTrackedIcTmpDirs();
+  onSignalCleanup();
   const listeners = process.listeners("SIGTERM");
   if (listeners.length <= 1) {
     process.exit(143);

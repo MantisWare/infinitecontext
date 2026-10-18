@@ -17,6 +17,9 @@ const patterns = [
   String.raw`\{\s*env\s*\}\s*=\s*process`,
   String.raw`\bIC_TESTING\b`,
   String.raw`\{\s*[^}]*\b[A-Z0-9_]*TEST[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env`,
+  String.raw`Reflect\.get\s*\(\s*process\.env`,
+  String.raw`Reflect\.get\s*\(\s*\w+\.env`,
+  String.raw`process\.env\.[a-z0-9_]*test[a-z0-9_]*`,
 ];
 
 /** @type {string[]} */
@@ -47,7 +50,7 @@ if (aliased.status === 0) {
     if (!line.trim()) continue;
     const file = line.split(":")[0];
     if (!file) continue;
-    const follow = spawnSync("rg", ["-n", String.raw`\.[A-Z0-9_]*TEST[A-Z0-9_]*\b`, file], {
+    const follow = spawnSync("rg", ["-n", String.raw`\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*\b`, file], {
       cwd: sdkRoot,
       encoding: "utf8",
     });
@@ -67,12 +70,53 @@ if (envDestructure.status === 0) {
     if (!line.trim()) continue;
     const file = line.split(":")[0];
     if (!file) continue;
-    const follow = spawnSync("rg", ["-n", String.raw`env\.[A-Z0-9_]*TEST[A-Z0-9_]*`, file], {
+    const follow = spawnSync("rg", ["-n", String.raw`env\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*`, file], {
       cwd: sdkRoot,
       encoding: "utf8",
     });
     if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
       hits.push(String(follow.stdout ?? "").trim());
+    }
+  }
+}
+
+const nodeProcessImport = spawnSync(
+  "rg",
+  ["-n", String.raw`from\s+["']node:process["']`, "lib/"],
+  { cwd: sdkRoot, encoding: "utf8" },
+);
+if (nodeProcessImport.status === 0) {
+  for (const line of String(nodeProcessImport.stdout ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    const parts = line.split(":");
+    const file = parts[0];
+    if (!file) continue;
+    const importLine = line.slice(line.indexOf(":") + 1);
+    const aliasMatch = importLine.match(
+      /import\s+\{([^}]+)\}\s+from\s+["']node:process["']/,
+    );
+    const defaultMatch = importLine.match(/import\s+(\w+)\s+from\s+["']node:process["']/);
+    /** @type {string[]} */
+    const bindings = [];
+    if (aliasMatch) {
+      for (const part of aliasMatch[1].split(",")) {
+        const trimmed = part.trim();
+        const name = trimmed.split(/\s+as\s+/)[0]?.trim();
+        if (name) bindings.push(name);
+      }
+    }
+    if (defaultMatch) {
+      bindings.push(defaultMatch[1]);
+    }
+    for (const binding of bindings) {
+      const follow = spawnSync(
+        "rg",
+        ["-n", String.raw`${binding}\.env\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*`, file],
+        { cwd: sdkRoot, encoding: "utf8" },
+      );
+      if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
+        hits.push(String(follow.stdout ?? "").trim());
+      }
     }
   }
 }

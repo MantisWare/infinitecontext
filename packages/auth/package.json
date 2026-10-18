@@ -9,7 +9,7 @@
     },
     "scripts": {
         "check": "tsc --noEmit",
-        "test": "node --import ../../scripts/ic-test-tmp-preload.mjs --import tsx --test src/**/*.test.ts"
+        "test": "node ../../scripts/run-node-test.mjs --import ../../scripts/ic-test-tmp-preload.mjs --import tsx -- 'src/**/*.test.ts'"
     },
     "dependencies": {
         "@infinitecontext/crypto": "workspace:*",
