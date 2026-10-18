@@ -140,8 +140,20 @@ export const PREMERGE_PACKAGE_EXPECTED = {
   infinitecontext: { pass: 560, fail: 0, skipped: 15, tests: 575 },
   "infinitecontext-api": { pass: 93, fail: 0, skipped: 0, tests: 93 },
   "infinitecontext-mcp-server": { pass: 2, fail: 0, skipped: 0, tests: 2 },
-  "infinitecontext-python-sdk": { pass: 2, fail: 0, skipped: 0, tests: 2 },
+  "infinitecontext-python-sdk": { pass: 6, fail: 0, skipped: 0, tests: 6 },
 };
+
+/**
+ * infinitecontext totals depend on node-pty (onboarding-wizard e2e is describe.skip without it).
+ * @param {string} repoRoot
+ */
+export function getInfinitecontextExpectedTotals(repoRoot) {
+  const hidden = countOnboardingWizardDescribeSkipTests(repoRoot);
+  if (hidden > 0) {
+    return { pass: 560, fail: 0, skipped: 15, tests: 575 };
+  }
+  return { pass: 575, fail: 0, skipped: 2, tests: 577 };
+}
 
 export const PREMERGE_EXPECTED_PACKAGE_NAMES = Object.keys(PREMERGE_PACKAGE_EXPECTED);
 
@@ -346,7 +358,10 @@ export function assertPremergePackageTestSections(output, repoRoot) {
     if (totals.tests === 0) {
       problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
     }
-    const expected = PREMERGE_PACKAGE_EXPECTED[name];
+    const expected =
+      name === "infinitecontext" && repoRoot
+        ? getInfinitecontextExpectedTotals(repoRoot)
+        : PREMERGE_PACKAGE_EXPECTED[name];
     if (expected) {
       for (const key of ["pass", "fail", "skipped", "tests"]) {
         if (totals[key] !== expected[key]) {
