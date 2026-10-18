@@ -2,7 +2,22 @@ import { createS3StorageAdapter } from "./s3-adapter.mjs";
 import { resolveS3ObjectStoreConfig } from "./s3-config.mjs";
 import { StorageError } from "./errors.mjs";
 import { CAS_PROBE_OBJECT_PREFIXES } from "./storage-cas-probe-sweep.mjs";
-import { isRaceDoubleWinTestActive } from "./test-hooks.mjs";
+/** @type {boolean} */
+let s3CasRaceDoubleWinForTests = false;
+
+/** @param {boolean} active */
+export function setS3CasRaceDoubleWinForTests(active) {
+  s3CasRaceDoubleWinForTests = active === true;
+}
+
+/** Reset CAS race double-win simulation (tests only). */
+export function resetS3CasRaceDoubleWinForTests() {
+  s3CasRaceDoubleWinForTests = false;
+}
+
+function isS3CasRaceDoubleWinActive() {
+  return s3CasRaceDoubleWinForTests;
+}
 
 /**
  * @param {string} key
@@ -57,7 +72,7 @@ export function wrapCasRaceDoubleWinTestHook(adapter) {
 }
 
 /**
- * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string, testHooks?: { raceDoubleWin?: boolean | string | number } }} options
+ * @param {{ config?: Record<string, unknown>, env?: NodeJS.ProcessEnv, cachePath?: string }} options
  */
 export async function openS3StorageCasProbeSession(options = {}) {
   const env = options.env ?? process.env;
@@ -71,7 +86,7 @@ export async function openS3StorageCasProbeSession(options = {}) {
   });
   await adapter.init({ mode: "probe-session", cachePath: options.cachePath });
   let sessionAdapter = wrapStorageAdapterCasProbeSession(adapter);
-  if (isRaceDoubleWinTestActive(options, env)) {
+  if (isS3CasRaceDoubleWinActive()) {
     sessionAdapter = wrapCasRaceDoubleWinTestHook(sessionAdapter);
   }
   return {

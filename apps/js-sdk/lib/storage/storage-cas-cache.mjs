@@ -1305,17 +1305,25 @@ export function recordStorageCasDoctorRaceSuccess(cachePath, bindingKey) {
       const expiresAtMs = Math.min(nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS, nowMs + DEFAULT_STORAGE_CAS_CACHE_TTL_MS);
       const racePassAtMs = Math.max(prev?.racePassAtMs ?? 0, nowMs);
       const seqRecheckAtMs = prev?.seqRecheckAtMs ?? 0;
+      const corruptedAtMs = cache.corruptedAtMs ?? 0;
+      const threshold = Math.max(prev?.unsafeAtMs ?? 0, corruptedAtMs ?? 0);
+      const recheckCoversIncident = threshold === 0 || seqRecheckAtMs >= threshold;
+      const raceCoversIncident = threshold === 0 || racePassAtMs >= threshold;
+      const clearStaleUnsafe = recheckCoversIncident && raceCoversIncident;
+
       const draft = {
         ...prev,
         bindingKey,
         racePassAtMs,
         seqRecheckAtMs,
         crossDeviceCas: false,
-        casUnsafe: prev?.casUnsafe ?? false,
+        casUnsafe: clearStaleUnsafe ? false : (prev?.casUnsafe ?? false),
+        unsafeReason: clearStaleUnsafe ? undefined : prev?.unsafeReason,
+        flagKind: clearStaleUnsafe ? undefined : prev?.flagKind,
+        unsafeAtMs: clearStaleUnsafe ? undefined : prev?.unsafeAtMs,
         probedAtMs: nowMs,
         expiresAtMs: 0,
       };
-      const corruptedAtMs = cache.corruptedAtMs ?? 0;
       if (
         isBindingCasTrustedAfterCorruption(
           { ...draft, casUnsafe: false, crossDeviceCas: true },

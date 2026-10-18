@@ -4,13 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 
 import { sampleEncryptedObjectBytesForKey } from "../../lib/storage/contract-suite.mjs";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
-import { isRaceDoubleWinTestActive, readTestHook } from "../../lib/storage/test-hooks.mjs";
-import { wrapCasRaceDoubleWinTestHook } from "../../lib/storage/storage-s3-cas-probe-session.mjs";
 import { probeCrossDeviceCasRace } from "../../lib/storage/storage-cas-race-probe.mjs";
+import {
+  resetS3CasRaceDoubleWinForTests,
+  setS3CasRaceDoubleWinForTests,
+  wrapCasRaceDoubleWinTestHook,
+} from "../../lib/storage/storage-s3-cas-probe-session.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const cliEntry = path.join(repoRoot, "src/cli/entry.mjs");
@@ -37,66 +40,27 @@ function adapterWithRecordedPuts(inner, enableHook) {
 }
 
 describe("CAS race double-win test hook gating", () => {
-  it("readTestHook ignores env unless NODE_ENV=test", () => {
-    const env = {
-      NODE_ENV: "production",
-      INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
-    };
-    assert.equal(readTestHook("raceDoubleWin", env), undefined);
-    assert.equal(isRaceDoubleWinTestActive({}, env), false);
+  afterEach(() => {
+    resetS3CasRaceDoubleWinForTests();
   });
 
-  it("NODE_ENV unset + hook=1 keeps ifNoneMatch on ic-cas-race puts", async () => {
+  it("setS3CasRaceDoubleWinForTests(false) keeps ifNoneMatch on ic-cas-race puts", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();
-    const env = { INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" };
-    const { adapter, puts } = adapterWithRecordedPuts(inner, isRaceDoubleWinTestActive({}, env));
-    const key = "ic-cas-race/gating.unset-env";
+    const { adapter, puts } = adapterWithRecordedPuts(inner, false);
+    const key = "ic-cas-race/gating.off";
     await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
     assert.equal(puts.length, 1);
     assert.equal(puts[0].ifNoneMatch, "*");
     await inner.close();
   });
 
-  it("NODE_ENV=production + hook=1 keeps ifNoneMatch (production ignores hook)", async () => {
+  it("setS3CasRaceDoubleWinForTests(true) drops ifNoneMatch on ic-cas-race puts", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();
-    const env = {
-      NODE_ENV: "production",
-      INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
-    };
-    const { adapter, puts } = adapterWithRecordedPuts(inner, isRaceDoubleWinTestActive({}, env));
-    const key = "ic-cas-race/gating.production";
-    await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
-    assert.equal(puts.length, 1);
-    assert.equal(puts[0].ifNoneMatch, "*");
-    await inner.close();
-  });
-
-  it("NODE_ENV=test + hook=1 drops ifNoneMatch on ic-cas-race puts", async () => {
-    const inner = createMemoryStorageAdapter();
-    await inner.init();
-    const env = { NODE_ENV: "test", INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" };
-    const { adapter, puts } = adapterWithRecordedPuts(inner, isRaceDoubleWinTestActive({}, env));
-    const key = "ic-cas-race/gating.test-env";
-    await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
-    assert.equal(puts.length, 1);
-    assert.equal(puts[0].ifNoneMatch, undefined);
-    await inner.close();
-  });
-
-  it("testHooks.raceDoubleWin injection drops ifNoneMatch regardless of NODE_ENV", async () => {
-    const inner = createMemoryStorageAdapter();
-    await inner.init();
-    const env = {
-      NODE_ENV: "production",
-      INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
-    };
-    const { adapter, puts } = adapterWithRecordedPuts(
-      inner,
-      isRaceDoubleWinTestActive({ testHooks: { raceDoubleWin: true } }, env),
-    );
-    const key = "ic-cas-race/gating.injection";
+    setS3CasRaceDoubleWinForTests(true);
+    const { adapter, puts } = adapterWithRecordedPuts(inner, true);
+    const key = "ic-cas-race/gating.on";
     await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
     assert.equal(puts.length, 1);
     assert.equal(puts[0].ifNoneMatch, undefined);
@@ -147,7 +111,7 @@ function writeS3ConfigInHome(homeDir, prefix, s3Config) {
 const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 
 (s3Config ? describe : describe.skip)("CAS hook gating — spawned storage doctor CLI", () => {
-  it("NODE_ENV=production + hook=1 does not report false double-win", () => {
+  it("production CLI without preload does not report false double-win", () => {
     assert.ok(s3Config);
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-home-gating-"));
     const prefix = `${s3Config.prefix}/hook-gating-${Date.now()}`;
@@ -158,7 +122,6 @@ const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
         ...process.env,
         HOME: homeDir,
         NODE_ENV: "production",
-        INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
       },
       encoding: "utf8",
     });
@@ -173,6 +136,10 @@ const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 });
 
 describe("probeCrossDeviceCasRace with gated hook semantics", () => {
+  afterEach(() => {
+    resetS3CasRaceDoubleWinForTests();
+  });
+
   it("double-win wrap fails race probe; strict ifNoneMatch passes on memory adapter", async () => {
     const inner = createMemoryStorageAdapter();
     await inner.init();

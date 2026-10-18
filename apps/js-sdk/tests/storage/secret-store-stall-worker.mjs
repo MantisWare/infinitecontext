@@ -1,3 +1,4 @@
+import { setTestStallBeforeLinkMsForTests } from "../../lib/storage/secret-store-file-generations.mjs";
 import { SecretStore } from "../../lib/storage/secret-store.mjs";
 
 const rootDir = process.argv[2];
@@ -7,9 +8,7 @@ if (!rootDir || !secretName) {
   process.exit(1);
 }
 
-if (stallMs > 0) {
-  process.env.IC_SECRET_STORE_TEST_STALL_BEFORE_LINK_MS = String(stallMs);
-}
+setTestStallBeforeLinkMsForTests(stallMs > 0 ? stallMs : 0);
 
 const store = new SecretStore({ mode: "file", rootDir });
 const value = new TextEncoder().encode(`value-for-${secretName}`);

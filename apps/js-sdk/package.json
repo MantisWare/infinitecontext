@@ -16,6 +16,7 @@
         "prepack": "node scripts/prepack-vendor.mjs && pnpm run build",
         "postinstall": "node postinstall.mjs",
         "guard:12": "bash ../../scripts/check-12-paths.sh",
+        "guard:lib-test-env": "node scripts/check-lib-no-test-env.mjs",
         "storage:emu:up": "bash tests/storage/fixtures/ssh/gen.sh && bash tests/storage/docker-compose.sh -f tests/storage/compose.yaml up -d --wait && node tests/storage/init-minio-bucket.mjs",
         "storage:emu:down": "bash tests/storage/docker-compose.sh -f tests/storage/compose.yaml down -v",
         "test:storage:unit": "node --import ./tests/storage/preload-isolate-home.mjs --test --test-concurrency=1 tests/storage/**/*.test.mjs tests/storage/*.test.mjs",

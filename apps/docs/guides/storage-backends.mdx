@@ -23,6 +23,15 @@ infinitecontext storage doctor
 npm run storage:emu:down
 ```
 
+## Support overrides (environment)
+
+These variables are for support and automated tests — not part of normal setup.
+
+| Variable | Purpose |
+| --- | --- |
+| `INFINITECONTEXT_DEVICE_UUID` | Pin the local device UUID without writing `config.json` (multi-machine debugging). |
+| `INFINITECONTEXT_KEYRING_DURABLE=0` | Opt out of OS keychain auto-selection; logs a loud warning when set. Prefer `storage-secrets` file mode via config for intentional non-keyring setups. |
+
 ## Residual metadata
 
 Encrypted objects still expose **layout prefixes** in AAD and key paths, and small fixed-size device/manifest blobs can leak coarse counts. See `docs/design/storage-object-security.md` for the threat model.

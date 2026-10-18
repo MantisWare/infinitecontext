@@ -3,9 +3,7 @@ import { Entry } from "@napi-rs/keyring";
 import { isLinuxSecretServiceOnSessionBus } from "./secret-store-linux-dbus.mjs";
 import { SECRET_STORE_SERVICE } from "./secret-store-constants.mjs";
 
-import { readTestHook } from "./test-hooks.mjs";
-
-if (readTestHook("keyringProbeForce", process.env) === "fail") {
+if (process.argv.includes("--force-fail")) {
   process.exit(1);
 }
 

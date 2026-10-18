@@ -102,6 +102,7 @@ try {
 }
 
 run("npm", ["run", "guard:12"]);
+run("node", ["scripts/check-lib-no-test-env.mjs"]);
 run("npm", ["run", "check"]);
 
 console.log("premerge: starting storage emulator (MinIO + SFTP)…");

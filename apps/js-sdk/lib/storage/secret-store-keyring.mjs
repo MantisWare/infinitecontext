@@ -68,6 +68,9 @@ export async function isKeyringUsableForAuto() {
     return false;
   }
   if (process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
+    console.warn(
+      "[infinitecontext] INFINITECONTEXT_KEYRING_DURABLE=0 disables OS keychain auto-selection (support/testing opt-out only).",
+    );
     return false;
   }
   return probeKeyringSecretService();

@@ -8,6 +8,10 @@ import { generateClientNodeId } from "../../lib/ic-crypto.mjs";
 import { createInMemoryObjectStoreLocalState } from "../../lib/object-store-local-sync-state.mjs";
 import { createFolderStorageAdapter } from "../../lib/storage/folder-adapter.mjs";
 import { objectKeyDirectory } from "../../lib/storage/filesystem-generations.mjs";
+import {
+  resetObjectStoreSyncSegmentWriteHooksForTests,
+  setObjectStoreSyncSegmentWriteHooksForTests,
+} from "../../lib/object-store-sync.mjs";
 import { ObjectStoreSyncTransport } from "../../lib/storage/object-store-sync-transport.mjs";
 import { normalizeVectorSyncCursor } from "../../lib/sync-cursor.mjs";
 import { SimulatedEventualCopier } from "./helpers/folder-eventual-copier.mjs";
@@ -113,12 +117,16 @@ describe("folder two-device eventual sync transport", () => {
       op: "context_create",
       payload: { metadata: { source: "kill-test" } },
     };
-    const crashed = createTransport(adapter, DEVICE_A, {
-      localState: local,
-      testHookAfterSegmentWrite: () => {},
-      testHookSkipLocalSaveAfterSegmentWrite: true,
+    setObjectStoreSyncSegmentWriteHooksForTests({
+      afterSegmentWrite: () => {},
+      skipLocalSaveAfterSegmentWrite: true,
     });
-    await crashed.pushSyncMutations([mutation]);
+    try {
+      const crashed = createTransport(adapter, DEVICE_A, { localState: local });
+      await crashed.pushSyncMutations([mutation]);
+    } finally {
+      resetObjectStoreSyncSegmentWriteHooksForTests();
+    }
     const recovered = createTransport(adapter, DEVICE_A, local);
     const retry = await recovered.pushSyncMutations([mutation]);
     assert.deepEqual(retry.applied, []);

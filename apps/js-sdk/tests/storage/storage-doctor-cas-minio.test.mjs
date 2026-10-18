@@ -20,6 +20,7 @@ import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const cliEntry = path.join(repoRoot, "src/cli/entry.mjs");
+const raceDoubleWinPreload = path.join(repoRoot, "tests/storage/preload-s3-cas-race-double-win.mjs");
 
 /**
  * @returns {{ bucket: string, prefix: string, region: string, endpoint?: string } | null}
@@ -66,10 +67,15 @@ function writeS3ConfigInHome(homeDir, prefix) {
  * @param {Record<string, string>} [envPatch]
  * @param {string[]} doctorArgs
  */
-function spawnStorageDoctorCli(homeDir, envPatch, doctorArgs) {
+function spawnStorageDoctorCli(homeDir, envPatch, doctorArgs, options = {}) {
+  const env = { ...process.env, ...envPatch, HOME: homeDir };
+  if (options.casRaceDoubleWin) {
+    env.NODE_OPTIONS = `--import=${raceDoubleWinPreload}`;
+    env.NODE_ENV = env.NODE_ENV ?? "test";
+  }
   const res = spawnSync(process.execPath, [cliEntry, "storage", "doctor", ...doctorArgs], {
     cwd: repoRoot,
-    env: { ...process.env, ...envPatch, HOME: homeDir },
+    env,
     encoding: "utf8",
   });
   assert.equal(res.status, 0, res.stderr || res.stdout || `exit ${res.status}`);
@@ -158,11 +164,7 @@ if (requireMinio && !s3Config) {
         bucket: s3Config.bucket,
         prefix,
       });
-      spawnStorageDoctorCli(
-        homeDir,
-        { NODE_ENV: "test", INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
-        ["--cas-race=5"],
-      );
+      spawnStorageDoctorCli(homeDir, {}, ["--cas-race=5"], { casRaceDoubleWin: true });
       const defaultCachePath = storageCasCacheFilePath();
       const beforeMarker = readStorageCasCorruptionMarkerFile(defaultCachePath)?.corruptedAtMs ?? 0;
 
@@ -200,11 +202,7 @@ if (requireMinio && !s3Config) {
       await adapter.init();
       await adapter.close();
 
-      const race = spawnStorageDoctorCli(
-        homeDir,
-        { NODE_ENV: "test", INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
-        ["--cas-race=5"],
-      );
+      const race = spawnStorageDoctorCli(homeDir, {}, ["--cas-race=5"], { casRaceDoubleWin: true });
       assert.equal(race.persistedUnsafe, true);
 
       assert.ok(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)));

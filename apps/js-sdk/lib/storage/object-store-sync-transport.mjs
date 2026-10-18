@@ -18,8 +18,6 @@ import { deriveDevH } from "./layout.mjs";
  * @property {string} [deviceUuid] canonical device UUID (required for sync methods)
  * @property {string} [layoutPrefix] object layout prefix (default `accounts/local`)
  * @property {{ load: () => import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState, save: (s: import('../object-store-local-sync-state.mjs').ObjectStoreLocalSyncState) => void }} localState
- * @property {() => void | Promise<void>} [testHookAfterSegmentWrite] test-only crash hook
- * @property {boolean} [testHookSkipLocalSaveAfterSegmentWrite] simulate crash before local commit
  */
 
 /**
@@ -51,8 +49,6 @@ export class ObjectStoreSyncTransport {
       selfDevH,
       deviceUuid: this.#sync.deviceUuid,
       localState: this.#sync.localState,
-      testHookAfterSegmentWrite: this.#sync.testHookAfterSegmentWrite,
-      testHookSkipLocalSaveAfterSegmentWrite: this.#sync.testHookSkipLocalSaveAfterSegmentWrite,
     };
   }
 

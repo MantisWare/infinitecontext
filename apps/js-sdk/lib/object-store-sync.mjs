@@ -45,7 +45,20 @@ import {
   encryptVaultPlaintextForStoragePut,
 } from "./storage/encrypt-storage-object.mjs";
 import { PreconditionFailedError, StorageError } from "./storage/errors.mjs";
-import { isInjectedTestHookActive } from "./storage/test-hooks.mjs";
+/** @type {{ afterSegmentWrite?: () => void | Promise<void>, skipLocalSaveAfterSegmentWrite?: boolean } | null} */
+let segmentWriteHooksForTests = null;
+
+/**
+ * @param {{ afterSegmentWrite?: () => void | Promise<void>, skipLocalSaveAfterSegmentWrite?: boolean } | null} hooks
+ */
+export function setObjectStoreSyncSegmentWriteHooksForTests(hooks) {
+  segmentWriteHooksForTests = hooks;
+}
+
+/** Reset segment-write crash simulation hooks (tests only). */
+export function resetObjectStoreSyncSegmentWriteHooksForTests() {
+  segmentWriteHooksForTests = null;
+}
 import {
   canonicalDevH,
   decryptLogSegment,
@@ -169,8 +182,6 @@ function segmentClockSkewWallMs(ctx, devH, seq, envelope) {
  * @property {string} selfDevH canonical
  * @property {string} deviceUuid
  * @property {{ load: () => import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState, save: (s: import('./object-store-local-sync-state.mjs').ObjectStoreLocalSyncState) => void }} localState
- * @property {() => void | Promise<void>} [testHookAfterSegmentWrite]
- * @property {boolean} [testHookSkipLocalSaveAfterSegmentWrite]
  */
 
 /** @param {string} key */
@@ -1027,10 +1038,10 @@ export async function objectStorePushSyncMutations(ctx, mutations) {
       const key = logSegmentRelativePath(ctx.layoutPrefix, ctx.selfDevH, seq);
       try {
         await writeLayoutSegmentEnvelope(ctx, key, envelope);
-        if (isInjectedTestHookActive(ctx, "testHookAfterSegmentWrite")) {
-          await ctx.testHookAfterSegmentWrite();
+        if (segmentWriteHooksForTests?.afterSegmentWrite) {
+          await segmentWriteHooksForTests.afterSegmentWrite();
         }
-        if (!isInjectedTestHookActive(ctx, "testHookSkipLocalSaveAfterSegmentWrite")) {
+        if (!segmentWriteHooksForTests?.skipLocalSaveAfterSegmentWrite) {
           commitTrustedHeadAdvance(state, ctx.selfDevH, { seq, digest });
           state.selfNextSeq = seq + 1;
           advanceVectorCursorDevH(state.vectorCursor, ctx.selfDevH, seq);

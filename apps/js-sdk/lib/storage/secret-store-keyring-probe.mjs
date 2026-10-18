@@ -9,6 +9,14 @@ const PROBE_CHILD = fileURLToPath(new URL("./secret-store-keyring-probe-child.mj
 /** @type {boolean | undefined} */
 let cachedProbeResult;
 
+/** @type {boolean} */
+let keyringProbeForceFailForTests = false;
+
+/** @param {boolean} active */
+export function setKeyringProbeForceFailForTests(active) {
+  keyringProbeForceFailForTests = active === true;
+}
+
 /** Clears per-process probe cache (tests only). */
 export function resetKeyringProbeCacheForTests() {
   cachedProbeResult = undefined;
@@ -46,7 +54,8 @@ async function probeKeyringSecretServiceOnce(timeoutMs) {
 function runKeyringProbeChild(timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
-    const child = spawn(process.execPath, [PROBE_CHILD], {
+    const probeArgs = keyringProbeForceFailForTests ? [PROBE_CHILD, "--force-fail"] : [PROBE_CHILD];
+    const child = spawn(process.execPath, probeArgs, {
       env: process.env,
       stdio: "ignore",
     });

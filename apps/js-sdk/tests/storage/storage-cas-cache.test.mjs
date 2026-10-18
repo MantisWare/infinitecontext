@@ -223,6 +223,21 @@ describe("storage CAS cache", () => {
     cache = loadStorageCasCache(cachePath);
     attachStorageCasCorruptionContextForRead(cache, cachePath);
     assert.equal(getStorageCasCacheRecord(cache, bindingKey, now)?.crossDeviceCas, true);
+    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, false);
+  });
+
+  it("doctor race pass clears stale casUnsafe after recheck (sticky outage repro)", () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ic-cas-sticky-")), "cache.json");
+    const bindingKey = "s3:test:bucket:p";
+    markStorageCasUnsafePersisted(cachePath, bindingKey, "race_double_win", 100);
+    recordStorageCasDoctorRecheckSuccess(cachePath, bindingKey);
+    let cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, true);
+    recordStorageCasDoctorRaceSuccess(cachePath, bindingKey);
+    cache = loadStorageCasCache(cachePath);
+    assert.equal(cache.endpoints[bindingKey]?.casUnsafe, false);
+    assert.equal(cache.endpoints[bindingKey]?.unsafeReason, undefined);
+    assert.equal(cache.endpoints[bindingKey]?.crossDeviceCas, true);
   });
 
   it("fail closed on corrupt cache until recheck clears it", () => {
