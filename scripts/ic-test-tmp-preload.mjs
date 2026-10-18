@@ -77,6 +77,22 @@ if (fs.promises?.mkdtemp) {
   };
 }
 
+const originalMkdirSync = fs.mkdirSync.bind(fs);
+fs.mkdirSync = (targetPath, options) => {
+  const out = originalMkdirSync(targetPath, options);
+  maybeTrackToolingDir(targetPath);
+  return out;
+};
+
+if (fs.promises?.mkdir) {
+  const originalMkdir = fs.promises.mkdir.bind(fs.promises);
+  fs.promises.mkdir = async (targetPath, options) => {
+    const out = await originalMkdir(targetPath, options);
+    maybeTrackToolingDir(targetPath);
+    return out;
+  };
+}
+
 export function icTestTmpMkdtempPrefix(label = "") {
   return mkdtempPrefix(label);
 }
