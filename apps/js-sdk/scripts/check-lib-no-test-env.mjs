@@ -1,131 +1,290 @@
-import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as acorn from "acorn";
 
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const libRoot = path.join(sdkRoot, "lib");
 
 if (process.env.ALLOW_LIB_TEST_ENV === "1") {
   console.log("check-lib-no-test-env: ALLOW_LIB_TEST_ENV=1 — skipping lib/ TEST env guard");
   process.exit(0);
 }
 
-/** @type {string[]} */
-const patterns = [
-  String.raw`process\.env\.[A-Z0-9_]*TEST[A-Z0-9_]*`,
-  String.raw`process\.env\[[^\]]*TEST[^\]]*\]`,
-  String.raw`process\.env\s*\[`,
-  String.raw`\{\s*env\s*\}\s*=\s*process`,
-  String.raw`\bIC_TESTING\b`,
-  String.raw`\{\s*[^}]*\b[A-Z0-9_]*TEST[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env`,
-  String.raw`Reflect\.get\s*\(\s*process\.env`,
-  String.raw`Reflect\.get\s*\(\s*\w+\.env`,
-  String.raw`process\.env\.[a-z0-9_]*test[a-z0-9_]*`,
-];
-
-/** @type {string[]} */
-const hits = [];
-
-for (const pattern of patterns) {
-  const res = spawnSync("rg", ["-n", pattern, "lib/"], {
-    cwd: sdkRoot,
-    encoding: "utf8",
-  });
-  if (res.status !== 0 && res.status !== 1) {
-    console.error(`check-lib-no-test-env: rg failed (status ${res.status}) for /${pattern}/`);
-    process.exit(res.status ?? 2);
+/** @param {string} name */
+function isForbiddenTestEnvKey(name) {
+  if (typeof name !== "string" || !name) {
+    return false;
   }
-  const chunk = String(res.stdout ?? "").trim();
-  if (chunk) {
-    hits.push(chunk);
+  if (name === "IC_TESTING") {
+    return true;
   }
+  if (/^IC_TEST[A-Z0-9_]*$/i.test(name)) {
+    return true;
+  }
+  if (!/(?:^|_)TEST(?:_|$)/i.test(name) && !/^TEST_/i.test(name)) {
+    return false;
+  }
+  if (/LATEST_VERSION|MY_TESTER|CONTEST|ATTEST|DETEST|PROTEST/i.test(name)) {
+    return false;
+  }
+  return true;
 }
 
-const aliased = spawnSync(
-  "rg",
-  ["-n", String.raw`(const|let|var)\s+\w+\s*=\s*process\.env`, "lib/"],
-  { cwd: sdkRoot, encoding: "utf8" },
-);
-if (aliased.status === 0) {
-  for (const line of String(aliased.stdout ?? "").split("\n")) {
-    if (!line.trim()) continue;
-    const file = line.split(":")[0];
-    if (!file) continue;
-    const follow = spawnSync("rg", ["-n", String.raw`\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*\b`, file], {
-      cwd: sdkRoot,
-      encoding: "utf8",
+/** @param {import('acorn').Node | null | undefined} node */
+function literalKey(node) {
+  if (!node) {
+    return null;
+  }
+  if (node.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+  if (node.type === "Identifier") {
+    return node.name;
+  }
+  return null;
+}
+
+/**
+ * @param {string} file
+ * @param {string} src
+ * @returns {string[]}
+ */
+function findViolations(file, src) {
+  /** @type {string[]} */
+  const hits = [];
+  /** @type {Map<string, string>} */
+  const envBindings = new Map();
+
+  let program;
+  try {
+    program = acorn.parse(src, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      locations: true,
     });
-    if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
-      hits.push(String(follow.stdout ?? "").trim());
-    }
+  } catch (err) {
+    hits.push(`${file}: parse error ${err instanceof Error ? err.message : String(err)}`);
+    return hits;
   }
-}
 
-const envDestructure = spawnSync(
-  "rg",
-  ["-n", String.raw`(const|let|var)\s*\{\s*env\s*\}\s*=\s*process`, "lib/"],
-  { cwd: sdkRoot, encoding: "utf8" },
-);
-if (envDestructure.status === 0) {
-  for (const line of String(envDestructure.stdout ?? "").split("\n")) {
-    if (!line.trim()) continue;
-    const file = line.split(":")[0];
-    if (!file) continue;
-    const follow = spawnSync("rg", ["-n", String.raw`env\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*`, file], {
-      cwd: sdkRoot,
-      encoding: "utf8",
-    });
-    if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
-      hits.push(String(follow.stdout ?? "").trim());
+  /** @param {import('acorn').Node} node */
+  function noteImport(node) {
+    if (node.type !== "ImportDeclaration") {
+      return;
     }
-  }
-}
-
-const nodeProcessImport = spawnSync(
-  "rg",
-  ["-n", String.raw`from\s+["']node:process["']`, "lib/"],
-  { cwd: sdkRoot, encoding: "utf8" },
-);
-if (nodeProcessImport.status === 0) {
-  for (const line of String(nodeProcessImport.stdout ?? "").split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.split(":");
-    const file = parts[0];
-    if (!file) continue;
-    const importLine = line.slice(line.indexOf(":") + 1);
-    const aliasMatch = importLine.match(
-      /import\s+\{([^}]+)\}\s+from\s+["']node:process["']/,
-    );
-    const defaultMatch = importLine.match(/import\s+(\w+)\s+from\s+["']node:process["']/);
-    /** @type {string[]} */
-    const bindings = [];
-    if (aliasMatch) {
-      for (const part of aliasMatch[1].split(",")) {
-        const trimmed = part.trim();
-        const name = trimmed.split(/\s+as\s+/)[0]?.trim();
-        if (name) bindings.push(name);
-      }
+    const from = node.source.value;
+    if (from !== "node:process" && from !== "process") {
+      return;
     }
-    if (defaultMatch) {
-      bindings.push(defaultMatch[1]);
-    }
-    for (const binding of bindings) {
-      const follow = spawnSync(
-        "rg",
-        ["-n", String.raw`${binding}\.env\.[A-Za-z0-9_]*TEST[A-Za-z0-9_]*`, file],
-        { cwd: sdkRoot, encoding: "utf8" },
-      );
-      if (follow.status === 0 && String(follow.stdout ?? "").trim()) {
-        hits.push(String(follow.stdout ?? "").trim());
+    for (const spec of node.specifiers) {
+      if (spec.type === "ImportDefaultSpecifier") {
+        envBindings.set(spec.local.name, "processModule");
+      } else if (spec.type === "ImportNamespaceSpecifier") {
+        envBindings.set(spec.local.name, "processModule");
+      } else if (spec.type === "ImportSpecifier") {
+        if (spec.imported.name === "env") {
+          envBindings.set(spec.local.name, "env");
+        }
       }
     }
   }
+
+  /** @param {import('acorn').Node} node */
+  function noteTopLevel(node) {
+    if (node.type === "VariableDeclaration") {
+      for (const decl of node.declarations) {
+        if (decl.init?.type === "Identifier" && decl.init.name === "process") {
+          for (const id of [decl.id].flat()) {
+            if (id.type === "Identifier") {
+              envBindings.set(id.name, "processAlias");
+            }
+            if (id.type === "ObjectPattern") {
+              for (const prop of id.properties) {
+                if (prop.type === "Property") {
+                  const key = literalKey(prop.key);
+                  if (key === "env") {
+                    const local = prop.value.type === "Identifier" ? prop.value.name : null;
+                    if (local) {
+                      envBindings.set(local, "env");
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (decl.init?.type === "MemberExpression") {
+          const mem = decl.init;
+          if (
+            mem.object.type === "Identifier" &&
+            mem.object.name === "globalThis" &&
+            mem.property.type === "Identifier" &&
+            mem.property.name === "process"
+          ) {
+            if (decl.id.type === "Identifier") {
+              envBindings.set(decl.id.name, "processAlias");
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** @param {import('acorn').MemberExpression} node @param {number} line */
+  function checkMember(node, line) {
+    const key = literalKey(node.property);
+    if (node.object.type === "MemberExpression") {
+      const inner = node.object;
+      if (
+        inner.object.type === "Identifier" &&
+        inner.object.name === "process" &&
+        inner.property.type === "Identifier" &&
+        inner.property.name === "env" &&
+        key &&
+        isForbiddenTestEnvKey(key)
+      ) {
+        hits.push(`${file}:${line}: process.env.${key}`);
+        return;
+      }
+    }
+    if (node.object.type === "Identifier") {
+      const binding = envBindings.get(node.object.name);
+      if (binding === "env" && key && isForbiddenTestEnvKey(key)) {
+        hits.push(`${file}:${line}: ${node.object.name}.${key}`);
+        return;
+      }
+      if (binding === "processModule" || binding === "processAlias") {
+        if (node.property.type === "Identifier" && node.property.name === "env") {
+          const innerKey = node.parent?.type === "MemberExpression" ? literalKey(node.parent.property) : null;
+          if (innerKey && isForbiddenTestEnvKey(innerKey)) {
+            hits.push(`${file}:${line}: ${node.object.name}.env.${innerKey}`);
+          }
+        }
+      }
+    }
+    if (
+      node.object.type === "MemberExpression" &&
+      node.object.object.type === "Identifier" &&
+      envBindings.get(node.object.object.name) === "processModule" &&
+      node.object.property.type === "Identifier" &&
+      node.object.property.name === "env"
+    ) {
+      hits.push(`${file}:${line}: imported process env.${key}`);
+    }
+  }
+
+  /** @param {import('acorn').Node} node */
+  function walk(node, parent = null) {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    node.parent = parent;
+    if (node.type === "ImportDeclaration") {
+      noteImport(node);
+    }
+    if (node.type === "VariableDeclaration" && (!parent || parent.type === "Program")) {
+      noteTopLevel(node);
+    }
+    if (node.type === "MemberExpression" && !node.computed) {
+      checkMember(node, node.loc?.start.line ?? 0);
+    }
+    if (node.type === "MemberExpression" && node.computed && node.property.type === "Literal") {
+      checkMember(node, node.loc?.start.line ?? 0);
+    }
+    if (node.type === "CallExpression") {
+      if (
+        node.callee.type === "MemberExpression" &&
+        node.callee.object.type === "Identifier" &&
+        node.callee.object.name === "Reflect" &&
+        node.callee.property.type === "Identifier" &&
+        node.callee.property.name === "get" &&
+        node.arguments.length >= 2
+      ) {
+        const obj = node.arguments[0];
+        const prop = node.arguments[1];
+        if (
+          obj.type === "MemberExpression" &&
+          obj.object.type === "Identifier" &&
+          obj.object.name === "process" &&
+          obj.property.type === "Identifier" &&
+          obj.property.name === "env"
+        ) {
+          const key = literalKey(prop);
+          if (key && isForbiddenTestEnvKey(key)) {
+            hits.push(`${file}:${node.loc?.start.line ?? 0}: Reflect.get(process.env, ${key})`);
+          }
+        }
+      }
+      if (
+        node.callee.type === "MemberExpression" &&
+        node.callee.property.type === "Identifier" &&
+        node.callee.property.name === "entries" &&
+        node.arguments[0]?.type === "MemberExpression"
+      ) {
+        const arg = node.arguments[0];
+        if (
+          arg.object.type === "Identifier" &&
+          arg.object.name === "process" &&
+          arg.property.type === "Identifier" &&
+          arg.property.name === "env"
+        ) {
+          hits.push(`${file}:${node.loc?.start.line ?? 0}: Object.entries(process.env) scan`);
+        }
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "parent") {
+        continue;
+      }
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const c of child) {
+          if (c && typeof c.type === "string") {
+            walk(c, node);
+          }
+        }
+      } else if (child && typeof child.type === "string") {
+        walk(child, node);
+      }
+    }
+  }
+
+  walk(program);
+  return hits;
 }
 
-const unique = [...new Set(hits.join("\n").split("\n").filter(Boolean))];
+/** @param {string} dir @param {string[]} out */
+function walkLib(dir, out) {
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    const st = fs.statSync(full);
+    if (st.isDirectory()) {
+      walkLib(full, out);
+      continue;
+    }
+    if (!name.endsWith(".mjs") && !name.endsWith(".js")) {
+      continue;
+    }
+    out.push(full);
+  }
+}
+
+/** @type {string[]} */
+const files = [];
+walkLib(libRoot, files);
+
+/** @type {string[]} */
+const allHits = [];
+for (const file of files) {
+  const rel = path.relative(sdkRoot, file);
+  const src = fs.readFileSync(file, "utf8");
+  allHits.push(...findViolations(rel, src));
+}
+
+const unique = [...new Set(allHits)];
 if (unique.length > 0) {
-  console.error(
-    "check-lib-no-test-env: lib/ must not read process.env.*TEST (use *ForTests setters in tests):\n",
-  );
+  console.error("check-lib-no-test-env: lib/ must not read process.env.*TEST (use *ForTests setters in tests):\n");
   console.error(unique.join("\n"));
   process.exit(1);
 }

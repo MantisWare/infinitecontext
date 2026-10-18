@@ -1,6 +1,5 @@
 /**
- * Tracks mkdtemp dirs for this premerge/test run and removes them on exit/signal.
- * When IC_TEST_TMP_RUN_TAG is set, only dirs with that prefix are tracked/cleaned.
+ * Tracks mkdtemp dirs created by THIS process only; removes them on exit/signal.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -74,24 +73,25 @@ function cleanupTrackedIcTmpDirs() {
     }
   }
   trackedIcTmpDirs.clear();
-  if (runTag) {
-    try {
-      for (const name of fs.readdirSync(tmpRoot)) {
-        if (!basenameMatchesRunTag(name)) continue;
-        fs.rmSync(path.join(tmpRoot, name), { recursive: true, force: true });
-      }
-    } catch {
-      /* ignore */
-    }
-  }
 }
 
 function cleanupLegacySyncPackOutDirs() {
   try {
     for (const name of fs.readdirSync(tmpRoot)) {
-      if (!name.startsWith("ic-sync-pack-out-")) continue;
-      if (runTag && !name.startsWith(`${runTag}-`)) continue;
-      fs.rmSync(path.join(tmpRoot, name), { recursive: true, force: true });
+      if (!name.startsWith("ic-sync-pack-out-")) {
+        continue;
+      }
+      if (runTag && !name.startsWith(`${runTag}-`)) {
+        continue;
+      }
+      const full = path.join(tmpRoot, name);
+      if (trackedIcTmpDirs.has(full)) {
+        try {
+          fs.rmSync(full, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+      }
     }
   } catch {
     /* ignore */

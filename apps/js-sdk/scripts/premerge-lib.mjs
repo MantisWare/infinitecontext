@@ -134,6 +134,7 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/parsers": 115,
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
+  "@infinitecontext/sync-cursor": 1,
   infinitecontext: 562,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
@@ -202,12 +203,15 @@ export function parsePremergePackageCounts(output) {
     if (name.includes("python-sdk") && totals.blocks === 0) {
       const failed = section.match(/(\d+) failed/);
       const passed = section.match(/(\d+) passed/);
+      const skippedPy = section.match(/(\d+) skipped/);
       const failCount = failed ? Number(failed[1]) : 0;
       const passCount = passed ? Number(passed[1]) : 0;
-      if (failCount > 0 || passCount > 0) {
-        totals.tests = passCount + failCount;
+      const skipCount = skippedPy ? Number(skippedPy[1]) : 0;
+      if (failCount > 0 || passCount > 0 || skipCount > 0) {
+        totals.tests = passCount + failCount + skipCount;
         totals.pass = passCount;
         totals.fail = failCount;
+        totals.skipped = skipCount;
         totals.blocks = 1;
       } else if (
         /python-sdk: (test|check) failed/.test(section) ||
@@ -327,7 +331,7 @@ export function assertPremergePackageTestSections(output) {
  * @param {string} [runTag] IC_TEST_TMP_RUN_TAG — when set, only dirs for this premerge run.
  * @returns {Set<string>}
  */
-export function listAllIcTmpDirs(runTag = process.env.IC_TEST_TMP_RUN_TAG) {
+export function listAllIcTmpDirs() {
   const tmpRoot = path.resolve(os.tmpdir());
   /** @type {Set<string>} */
   const found = new Set();
@@ -337,16 +341,15 @@ export function listAllIcTmpDirs(runTag = process.env.IC_TEST_TMP_RUN_TAG) {
   } catch {
     return found;
   }
-  const tag = String(runTag ?? "").trim();
   for (const name of entries) {
-    if (tag) {
-      if (!name.startsWith(`${tag}-`) && name !== tag) {
-        continue;
+    const full = path.join(tmpRoot, name);
+    try {
+      if (fs.statSync(full).isDirectory()) {
+        found.add(full);
       }
-    } else if (!name.startsWith("ic-")) {
-      continue;
+    } catch {
+      /* ignore */
     }
-    found.add(path.join(tmpRoot, name));
   }
   return found;
 }

@@ -10,6 +10,7 @@ import {
   absorbNodeTestTotals,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
+  assertNoNewIcTmpDirLeaks,
   assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
@@ -79,12 +80,45 @@ python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Ins
 `;
     const row = parsePremergePackageCounts(fakePnpmOut).get("infinitecontext-python-sdk");
     assert.ok(row?.pythonVenvUnavailable);
-    assert.throws(() => assertPremergePackageTestSections(fakePnpmOut, "/workspace"), (err) => {
+    assert.throws(() => assertPremergePackageTestSections(fakePnpmOut), (err) => {
       const text = String(err);
       assert.match(text, /0 tests is never a pass/);
       assert.match(text, /Python 3\.8 .venv/);
       return true;
     });
+  });
+
+  it("detects untagged new dirs in TMPDIR leak check", () => {
+    const before = new Set(["/tmp/a"]);
+    const after = new Set(["/tmp/a", "/tmp/ic-untagged-leak"]);
+    assert.throws(
+      () => assertNoNewIcTmpDirLeaks(before, after),
+      /left new temp directories/,
+    );
+  });
+
+  it("reports dirs left by a leaking storage test (tagged mkdtemp outside preload tracking)", () => {
+    const runTag = "ic-premerge-99999-deadbeef";
+    const before = new Set([`/tmp/${runTag}-tmpdir-abc`]);
+    const leakedByBadTest = `/tmp/${runTag}-storage-leak-left-behind`;
+    const after = new Set([...before, leakedByBadTest]);
+    assert.throws(
+      () => assertNoNewIcTmpDirLeaks(before, after),
+      /left new temp directories.*storage-leak-left-behind/s,
+    );
+  });
+
+  it("parses pytest skipped counts", () => {
+    const out = `
+> infinitecontext-python-sdk@ test /workspace/apps/python-sdk
+> node scripts/run-pytest.mjs
+
+3 passed, 1 skipped in 0.01s
+`;
+    const row = parsePremergePackageCounts(out).get("infinitecontext-python-sdk");
+    assert.equal(row?.pass, 3);
+    assert.equal(row?.skipped, 1);
+    assert.equal(row?.tests, 4);
   });
 
   it("parses pytest '1 failed, 2 passed' summaries", () => {
