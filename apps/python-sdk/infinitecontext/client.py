@@ -1,7 +1,9 @@
 """InfiniteContext API client."""
 
+from __future__ import annotations
+
 import os
-from typing import Any, Dict, List, Optional, Union, overload
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast, overload
 from urllib.parse import quote
 
 import httpx
@@ -18,6 +20,8 @@ from .types import (
     PermanentDeleteResponse,
     UpdateResponse,
 )
+
+T = TypeVar("T")
 
 
 class _BaseClient:
@@ -50,6 +54,11 @@ class _BaseClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
+
+    @staticmethod
+    def _as_json(value: Any, _response_type: Type[T]) -> T:
+        """Narrow httpx JSON payloads to declared response TypedDicts."""
+        return cast(T, value)
 
 
 class InfiniteContext(_BaseClient):
@@ -132,7 +141,10 @@ class InfiniteContext(_BaseClient):
         if metadata is not None:
             body["metadata"] = metadata
 
-        return self._request("POST", "/contexts", json=body or None)
+        return self._as_json(
+            self._request("POST", "/contexts", json=body or None),
+            CreateContextResponse,
+        )
 
     @overload
     def get(self, *, limit: Optional[int] = None) -> ListContextsResponse: ...
@@ -171,21 +183,31 @@ class InfiniteContext(_BaseClient):
         """
         # list all contexts
         if context_id is None:
-            params = {"limit": limit} if limit else None
-            return self._request("GET", "/contexts", params=params)
+            list_params: Optional[Dict[str, Any]] = {"limit": limit} if limit else None
+            return self._as_json(
+                self._request("GET", "/contexts", params=list_params),
+                ListContextsResponse,
+            )
 
         # get single context
-        params: Dict[str, Any] = {}
+        single_params: Dict[str, Any] = {}
         if version is not None:
-            params["version"] = version
+            single_params["version"] = version
         if at is not None:
-            params["at"] = at
+            single_params["at"] = at
         if before is not None:
-            params["before"] = before
+            single_params["before"] = before
         if history is not None:
-            params["history"] = history
+            single_params["history"] = history
 
-        return self._request("GET", f"/contexts/{quote(context_id, safe='')}", params=params or None)
+        return self._as_json(
+            self._request(
+                "GET",
+                f"/contexts/{quote(context_id, safe='')}",
+                params=single_params or None,
+            ),
+            GetContextResponse,
+        )
 
     def append(
         self,
@@ -200,7 +222,10 @@ class InfiniteContext(_BaseClient):
             data: Single message or list of messages
         """
         items = data if isinstance(data, list) else [data]
-        return self._request("POST", f"/contexts/{quote(context_id, safe='')}", json=items)
+        return self._as_json(
+            self._request("POST", f"/contexts/{quote(context_id, safe='')}", json=items),
+            AppendResponse,
+        )
 
     def update(
         self,
@@ -228,7 +253,10 @@ class InfiniteContext(_BaseClient):
             body: Dict[str, Any] = {"updates": updates}
             if metadata:
                 body["metadata"] = metadata
-            return self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body)
+            return self._as_json(
+                self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body),
+                UpdateResponse,
+            )
 
         # single mode
         body = {**fields}
@@ -241,7 +269,10 @@ class InfiniteContext(_BaseClient):
         if metadata:
             body = {"updates": [body], "metadata": metadata}
 
-        return self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body)
+        return self._as_json(
+            self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body),
+            UpdateResponse,
+        )
 
     def delete(
         self,
@@ -265,20 +296,34 @@ class InfiniteContext(_BaseClient):
         if permanent:
             if ids is not None:
                 raise ValueError("Cannot pass both `ids` and `permanent=True`")
-            body: Optional[Dict[str, Any]] = {"permanent": True}
+            permanent_body: Dict[str, Any] = {"permanent": True}
             if metadata:
-                body["metadata"] = metadata
-            return self._request("DELETE", f"/contexts/{quote(context_id, safe='')}", json=body)
+                permanent_body["metadata"] = metadata
+            return self._as_json(
+                self._request(
+                    "DELETE",
+                    f"/contexts/{quote(context_id, safe='')}",
+                    json=permanent_body,
+                ),
+                PermanentDeleteResponse,
+            )
 
         if ids is None:
             raise ValueError("Either `ids` (soft delete) or `permanent=True` (hard delete) is required")
 
         items = ids if isinstance(ids, list) else [ids]
-        body = {"ids": items}
+        soft_body: Dict[str, Any] = {"ids": items}
         if metadata:
-            body["metadata"] = metadata
+            soft_body["metadata"] = metadata
 
-        return self._request("DELETE", f"/contexts/{quote(context_id, safe='')}", json=body)
+        return self._as_json(
+            self._request(
+                "DELETE",
+                f"/contexts/{quote(context_id, safe='')}",
+                json=soft_body,
+            ),
+            DeleteResponse,
+        )
 
     def delete_many(self, ids: List[str]) -> DeleteManyResponse:
         """
@@ -290,7 +335,15 @@ class InfiniteContext(_BaseClient):
         Args:
             ids: List of context IDs to delete
         """
-        return self._request("POST", "/contexts/delete-many", json={"ids": ids}, accept_statuses=[200, 207, 500])
+        return self._as_json(
+            self._request(
+                "POST",
+                "/contexts/delete-many",
+                json={"ids": ids},
+                accept_statuses=[200, 207, 500],
+            ),
+            DeleteManyResponse,
+        )
 
 
 class AsyncInfiniteContext(_BaseClient):
@@ -364,7 +417,10 @@ class AsyncInfiniteContext(_BaseClient):
         if metadata is not None:
             body["metadata"] = metadata
 
-        return await self._request("POST", "/contexts", json=body or None)
+        return self._as_json(
+            await self._request("POST", "/contexts", json=body or None),
+            CreateContextResponse,
+        )
 
     @overload
     async def get(self, *, limit: Optional[int] = None) -> ListContextsResponse: ...
@@ -394,21 +450,31 @@ class AsyncInfiniteContext(_BaseClient):
 
         # list all contexts
         if context_id is None:
-            params = {"limit": limit} if limit else None
-            return await self._request("GET", "/contexts", params=params)
+            list_params: Optional[Dict[str, Any]] = {"limit": limit} if limit else None
+            return self._as_json(
+                await self._request("GET", "/contexts", params=list_params),
+                ListContextsResponse,
+            )
 
         # get single context
-        params: Dict[str, Any] = {}
+        single_params: Dict[str, Any] = {}
         if version is not None:
-            params["version"] = version
+            single_params["version"] = version
         if at is not None:
-            params["at"] = at
+            single_params["at"] = at
         if before is not None:
-            params["before"] = before
+            single_params["before"] = before
         if history is not None:
-            params["history"] = history
+            single_params["history"] = history
 
-        return await self._request("GET", f"/contexts/{quote(context_id, safe='')}", params=params or None)
+        return self._as_json(
+            await self._request(
+                "GET",
+                f"/contexts/{quote(context_id, safe='')}",
+                params=single_params or None,
+            ),
+            GetContextResponse,
+        )
 
     async def append(
         self,
@@ -417,7 +483,10 @@ class AsyncInfiniteContext(_BaseClient):
     ) -> AppendResponse:
         """Append messages to context."""
         items = data if isinstance(data, list) else [data]
-        return await self._request("POST", f"/contexts/{quote(context_id, safe='')}", json=items)
+        return self._as_json(
+            await self._request("POST", f"/contexts/{quote(context_id, safe='')}", json=items),
+            AppendResponse,
+        )
 
     async def update(
         self,
@@ -435,7 +504,10 @@ class AsyncInfiniteContext(_BaseClient):
             body: Dict[str, Any] = {"updates": updates}
             if metadata:
                 body["metadata"] = metadata
-            return await self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body)
+            return self._as_json(
+                await self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body),
+                UpdateResponse,
+            )
 
         # single mode
         body = {**fields}
@@ -447,7 +519,10 @@ class AsyncInfiniteContext(_BaseClient):
         if metadata:
             body = {"updates": [body], "metadata": metadata}
 
-        return await self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body)
+        return self._as_json(
+            await self._request("PATCH", f"/contexts/{quote(context_id, safe='')}", json=body),
+            UpdateResponse,
+        )
 
     async def delete(
         self,
@@ -461,21 +536,43 @@ class AsyncInfiniteContext(_BaseClient):
         if permanent:
             if ids is not None:
                 raise ValueError("Cannot pass both `ids` and `permanent=True`")
-            body: Optional[Dict[str, Any]] = {"permanent": True}
+            permanent_body: Dict[str, Any] = {"permanent": True}
             if metadata:
-                body["metadata"] = metadata
-            return await self._request("DELETE", f"/contexts/{quote(context_id, safe='')}", json=body)
+                permanent_body["metadata"] = metadata
+            return self._as_json(
+                await self._request(
+                    "DELETE",
+                    f"/contexts/{quote(context_id, safe='')}",
+                    json=permanent_body,
+                ),
+                PermanentDeleteResponse,
+            )
 
         if ids is None:
             raise ValueError("Either `ids` (soft delete) or `permanent=True` (hard delete) is required")
 
         items = ids if isinstance(ids, list) else [ids]
-        body = {"ids": items}
+        soft_body: Dict[str, Any] = {"ids": items}
         if metadata:
-            body["metadata"] = metadata
+            soft_body["metadata"] = metadata
 
-        return await self._request("DELETE", f"/contexts/{quote(context_id, safe='')}", json=body)
+        return self._as_json(
+            await self._request(
+                "DELETE",
+                f"/contexts/{quote(context_id, safe='')}",
+                json=soft_body,
+            ),
+            DeleteResponse,
+        )
 
     async def delete_many(self, ids: List[str]) -> DeleteManyResponse:
         """Delete multiple contexts permanently (max 100). 200/207/500 all carry a results body."""
-        return await self._request("POST", "/contexts/delete-many", json={"ids": ids}, accept_statuses=[200, 207, 500])
+        return self._as_json(
+            await self._request(
+                "POST",
+                "/contexts/delete-many",
+                json={"ids": ids},
+                accept_statuses=[200, 207, 500],
+            ),
+            DeleteManyResponse,
+        )

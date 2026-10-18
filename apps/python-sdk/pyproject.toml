@@ -27,7 +27,7 @@ classifiers = [
 dependencies = ["httpx>=0.24.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0", "mypy>=1.0.0"]
+dev = ["pytest==8.3.5", "pytest-asyncio==0.24.0", "mypy==1.14.1"]
 
 [project.urls]
 Homepage = "https://infinitecontext.ai"
@@ -37,9 +37,17 @@ Repository = "https://github.com/MantisWare/infinitecontext"
 [tool.hatch.build.targets.wheel]
 packages = ["infinitecontext"]
 
+# Mypy must run on a Python 3.8 interpreter (see CONTRIBUTING.md). Use `npm run check`
+# or `.venv/bin/mypy` after `uv venv --python 3.8`. Plain `mypy` on 3.9+ is rejected
+# by mypy_gate_plugin.py so httpx stays fully typed without skipping imports.
 [tool.mypy]
+python_version = "3.8"
+files = ["infinitecontext", "tests"]
 strict = true
+plugins = ["mypy_gate_plugin"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
