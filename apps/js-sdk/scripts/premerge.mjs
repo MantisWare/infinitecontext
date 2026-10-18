@@ -126,6 +126,9 @@ function loadApiEnvFile() {
     ) {
       value = value.slice(1, -1);
     }
+    if (key === "EXPECTED_SHA") {
+      continue;
+    }
     if (process.env[key] === undefined) {
       process.env[key] = value;
     }
