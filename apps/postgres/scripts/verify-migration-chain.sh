@@ -129,7 +129,11 @@ compose_cleanup() {
 }
 
 if [[ "$use_docker" == true ]]; then
-  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-infinitecontext_mv_${$}_${RANDOM}}"
+  if [[ -n "${MIGRATION_VERIFY_COMPOSE_PROJECT:-}" ]]; then
+    COMPOSE_PROJECT_NAME="$MIGRATION_VERIFY_COMPOSE_PROJECT"
+  else
+    COMPOSE_PROJECT_NAME="infinitecontext_mv_${$}_${RANDOM}"
+  fi
   export COMPOSE_PROJECT_NAME
   if [[ -z "${POSTGRES_PORT:-}" ]]; then
     POSTGRES_PORT="$(pick_free_port)"
