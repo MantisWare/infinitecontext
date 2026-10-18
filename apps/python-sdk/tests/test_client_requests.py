@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import List
+from contextlib import contextmanager
+from typing import Generator, List
 from unittest.mock import patch
 
 import httpx
@@ -23,27 +24,31 @@ def _async_client() -> AsyncInfiniteContext:
     return AsyncInfiniteContext(api_key="ic_test_key", base_url="http://mock.test")
 
 
-def _patch_sync_transport(transport: httpx.MockTransport) -> patch:
-    return patch(
+@contextmanager
+def _patch_sync_transport(transport: httpx.MockTransport) -> Generator[None, None, None]:
+    with patch(
         "infinitecontext.client.httpx.Client",
         side_effect=lambda *args, **kwargs: _RealSyncClient(
             transport=transport,
             timeout=kwargs["timeout"],
         ),
-    )
+    ):
+        yield
 
 
-def _patch_async_transport(transport: httpx.MockTransport) -> patch:
-    return patch(
+@contextmanager
+def _patch_async_transport(transport: httpx.MockTransport) -> Generator[None, None, None]:
+    with patch(
         "infinitecontext.client.httpx.AsyncClient",
         side_effect=lambda *args, **kwargs: _RealAsyncClient(
             transport=transport,
             timeout=kwargs["timeout"],
         ),
-    )
+    ):
+        yield
 
 
-def test_create_posts_json_body():
+def test_create_posts_json_body() -> None:
     captured: List[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -67,7 +72,7 @@ def test_create_posts_json_body():
     assert len(captured) == 1
 
 
-def test_get_list_uses_limit_query():
+def test_get_list_uses_limit_query() -> None:
     captured: List[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -87,7 +92,7 @@ def test_get_list_uses_limit_query():
     assert len(captured) == 1
 
 
-def test_http_error_raises_infinite_context_http_error():
+def test_http_error_raises_infinite_context_http_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="unauthorized")
 
@@ -102,7 +107,7 @@ def test_http_error_raises_infinite_context_http_error():
 
 
 @pytest.mark.asyncio
-async def test_async_append_posts_messages():
+async def test_async_append_posts_messages() -> None:
     captured: List[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

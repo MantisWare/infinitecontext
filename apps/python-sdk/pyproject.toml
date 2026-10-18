@@ -39,13 +39,8 @@ packages = ["infinitecontext"]
 
 [tool.mypy]
 python_version = "3.8"
-files = ["infinitecontext"]
-exclude = ["tests/"]
+files = ["infinitecontext", "tests"]
 strict = true
-
-[[tool.mypy.overrides]]
-module = ["anyio", "anyio.*", "httpcore", "httpcore.*", "httpx", "httpx.*"]
-follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
