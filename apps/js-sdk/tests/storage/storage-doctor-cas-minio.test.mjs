@@ -94,12 +94,20 @@ async function withIsolatedInfinitecontextHome(fn) {
   await fn(homeDir);
 }
 
-const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
+const bucketEnv = String(process.env.INFINITECONTEXT_S3_TEST_BUCKET ?? "").trim();
+const endpointEnv = String(process.env.AWS_ENDPOINT_URL ?? process.env.INFINITECONTEXT_S3_ENDPOINT ?? "").trim();
+if (requireMinio && (!bucketEnv || !endpointEnv)) {
+  throw new Error(
+    "IC_REQUIRE_MINIO=1 but S3 test config is missing (set AWS_ENDPOINT_URL and INFINITECONTEXT_S3_TEST_BUCKET)",
+  );
+}
+
+const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 
 if (requireMinio && !s3Config) {
   throw new Error(
-    "IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable (set AWS_ENDPOINT_URL and INFINITECONTEXT_S3_TEST_BUCKET)",
+    "IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable (check AWS_ENDPOINT_URL and bucket)",
   );
 }
 
@@ -289,6 +297,3 @@ if (requireMinio && !s3Config) {
   });
 });
 
-if (requireMinio && !s3Config) {
-  throw new Error("IC_REQUIRE_MINIO=1 but S3 test config is missing");
-}

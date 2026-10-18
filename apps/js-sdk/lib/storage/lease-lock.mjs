@@ -43,14 +43,22 @@ export function isLeaseLockHeldBy(payload, ownerDevH, nowMs = Date.now()) {
  * @param {string} layoutPrefix
  * @param {string} lockName
  */
-async function readLeasePayload(adapter, dek, layoutPrefix, lockName) {
+/**
+ * @returns {Promise<{ key: string, payload: LeaseLockPayload, etag: string } | null>}
+ */
+async function readLeaseObject(adapter, dek, layoutPrefix, lockName) {
   const key = lockRelativePath(layoutPrefix, lockName);
   const row = await adapter.get(key);
-  if (!row?.body) return null;
+  if (!row?.body || !row.etag) return null;
   const plain = decryptVaultStorageObjectPlaintext(dek, key, row.body);
   const payload = plain[LEASE_PLAIN_FIELD];
   if (!payload || typeof payload !== "object") return null;
-  return /** @type {LeaseLockPayload} */ (payload);
+  return { key, payload: /** @type {LeaseLockPayload} */ (payload), etag: row.etag };
+}
+
+async function readLeasePayload(adapter, dek, layoutPrefix, lockName) {
+  const row = await readLeaseObject(adapter, dek, layoutPrefix, lockName);
+  return row?.payload ?? null;
 }
 
 /**
@@ -119,9 +127,9 @@ async function acquireLeaseLockOnce(options) {
   }
   if (existing && isLeaseLockStale(existing, now)) {
     try {
-      const head = await options.adapter.head(key);
-      if (head?.etag) {
-        await options.adapter.delete(key, { ifMatch: head.etag });
+      const row = await options.adapter.get(key);
+      if (row?.etag) {
+        await options.adapter.delete(key, { ifMatch: row.etag });
       }
     } catch {
       /* best-effort break stale */
@@ -180,14 +188,13 @@ export async function acquireLeaseLock(options) {
  */
 export async function renewLeaseLock(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
-  const existing = await readLeasePayload(options.adapter, options.dek, options.layoutPrefix, options.lockName);
-  if (!existing || !isLeaseLockHeldBy(existing, ownerDevH) || String(existing.nonce) !== String(options.nonce)) {
+  const row = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, options.lockName);
+  if (
+    !row ||
+    !isLeaseLockHeldBy(row.payload, ownerDevH) ||
+    String(row.payload.nonce) !== String(options.nonce)
+  ) {
     throw new Error("Cannot renew lease lock: not held");
-  }
-  const key = lockRelativePath(options.layoutPrefix, options.lockName);
-  const head = await options.adapter.head(key);
-  if (!head?.etag) {
-    throw new Error("Cannot renew lease lock: lock object missing");
   }
   /** @type {LeaseLockPayload} */
   const payload = {
@@ -201,7 +208,7 @@ export async function renewLeaseLock(options) {
     options.layoutPrefix,
     options.lockName,
     payload,
-    head?.etag,
+    row.etag,
   );
 }
 
@@ -216,17 +223,16 @@ export async function renewLeaseLock(options) {
  */
 export async function releaseLeaseLock(options) {
   const ownerDevH = canonicalDevH(options.ownerDevH);
-  const existing = await readLeasePayload(options.adapter, options.dek, options.layoutPrefix, options.lockName);
-  if (!existing || canonicalDevH(existing.owner_dev_h) !== ownerDevH || String(existing.nonce) !== String(options.nonce)) {
-    return;
-  }
-  const key = lockRelativePath(options.layoutPrefix, options.lockName);
-  const head = await options.adapter.head(key);
-  if (!head?.etag) {
+  const row = await readLeaseObject(options.adapter, options.dek, options.layoutPrefix, options.lockName);
+  if (
+    !row ||
+    canonicalDevH(row.payload.owner_dev_h) !== ownerDevH ||
+    String(row.payload.nonce) !== String(options.nonce)
+  ) {
     return;
   }
   try {
-    await options.adapter.delete(key, { ifMatch: head.etag });
+    await options.adapter.delete(row.key, { ifMatch: row.etag });
   } catch {
     /* owner verified payload; etag race means another holder won */
   }

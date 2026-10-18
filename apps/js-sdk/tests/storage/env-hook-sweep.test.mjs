@@ -30,15 +30,33 @@ describe("production env-hook sweep (QA #6b/c)", () => {
     assert.equal(hits, "", `unexpected TEST env reads in src/:\n${hits}`);
   });
 
-  it("ignores test-only env vars under NODE_ENV=production", async () => {
-    const prodEnv = {
-      ...process.env,
-      NODE_ENV: "production",
-      INFINITECONTEXT_KEYRING_DURABLE: "0",
-      INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
-    };
-    const keyringOk = await isKeyringUsableForAuto();
-    assert.equal(typeof keyringOk, "boolean");
+  it("ignores test-only env vars under NODE_ENV=production", () => {
+    const keyringModule = path.join(sdkRoot, "lib/storage/secret-store-keyring.mjs");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { isKeyringUsableForAuto } from ${JSON.stringify(keyringModule)};
+const ok = await isKeyringUsableForAuto();
+if (process.env.INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST !== "1") process.exit(2);
+console.log(JSON.stringify({ ok, nodeEnv: process.env.NODE_ENV }));`,
+      ],
+      {
+        cwd: sdkRoot,
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          INFINITECONTEXT_KEYRING_DURABLE: "0",
+          INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1",
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const parsed = JSON.parse(String(child.stdout).trim());
+    assert.equal(parsed.nodeEnv, "production");
+    assert.equal(typeof parsed.ok, "boolean");
     assert.equal(TOMBSTONE_SWEEP_MAX_AGE_MS, 7 * 24 * 60 * 60 * 1000);
   });
 

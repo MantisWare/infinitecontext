@@ -1,7 +1,7 @@
 import { NotSupportedError } from "./errors.mjs";
 
 export const CAS_CONDITIONAL_WRITES_DOCTOR_HINT =
-  "This storage isn't confirmed to support safe conditional writes. Run `infinitecontext config doctor --recheck-cas`.";
+  "This storage isn't confirmed to support safe conditional writes. Run `infinitecontext storage doctor --recheck-cas`.";
 
 export class CasConditionalWritesUnconfirmedError extends Error {
   constructor(message = CAS_CONDITIONAL_WRITES_DOCTOR_HINT) {

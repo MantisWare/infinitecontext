@@ -16,6 +16,7 @@ const DEV_A = deriveDevH(TEST_DEK, "11111111-1111-4111-8111-111111111111");
 const DEV_B = deriveDevH(TEST_DEK, "22222222-2222-4222-8222-222222222222");
 const LAYOUT_PREFIX = "acct/lease-late";
 
+/** See also `lease-lock-owner.test.mjs` for concurrent renew/release vs stale-break. */
 describe("lease lock late release (audit S2)", () => {
   it("late release by A does not delete B's live lock", async () => {
     const adapter = createMemoryStorageAdapter();

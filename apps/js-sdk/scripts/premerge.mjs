@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 import {
@@ -6,6 +7,7 @@ import {
   absorbNodeTestTotals,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
+  assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
   parseNodeVersionParts,
   resolveRepoRootsFromImportMeta,
@@ -19,8 +21,8 @@ const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");
 /** @type {{ pass: number, fail: number, skipped: number, tests: number }} */
 const totals = { pass: 0, fail: 0, skipped: 0, tests: 0 };
 
-/** @type {0 | 1 | 2 | 130 | 143} */
-let exitCode = 0;
+/** @type {import("node:child_process").ChildProcess | null} */
+let activeChild = null;
 
 /** Set true before storage:emu:up so failed starts still run storage:emu:down. */
 let emuStarted = false;
@@ -28,9 +30,108 @@ let cleaning = false;
 
 function fail(message, code = 1) {
   console.error(message);
-  exitCode = code;
   cleanupEmu();
   process.exit(code);
+}
+
+function loadApiEnvFile() {
+  const envLocal = path.join(repoRoot, "apps/api/.env.local");
+  if (!fs.existsSync(envLocal)) {
+    return;
+  }
+  for (const line of fs.readFileSync(envLocal, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function ensurePostgresEnvForPremerge() {
+  loadApiEnvFile();
+  const password = String(process.env.POSTGRES_PASSWORD ?? "").trim();
+  if (!password) {
+    fail(
+      "premerge: POSTGRES_PASSWORD is required for API live postgres suites. Set apps/api/.env.local or export POSTGRES_PASSWORD, or run `pnpm infinitecontext:db:up` with a known password.",
+    );
+  }
+  if (!process.env.SYNC_E2E_DATABASE_URL && !process.env.VAULT_E2E_DATABASE_URL) {
+    process.env.SYNC_E2E_DATABASE_URL =
+      process.env.SYNC_E2E_DATABASE_URL ??
+      `postgresql://infinitecontext:${encodeURIComponent(password)}@127.0.0.1:5433/infinitecontext`;
+    process.env.VAULT_E2E_DATABASE_URL =
+      process.env.VAULT_E2E_DATABASE_URL ??
+      `postgresql://infinitecontext:${encodeURIComponent(password)}@127.0.0.1:5433/infinitecontext_vault_e2e`;
+  }
+  const probe = spawnSync(
+    "psql",
+    [
+      "-h",
+      "127.0.0.1",
+      "-p",
+      "5433",
+      "-U",
+      "infinitecontext",
+      "-d",
+      "postgres",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-c",
+      "SELECT 1",
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PGPASSWORD: password },
+    },
+  );
+  if (probe.status !== 0) {
+    const up = spawnSync("pnpm", ["infinitecontext:db:up"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: "inherit",
+    });
+    if (up.status !== 0) {
+      fail(
+        "premerge: PostgreSQL at 127.0.0.1:5433 is unreachable and `pnpm infinitecontext:db:up` failed. Fix Postgres before premerge.",
+      );
+    }
+    spawnSync("pnpm", ["infinitecontext:db:migrate"], { cwd: repoRoot, stdio: "inherit" });
+    const retry = spawnSync(
+      "psql",
+      [
+        "-h",
+        "127.0.0.1",
+        "-p",
+        "5433",
+        "-U",
+        "infinitecontext",
+        "-d",
+        "postgres",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        "SELECT 1",
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PGPASSWORD: password },
+      },
+    );
+    if (retry.status !== 0) {
+      fail("premerge: PostgreSQL still unreachable after db:up — check POSTGRES_PASSWORD and port 5433.");
+    }
+  }
 }
 
 /**
@@ -38,27 +139,45 @@ function fail(message, code = 1) {
  * @param {string[]} args
  * @param {Record<string, string | undefined>} [env]
  * @param {string} [cwd]
+ * @returns {Promise<string>}
  */
 function run(cmd, args, env, cwd = sdkRoot) {
-  const res = spawnSync(cmd, args, {
-    cwd,
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-    stdio: ["inherit", "pipe", "pipe"],
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    activeChild = child;
+    /** @type {string} */
+    let out = "";
+    child.stdout?.on("data", (chunk) => {
+      const text = String(chunk);
+      out += text;
+      process.stdout.write(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = String(chunk);
+      out += text;
+      process.stderr.write(chunk);
+    });
+    child.on("error", (err) => {
+      activeChild = null;
+      reject(err);
+    });
+    child.on("close", (status, signal) => {
+      activeChild = null;
+      if (signal) {
+        reject(new Error(`${cmd} ${args.join(" ")} terminated by ${signal}`));
+        return;
+      }
+      if (status !== 0) {
+        cleanupEmu();
+        process.exit(status ?? 1);
+      }
+      resolve(out);
+    });
   });
-  const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  if (res.stdout) {
-    process.stdout.write(res.stdout);
-  }
-  if (res.stderr) {
-    process.stderr.write(res.stderr);
-  }
-  if (res.status !== 0) {
-    exitCode = res.status ?? 1;
-    cleanupEmu();
-    process.exit(exitCode);
-  }
-  return out;
 }
 
 function cleanupEmu() {
@@ -82,9 +201,15 @@ function cleanupEmu() {
 }
 
 function onSignal(signal) {
-  exitCode = signal === "SIGINT" ? 130 : 143;
+  if (activeChild?.pid) {
+    try {
+      activeChild.kill("SIGTERM");
+    } catch {
+      /* ignore */
+    }
+  }
   cleanupEmu();
-  process.exit(exitCode);
+  process.exit(signal === "SIGINT" ? 130 : 143);
 }
 
 process.on("exit", () => {
@@ -106,6 +231,7 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
+/** @type {string} */
 let head;
 try {
   head = assertExpectedShaMatchesHead(repoRoot, process.env.EXPECTED_SHA);
@@ -113,9 +239,10 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
-run("npm", ["run", "guard:12"]);
-run("node", ["scripts/check-lib-no-test-env.mjs"]);
-run("pnpm", ["-r", "check"], {}, repoRoot);
+await run("npm", ["run", "guard:12"]);
+await run("node", ["scripts/check-lib-no-test-env.mjs"]);
+ensurePostgresEnvForPremerge();
+await run("pnpm", ["-r", "check"], {}, repoRoot);
 
 const emuComposeEnv = {
   IC_STORAGE_EMU_MINIO_PORT: minioPort,
@@ -127,7 +254,7 @@ console.log(
   `premerge: starting storage emulator (MinIO 127.0.0.1:${minioPort}, SFTP 127.0.0.1:${sftpPort})…`,
 );
 emuStarted = true;
-run("npm", ["run", "storage:emu:up"], emuComposeEnv);
+await run("npm", ["run", "storage:emu:up"], emuComposeEnv);
 
 const emuEnv = {
   IC_REQUIRE_MINIO: "1",
@@ -141,20 +268,26 @@ const emuEnv = {
   INFINITECONTEXT_S3_TEST_PREFIX: "premerge-local",
 };
 
-function mergeTotals(chunk) {
-  totals.pass += chunk.pass;
-  totals.fail += chunk.fail;
-  totals.skipped += chunk.skipped;
-  totals.tests += chunk.tests;
+const testOut = await run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot);
+const parsed = absorbNodeTestTotals(testOut);
+totals.pass = parsed.pass;
+totals.fail = parsed.fail;
+totals.skipped = parsed.skipped;
+totals.tests = parsed.tests;
+
+try {
+  assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
 }
 
-mergeTotals(
-  absorbNodeTestTotals(
-    run("pnpm", ["-r", "--workspace-concurrency=1", "test"], emuEnv, repoRoot),
-  ),
-);
-
 cleanupEmu();
+
+try {
+  head = assertExpectedShaMatchesHead(repoRoot, process.env.EXPECTED_SHA);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 
 console.log("");
 console.log("premerge summary:");

@@ -50,7 +50,11 @@ export function assertGitTreeClean(repoRoot) {
  * @param {string | undefined} expectedSha
  */
 export function assertExpectedShaMatchesHead(repoRoot, expectedSha) {
-  const normalized = String(expectedSha ?? "").trim().toLowerCase();
+  const raw = String(expectedSha ?? "").trim();
+  if (/[A-F]/.test(raw)) {
+    throw new Error("EXPECTED_SHA must be lowercase hex (git rev-parse HEAD)");
+  }
+  const normalized = raw.toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(normalized)) {
     throw new Error("EXPECTED_SHA is required and must be a full 40-character git commit hex");
   }
@@ -63,30 +67,46 @@ export function assertExpectedShaMatchesHead(repoRoot, expectedSha) {
 }
 
 /**
+ * Sum Node test runner summaries (one block per process, anchored at `# duration_ms`).
+ * Ignores intermediate `# pass` lines emitted during subtests.
  * @param {string} output
  */
 export function absorbNodeTestTotals(output) {
-  /** @type {{ pass: number, fail: number, skipped: number, tests: number }} */
-  const totals = { pass: 0, fail: 0, skipped: 0, tests: 0 };
-  for (const line of output.split("\n")) {
-    const pass = line.match(/^# pass (\d+)$/);
-    const fail = line.match(/^# fail (\d+)$/);
-    const skipped = line.match(/^# skipped (\d+)$/);
-    const tests = line.match(/^# tests (\d+)$/);
-    if (pass) {
-      totals.pass += Number(pass[1]);
+  /** @type {{ pass: number, fail: number, skipped: number, tests: number, blocks: number }} */
+  const totals = { pass: 0, fail: 0, skipped: 0, tests: 0, blocks: 0 };
+  const blocks = output.split(/# duration_ms \d+/);
+  for (const part of blocks) {
+    const tests = [...part.matchAll(/^# tests (\d+)$/gm)].at(-1);
+    const pass = [...part.matchAll(/^# pass (\d+)$/gm)].at(-1);
+    const fail = [...part.matchAll(/^# fail (\d+)$/gm)].at(-1);
+    const skipped = [...part.matchAll(/^# skipped (\d+)$/gm)].at(-1);
+    if (!tests || !pass || !fail || !skipped) {
+      continue;
     }
-    if (fail) {
-      totals.fail += Number(fail[1]);
-    }
-    if (skipped) {
-      totals.skipped += Number(skipped[1]);
-    }
-    if (tests) {
-      totals.tests += Number(tests[1]);
-    }
+    totals.tests += Number(tests[1]);
+    totals.pass += Number(pass[1]);
+    totals.fail += Number(fail[1]);
+    totals.skipped += Number(skipped[1]);
+    totals.blocks += 1;
   }
   return totals;
+}
+
+/**
+ * @param {{ pass: number, fail: number, skipped: number, tests: number, blocks?: number }} totals
+ */
+export function assertPremergeTestTotalsValid(totals) {
+  if ((totals.blocks ?? 0) === 0 || totals.tests === 0) {
+    throw new Error(
+      "premerge could not parse any Node test summary blocks (# tests … # duration_ms); refusing false-green",
+    );
+  }
+  const accounted = totals.pass + totals.fail + totals.skipped;
+  if (accounted !== totals.tests) {
+    throw new Error(
+      `premerge test totals inconsistent: pass+fail+skipped=${accounted} but tests=${totals.tests}`,
+    );
+  }
 }
 
 export function resolveRepoRootsFromImportMeta(importMetaUrl) {

@@ -10,12 +10,19 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 base_ref=""
+if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+  if git remote get-url origin >/dev/null 2>&1; then
+    if ! git fetch origin main:refs/remotes/origin/main --quiet 2>/dev/null; then
+      git fetch origin main --quiet 2>/dev/null || true
+    fi
+  fi
+fi
 if git rev-parse --verify origin/main >/dev/null 2>&1; then
   base_ref="origin/main"
 elif git rev-parse --verify main >/dev/null 2>&1; then
   base_ref="main"
 else
-  echo "check-12-paths: no resolvable base ref (origin/main or main)" >&2
+  echo "check-12-paths: no resolvable base ref (fetch origin main or provide local main)" >&2
   exit 1
 fi
 

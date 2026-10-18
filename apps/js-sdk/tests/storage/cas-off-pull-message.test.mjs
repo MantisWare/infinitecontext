@@ -66,7 +66,7 @@ describe("CAS off — pull delivery user message (T4)", () => {
       () => confirmObjectStorePullDelivery(ctx),
       (err) => {
         assert.ok(err instanceof CasConditionalWritesUnconfirmedError);
-        assert.match(String(err.message), /config doctor --recheck-cas/);
+        assert.match(String(err.message), /storage doctor --recheck-cas/);
         assert.doesNotMatch(String(err.stack ?? ""), /NotSupportedError/);
         return true;
       },

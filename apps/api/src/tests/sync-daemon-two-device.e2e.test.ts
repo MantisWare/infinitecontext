@@ -27,7 +27,7 @@ const trackedTempHomes: string[] = [];
 
 function snapshotVaultAgentPids() {
     try {
-        const out = execSync('pgrep -f vault-agent-serve.mjs || true', { encoding: 'utf8' }).trim();
+        const out = execSync('pgrep -f "[v]ault-agent-serve.mjs" || true', { encoding: 'utf8' }).trim();
         if (!out) return new Set<string>();
         return new Set(out.split('\n').filter(Boolean));
     } catch {

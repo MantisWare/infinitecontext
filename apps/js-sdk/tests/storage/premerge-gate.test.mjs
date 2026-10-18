@@ -10,6 +10,7 @@ import {
   absorbNodeTestTotals,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
+  assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
   parseNodeVersionParts,
 } from "../../scripts/premerge-lib.mjs";
@@ -31,6 +32,10 @@ describe("premerge gate helpers", () => {
     spawnSync("git", ["commit", "-m", "init"], { cwd: tmp });
     const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tmp, encoding: "utf8" }).stdout.trim();
     assert.throws(() => assertExpectedShaMatchesHead(tmp, "abc"), /40-character/);
+    assert.throws(
+      () => assertExpectedShaMatchesHead(tmp, head.toUpperCase()),
+      /lowercase hex/,
+    );
     assert.equal(assertExpectedShaMatchesHead(tmp, head), head);
   });
 
@@ -46,9 +51,19 @@ describe("premerge gate helpers", () => {
     assert.throws(() => assertGitTreeClean(tmp), /dirty working tree/);
   });
 
-  it("absorbs node test reporter totals", () => {
-    const totals = absorbNodeTestTotals("# tests 3\n# pass 2\n# fail 0\n# skipped 1\n");
-    assert.deepEqual(totals, { pass: 2, fail: 0, skipped: 1, tests: 3 });
+  it("absorbs node test reporter totals from summary blocks only", () => {
+    const noisy =
+      "# pass 99\n# tests 3\n# suites 1\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 1\n# todo 0\n# duration_ms 12\n";
+    const totals = absorbNodeTestTotals(noisy);
+    assert.deepEqual(
+      { pass: totals.pass, fail: totals.fail, skipped: totals.skipped, tests: totals.tests, blocks: totals.blocks },
+      { pass: 2, fail: 0, skipped: 1, tests: 3, blocks: 1 },
+    );
+    assert.doesNotThrow(() => assertPremergeTestTotalsValid(totals));
+  });
+
+  it("refuses empty or unparseable test output", () => {
+    assert.throws(() => assertPremergeTestTotalsValid(absorbNodeTestTotals("")), /false-green/);
   });
 });
 
