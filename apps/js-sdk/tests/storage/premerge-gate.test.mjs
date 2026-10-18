@@ -10,6 +10,7 @@ import {
   absorbNodeTestTotals,
   assertExpectedShaMatchesHead,
   assertGitTreeClean,
+  assertPremergePackageTestSections,
   assertPremergeTestTotalsValid,
   isNodeVersionAtLeast,
   parseNodeVersionParts,
@@ -64,6 +65,22 @@ describe("premerge gate helpers", () => {
 
   it("refuses empty or unparseable test output", () => {
     assert.throws(() => assertPremergeTestTotalsValid(absorbNodeTestTotals("")), /false-green/);
+  });
+
+  it("fail-closed when python-sdk 3.8 venv is unavailable (0 tests is never a pass)", () => {
+    const fakePnpmOut = `
+> infinitecontext-python-sdk@ test /workspace/apps/python-sdk
+> node scripts/run-pytest.mjs
+
+python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Install: uv python install 3.8
+`;
+    assert.throws(() => assertPremergePackageTestSections(fakePnpmOut), (err) => {
+      const text = String(err);
+      assert.match(text, /0 tests is never a pass/);
+      assert.match(text, /Python 3\.8 .venv/);
+      assert.ok(text.includes("infinitecontext-python-sdk did not run pytest"));
+      return true;
+    });
   });
 });
 

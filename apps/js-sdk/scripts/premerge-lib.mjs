@@ -134,8 +134,12 @@ export const PREMERGE_PACKAGE_MIN_TESTS = {
   "infinitecontext-api": 90,
   infinitecontext: 530,
   "infinitecontext-mcp-server": 1,
-  "infinitecontext-python-sdk": 0,
+  "infinitecontext-python-sdk": 2,
 };
+
+export const PREMERGE_PYTHON_SDK_VENV_FAIL_HINT =
+  "premerge: infinitecontext-python-sdk did not run pytest — Python 3.8 .venv is required (0 tests is never a pass). " +
+  "Setup: uv python install 3.8 && cd apps/python-sdk && uv venv --python 3.8 .venv && uv pip install -e '.[dev]' --python .venv/bin/python";
 
 /**
  * @param {string} raw
@@ -196,13 +200,16 @@ export function parsePremergePackageCounts(output) {
         totals.tests = Number(pytest[1]);
         totals.pass = Number(pytest[1]);
         totals.blocks = 1;
-      } else if (/python-sdk: skipping tests/.test(section)) {
+      } else if (
+        /python-sdk: FAIL — Python 3\.8 .venv is required/.test(section) ||
+        /python-sdk: skipping tests/.test(section)
+      ) {
         totals.tests = 0;
         totals.pass = 0;
         totals.fail = 0;
         totals.skipped = 0;
         totals.blocks = 1;
-        totals.pythonSkipped = true;
+        totals.pythonVenvUnavailable = true;
       }
     }
     byPackage.set(name, totals);
@@ -222,7 +229,11 @@ export function assertPremergePackageTestSections(output) {
       problems.push(`${name}: missing test summary block`);
       continue;
     }
-    if (totals.tests === 0 && !totals.pythonSkipped) {
+    if (totals.pythonVenvUnavailable) {
+      problems.push(PREMERGE_PYTHON_SDK_VENV_FAIL_HINT);
+      continue;
+    }
+    if (totals.tests === 0) {
       problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
     }
     const min = PREMERGE_PACKAGE_MIN_TESTS[name];
