@@ -26,7 +26,10 @@ describe("check-12-paths guard", () => {
 
     const res = spawnSync("bash", [localGuard], { cwd: tmp, encoding: "utf8" });
     assert.notEqual(res.status, 0);
-    assert.match(String(res.stderr ?? res.stdout), /no resolvable base ref|could not resolve main snapshot/);
+    assert.match(
+      String(res.stderr ?? res.stdout),
+      /no resolvable base ref|could not resolve main snapshot|no origin remote and no origin\/main/,
+    );
   });
 
   it("blocks #12 paths using two-dot diff vs origin/main (no merge base required)", () => {
