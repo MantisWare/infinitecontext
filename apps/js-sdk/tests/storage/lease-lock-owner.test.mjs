@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
+import { PreconditionFailedError } from "../../lib/storage/errors.mjs";
 import {
   LEASE_CLOCK_SKEW_MARGIN_MS,
   LEASE_LOCK_TTL_MS,
@@ -73,7 +74,10 @@ describe("lease lock owner etag races (QA #4)", () => {
     assert.ok(row?.etag);
 
     const drift = wrapHeadEtagDrift(inner, '"stale-head-etag"');
-    await staleBreakDeleteUsingHead(drift, key);
+    await assert.rejects(
+      () => staleBreakDeleteUsingHead(drift, key),
+      (err) => err instanceof PreconditionFailedError,
+    );
     assert.ok(await inner.get(key), "head()-etag stale-break must not remove object when head drifts");
 
     await staleBreakDeleteUsingGet(drift, key);
