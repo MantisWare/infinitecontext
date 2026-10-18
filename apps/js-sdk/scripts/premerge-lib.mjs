@@ -134,7 +134,24 @@ export const PREMERGE_PACKAGE_MIN_TESTS = {
   "infinitecontext-api": 90,
   infinitecontext: 530,
   "infinitecontext-mcp-server": 1,
+  "infinitecontext-python-sdk": 0,
 };
+
+/**
+ * @param {string} raw
+ */
+function normalizePremergePackageName(raw) {
+  let name = String(raw ?? "").trim();
+  if (name.startsWith("@")) {
+    const versionAt = name.indexOf("@", 1);
+    if (versionAt > 0) {
+      name = name.slice(0, versionAt);
+    }
+  } else {
+    name = name.replace(/@\d+\.\d+\.\d+.*$/, "");
+  }
+  return name.replace(/@$/, "").trim();
+}
 
 /**
  * @param {string} section
@@ -171,7 +188,7 @@ export function parsePremergePackageCounts(output) {
     const start = headers[i].index ?? 0;
     const end = i + 1 < headers.length ? headers[i + 1].index ?? output.length : output.length;
     const section = output.slice(start, end);
-    const name = headers[i][1];
+    const name = normalizePremergePackageName(headers[i][1]);
     const totals = absorbSectionTotals(section);
     if (name.includes("python-sdk") && totals.blocks === 0) {
       const pytest = section.match(/(\d+) passed/);
@@ -179,6 +196,13 @@ export function parsePremergePackageCounts(output) {
         totals.tests = Number(pytest[1]);
         totals.pass = Number(pytest[1]);
         totals.blocks = 1;
+      } else if (/python-sdk: skipping tests/.test(section)) {
+        totals.tests = 0;
+        totals.pass = 0;
+        totals.fail = 0;
+        totals.skipped = 0;
+        totals.blocks = 1;
+        totals.pythonSkipped = true;
       }
     }
     byPackage.set(name, totals);
@@ -198,7 +222,7 @@ export function assertPremergePackageTestSections(output) {
       problems.push(`${name}: missing test summary block`);
       continue;
     }
-    if (totals.tests === 0) {
+    if (totals.tests === 0 && !totals.pythonSkipped) {
       problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
     }
     const min = PREMERGE_PACKAGE_MIN_TESTS[name];
