@@ -135,7 +135,7 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
   "@infinitecontext/sync-cursor": 1,
-  infinitecontext: 567,
+  infinitecontext: 586,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
   "infinitecontext-python-sdk": 6,

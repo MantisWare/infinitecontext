@@ -2,9 +2,11 @@
 /**
  * Race proof: first-get barrier + honest memory adapter.
  * Head: 0/20 double holds. Reverted double-get stale-break: 20/20 double holds.
+ * Patches a temp copy of lib/storage — never mutates the repo lease-lock.mjs.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,12 +39,22 @@ const DOUBLE_GET_BLOCK = `  if (existing && isLeaseLockStale(existing, now)) {
     }
   }`;
 
-function runCounter() {
-  const res = spawnSync(
-    process.execPath,
-    ["--import", preload, runner],
-    { cwd: sdkRoot, encoding: "utf8", env: { ...process.env, IC_LEASE_RACE_RUNS: String(RUNS) } },
-  );
+/**
+ * @param {string | undefined} leaseModulePath
+ */
+function runCounter(leaseModulePath) {
+  /** @type {Record<string, string>} */
+  const env = { ...process.env, IC_LEASE_RACE_RUNS: String(RUNS) };
+  if (leaseModulePath) {
+    env.IC_LEASE_RACE_LEASE_MODULE = leaseModulePath;
+  } else {
+    delete env.IC_LEASE_RACE_LEASE_MODULE;
+  }
+  const res = spawnSync(process.execPath, ["--import", preload, runner], {
+    cwd: sdkRoot,
+    encoding: "utf8",
+    env,
+  });
   process.stdout.write(res.stdout ?? "");
   process.stderr.write(res.stderr ?? "");
   if (res.status !== 0) {
@@ -52,28 +64,31 @@ function runCounter() {
   return match ? Number(match[1]) : NaN;
 }
 
-function patchLeaseDoubleGet() {
-  const text = fs.readFileSync(leasePath, "utf8");
+function createPatchedLeaseModuleCopy() {
+  const patchRoot = fs.mkdtempSync(path.join(sdkRoot, ".tmp-lease-race-patch-"));
+  const libCopy = path.join(patchRoot, "lib");
+  const storageCopy = path.join(libCopy, "storage");
+  fs.mkdirSync(storageCopy, { recursive: true });
+  fs.cpSync(path.join(sdkRoot, "lib/storage"), storageCopy, { recursive: true });
+  const icCryptoTarget = path.join(sdkRoot, "lib/ic-crypto.mjs");
+  fs.symlinkSync(icCryptoTarget, path.join(libCopy, "ic-crypto.mjs"));
+  const patchedLease = path.join(storageCopy, "lease-lock.mjs");
+  const text = fs.readFileSync(patchedLease, "utf8");
   if (!text.includes(SINGLE_GET_BLOCK)) {
-    throw new Error("lease-lock.mjs single-get stale-break block not found");
+    throw new Error("lease-lock copy: single-get stale-break block not found");
   }
-  fs.writeFileSync(leasePath, text.replace(SINGLE_GET_BLOCK, DOUBLE_GET_BLOCK, 1));
+  fs.writeFileSync(patchedLease, text.replace(SINGLE_GET_BLOCK, DOUBLE_GET_BLOCK, 1));
+  return { patchRoot, patchedLease };
 }
-
-function restoreLease(original) {
-  fs.writeFileSync(leasePath, original);
-}
-
-const original = fs.readFileSync(leasePath, "utf8");
 
 console.log(`=== Head lease-lock (${RUNS} runs, first-get barrier, honest memory) ===`);
-const headDouble = runCounter();
+const headDouble = runCounter(undefined);
 console.log(`head double-holds: ${headDouble}/${RUNS}`);
 
-patchLeaseDoubleGet();
+const { patchRoot, patchedLease } = createPatchedLeaseModuleCopy();
 try {
-  console.log(`\n=== Reverted double-get stale-break (${RUNS} runs) ===`);
-  const revertedDouble = runCounter();
+  console.log(`\n=== Reverted double-get stale-break (${RUNS} runs, temp module copy) ===`);
+  const revertedDouble = runCounter(patchedLease);
   console.log(`reverted double-holds: ${revertedDouble}/${RUNS}`);
   if (headDouble !== 0 || revertedDouble !== RUNS) {
     console.error(
@@ -83,5 +98,5 @@ try {
   }
   console.log(`\nproof OK: head 0/${RUNS}, reverted ${RUNS}/${RUNS}`);
 } finally {
-  restoreLease(original);
+  fs.rmSync(patchRoot, { recursive: true, force: true });
 }

@@ -1,8 +1,11 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
 import {
   LEASE_CLOCK_SKEW_MARGIN_MS,
   LEASE_LOCK_TTL_MS,
-  acquireLeaseLock,
+  acquireLeaseLock as acquireLeaseLockDefault,
 } from "../../lib/storage/lease-lock.mjs";
 import { deriveDevH, lockRelativePath } from "../../lib/storage/layout.mjs";
 import {
@@ -18,6 +21,23 @@ export const RACE_LOCK_NAME = "shared.manifest";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** @type {typeof acquireLeaseLockDefault | null} */
+let acquireLeaseLockOverride = null;
+
+/** @returns {Promise<typeof acquireLeaseLockDefault>} */
+async function resolveAcquireLeaseLock() {
+  if (acquireLeaseLockOverride) {
+    return acquireLeaseLockOverride;
+  }
+  const modPath = String(process.env.IC_LEASE_RACE_LEASE_MODULE ?? "").trim();
+  if (modPath) {
+    const mod = await import(pathToFileURL(path.resolve(modPath)).href);
+    acquireLeaseLockOverride = mod.acquireLeaseLock;
+    return acquireLeaseLockOverride;
+  }
+  return acquireLeaseLockDefault;
 }
 
 /**
@@ -90,6 +110,7 @@ export async function seedStaleLock(adapter, layoutPrefix, lockName, dek, staleO
  * @returns {Promise<{ winners: PromiseFulfilledResult<{ nonce: string }>[], adapter: import("../../lib/storage/types.mjs").StorageAdapter }>}
  */
 export async function runFirstGetBarrierStaleBreakRace() {
+  const acquireLeaseLock = await resolveAcquireLeaseLock();
   const lockKey = lockRelativePath(RACE_LAYOUT_PREFIX, RACE_LOCK_NAME);
   const inner = createMemoryStorageAdapter();
   await inner.init();

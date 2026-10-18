@@ -7,7 +7,9 @@ const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const libRoot = path.join(sdkRoot, "lib");
 
 if (process.env.ALLOW_LIB_TEST_ENV === "1") {
-  console.log("check-lib-no-test-env: ALLOW_LIB_TEST_ENV=1 — skipping lib/ TEST env guard");
+  console.error(
+    "WARNING: check-lib-no-test-env: ALLOW_LIB_TEST_ENV=1 — skipping lib/ TEST env guard (Dev Lead override only; do not use in premerge/CI)",
+  );
   process.exit(0);
 }
 

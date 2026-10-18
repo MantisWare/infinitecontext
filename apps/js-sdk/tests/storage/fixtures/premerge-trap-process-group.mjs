@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 
 const marker = process.env.PREMERGE_TRAP_MARKER;
+const ready = process.env.PREMERGE_TRAP_READY;
 const sleeper = process.env.PREMERGE_TRAP_SLEEPER;
 if (!marker || !sleeper) {
   process.exit(2);
@@ -45,5 +46,9 @@ process.on("SIGTERM", () => {
   cleanup();
   process.exit(143);
 });
+
+if (ready) {
+  fs.writeFileSync(ready, "ready\n");
+}
 
 setTimeout(() => {}, 60_000);
