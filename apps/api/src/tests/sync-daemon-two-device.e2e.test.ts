@@ -1,4 +1,4 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
