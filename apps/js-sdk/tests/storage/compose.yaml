@@ -24,7 +24,8 @@ services:
       - "127.0.0.1:2222:22"
     volumes:
       - ./fixtures/ssh/generated/id_ed25519.pub:/home/ic/.ssh/keys/id_ed25519.pub:ro
-    command: ic::1001
+    # atmoz/sftp user:pass:uid:gid:writable-dirs — key auth via mounted .ssh/keys; chroot write dir must be `upload`
+    command: ic:::::upload
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
       interval: 2s
