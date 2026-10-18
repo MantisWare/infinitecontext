@@ -109,7 +109,7 @@ python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Ins
 # skipped 0
 # duration_ms 1
 `;
-    assert.throws(() => assertPremergePackageTestSections(partial, "/workspace"), /missing from pnpm test output/);
+    assert.throws(() => assertPremergePackageTestSections(partial), /missing from pnpm test output/);
   });
 
   it("core uses run-node-test so top-level src tests execute", () => {
