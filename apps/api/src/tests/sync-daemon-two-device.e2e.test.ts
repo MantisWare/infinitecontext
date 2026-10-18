@@ -58,17 +58,26 @@ function isDescendantOf(pid: number, ancestorPid: number): boolean {
     return false;
 }
 
-function registerVaultAgentsSpawnedByTrackedDaemons() {
+function registerVaultAgentsSpawnedByTrackedDaemons(tempHomes: string[] = trackedTempHomes) {
     const daemonPids = trackedDaemonChildren
         .map((child) => child.pid)
         .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
-    if (daemonPids.length === 0) return;
     const after = snapshotVaultAgentPids();
     for (const pid of after) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
         const numeric = Number(pid);
         if (!numeric) continue;
         if (daemonPids.some((daemonPid) => isDescendantOf(numeric, daemonPid))) {
             trackedVaultAgentPids.add(pid);
+            continue;
+        }
+        try {
+            const cmdline = fs.readFileSync(`/proc/${numeric}/cmdline`, 'utf8');
+            if (tempHomes.some((home) => cmdline.includes(home))) {
+                trackedVaultAgentPids.add(pid);
+            }
+        } catch {
+            /* process exited */
         }
     }
 }
@@ -230,6 +239,8 @@ after(async () => {
 
 describe('sync daemon two-device e2e (postgres)', () => {
     afterEach(async () => {
+        const tempHomes = [...trackedTempHomes];
+        registerVaultAgentsSpawnedByTrackedDaemons(tempHomes);
         await cleanupDaemonLeaks();
         await terminateTrackedVaultAgents();
         assertNoDaemonLeaksAfterCleanup();
