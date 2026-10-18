@@ -19,7 +19,9 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/mypy
 ```
 
-Do **not** rely on `mypy` from a Python 3.10+ venv for this package. A small mypy plugin exits with a clear message if you try.
+Do **not** rely on `mypy` from a Python 3.9+ venv for this package. A small mypy plugin exits with a clear message if you try.
+
+Both `npm run check` and `npm test` share the same **Python 3.8** `.venv` (via `uv`), so they do not overwrite each other with the system Python.
 
 ## Tests
 
