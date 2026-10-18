@@ -82,6 +82,25 @@ function registerVaultAgentsSpawnedByTrackedDaemons(tempHomes: string[] = tracke
     }
 }
 
+function shutdownVaultAgentsForHomes(homes: string[]) {
+    for (const home of homes) {
+        const pidFile = path.join(home, '.infinitecontext', 'vault-agent.pid');
+        try {
+            const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+            if (Number.isInteger(pid) && pid > 0) {
+                trackedVaultAgentPids.add(String(pid));
+                try {
+                    process.kill(pid, 'SIGTERM');
+                } catch {
+                    /* ignore */
+                }
+            }
+        } catch {
+            /* no pid file */
+        }
+    }
+}
+
 async function terminateTrackedVaultAgents() {
     registerVaultAgentsSpawnedByTrackedDaemons();
     for (const pid of trackedVaultAgentPids) {
@@ -240,6 +259,7 @@ after(async () => {
 describe('sync daemon two-device e2e (postgres)', () => {
     afterEach(async () => {
         const tempHomes = [...trackedTempHomes];
+        shutdownVaultAgentsForHomes(tempHomes);
         registerVaultAgentsSpawnedByTrackedDaemons(tempHomes);
         await cleanupDaemonLeaks();
         await terminateTrackedVaultAgents();
