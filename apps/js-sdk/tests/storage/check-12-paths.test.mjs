@@ -26,11 +26,11 @@ describe("check-12-paths guard", () => {
 
     const res = spawnSync("bash", [localGuard], { cwd: tmp, encoding: "utf8" });
     assert.notEqual(res.status, 0);
-    assert.match(String(res.stderr ?? res.stdout), /no resolvable base ref/);
+    assert.match(String(res.stderr ?? res.stdout), /no resolvable base ref|could not resolve main snapshot/);
   });
 
-  it("fails when there is no merge base (does not treat git stderr as a changed path)", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ic-guard-nobase2-"));
+  it("blocks #12 paths using two-dot diff vs origin/main (no merge base required)", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ic-guard-block-"));
     const localGuard = copyGuard(tmp);
     spawnSync("git", ["init", "-b", "main"], { cwd: tmp });
     spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: tmp });
@@ -50,8 +50,8 @@ describe("check-12-paths guard", () => {
     spawnSync("git", ["commit", "-m", "touch blocked"], { cwd: tmp });
 
     const res = spawnSync("bash", [localGuard], { cwd: tmp, encoding: "utf8" });
-    assert.notEqual(res.status, 0, "must not false-green when merge-base is missing");
-    assert.match(String(res.stderr ?? res.stdout), /merge base|git diff failed/i);
-    assert.doesNotMatch(String(res.stdout), /ok \(1 changed file/);
+    assert.notEqual(res.status, 0);
+    assert.match(String(res.stderr ?? res.stdout), /BLOCKED/);
+    assert.match(String(res.stderr ?? res.stdout), /contexts\.ts/);
   });
 });
