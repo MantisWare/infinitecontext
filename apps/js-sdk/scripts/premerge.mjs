@@ -27,6 +27,7 @@ import {
   startEphemeralPostgresForPremerge,
 } from "./premerge-ephemeral-postgres.mjs";
 import { createPremergeShutdown } from "./premerge-shutdown.mjs";
+import { syncVaultAgentCleanup } from "./premerge-vault-cleanup.mjs";
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
@@ -90,6 +91,7 @@ function run(cmd, args, env, cwd = sdkRoot, opts = {}) {
 
 function cleanupAll() {
   cleanupEmu();
+  syncVaultAgentCleanup(sdkRoot);
   if (pgCleanup) {
     pgCleanup();
     pgCleanup = null;
@@ -272,6 +274,8 @@ try {
   }
 }
 
+await new Promise((resolve) => setImmediate(resolve));
+
 if (testRunFailed && !shutdown.shuttingDown) {
   exitPremerge(1);
 }
@@ -318,6 +322,7 @@ for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].local
 }
 
 if (totals.fail > 0) {
+  await new Promise((resolve) => setImmediate(resolve));
   exitPremerge(1);
 }
 

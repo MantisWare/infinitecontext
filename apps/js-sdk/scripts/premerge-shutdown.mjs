@@ -98,6 +98,19 @@ export function createPremergeShutdown(opts) {
     cleanupPremergeTmpRoot();
   }
 
+  /**
+   * @param {import("node:child_process").Signal} signal
+   * @returns {boolean}
+   */
+  function beginShutdown(signal) {
+    if (shuttingDown) {
+      return false;
+    }
+    shuttingDown = true;
+    shutdownExitCode = signal === "SIGINT" ? 130 : 143;
+    return true;
+  }
+
   function exitPremerge(code) {
     if (shuttingDown) {
       finishShutdown();
@@ -197,26 +210,34 @@ export function createPremergeShutdown(opts) {
     });
   }
 
+  async function completeShutdownAfterSignal() {
+    await terminateActiveLeg("SIGTERM");
+    finishShutdown();
+    process.exit(shutdownExitCode ?? 130);
+  }
+
   /**
    * @param {import("node:child_process").Signal} signal
    */
   async function onSignal(signal) {
-    if (shuttingDown) {
+    if (!beginShutdown(signal)) {
       return;
     }
-    shuttingDown = true;
-    shutdownExitCode = signal === "SIGINT" ? 130 : 143;
-    await terminateActiveLeg("SIGTERM");
-    finishShutdown();
-    process.exit(shutdownExitCode);
+    await completeShutdownAfterSignal();
   }
 
   function registerSignalHandlers() {
     process.on("SIGINT", () => {
-      void onSignal("SIGINT");
+      if (!beginShutdown("SIGINT")) {
+        return;
+      }
+      void completeShutdownAfterSignal();
     });
     process.on("SIGTERM", () => {
-      void onSignal("SIGTERM");
+      if (!beginShutdown("SIGTERM")) {
+        return;
+      }
+      void completeShutdownAfterSignal();
     });
   }
 
@@ -226,6 +247,7 @@ export function createPremergeShutdown(opts) {
     exitPremerge,
     finalizeTmpHygiene,
     onSignal,
+    beginShutdown,
     finishShutdown,
     terminateActiveLeg,
     registerSignalHandlers,
