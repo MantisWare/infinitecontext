@@ -256,9 +256,12 @@ runStorageAdapterContractSuite(
       adapter,
       inspectBacking: () => {
         const keys = [...fake._files.keys()].map((p) =>
-          p.replace(/^\/upload\/?/, "").replace(/^\//, ""),
+          String(p).replace(/^\/?upload\/?/, "").replace(/^\//, ""),
         );
-        const bodies = keys.map((k) => new Uint8Array(fake._files.get(`/upload/${k}`)?.body ?? fake._files.get(k)?.body ?? []));
+        const bodies = keys.map((k) => {
+          const direct = fake._files.get(k)?.body ?? fake._files.get(`upload/${k}`)?.body;
+          return new Uint8Array(direct ?? []);
+        });
         return {
           keys,
           bodies,
