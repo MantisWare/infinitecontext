@@ -73,7 +73,13 @@ function credentialsPathLabel() {
   return `${infinitecontextHome()}/credentials.json`;
 }
 
-function cmdSet(keyName, rawValue) {
+async function cmdSet(keyName, rawValue) {
+  const key = String(keyName ?? "").trim();
+  if (key.startsWith("storage.")) {
+    const { applyStorageConfigSet } = await import("../../lib/storage/storage-config-cli.mjs");
+    await applyStorageConfigSet(key, rawValue);
+    return;
+  }
   const def = keyDefByName(keyName);
   const value = String(rawValue ?? "").trim();
   if (!value) {
@@ -91,7 +97,13 @@ function cmdSet(keyName, rawValue) {
   }
 }
 
-function cmdUnset(keyName) {
+async function cmdUnset(keyName) {
+  const key = String(keyName ?? "").trim();
+  if (key.startsWith("storage.")) {
+    const { applyStorageConfigUnset } = await import("../../lib/storage/storage-config-cli.mjs");
+    applyStorageConfigUnset(key);
+    return;
+  }
   const def = keyDefByName(keyName);
   const config = readConfigFile();
   if (def.configField && Object.prototype.hasOwnProperty.call(config, def.configField)) {
@@ -230,7 +242,29 @@ async function cmdDoctor() {
   }
 
   await checkStorageBackendPolicy();
+  await checkSftpStorageDoctor();
   await checkLocalSyncReplicaFiles();
+}
+
+async function checkSftpStorageDoctor() {
+  const { readConfigFile } = await import("../../lib/client-config.mjs");
+  const { resolveStorageBackendId } = await import("../../lib/sync-storage-backend.mjs");
+  const backend = resolveStorageBackendId(readConfigFile());
+  if (backend !== "sftp") {
+    return;
+  }
+  const { runStorageDoctorSftp } = await import("../../lib/storage/storage-doctor-sftp.mjs");
+  const result = await runStorageDoctorSftp();
+  console.log(result.ok ? "✓ storage doctor (sftp)" : `✗ storage doctor (sftp): ${result.error ?? "see warnings"}`);
+  if (result.capabilities) {
+    console.log(`  capabilities: ${JSON.stringify(result.capabilities)}`);
+  }
+  for (const w of result.warnings ?? []) {
+    console.log(`  warning: ${w}`);
+  }
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runConfigCli(argv = process.argv.slice(3)) {
@@ -245,10 +279,10 @@ export async function runConfigCli(argv = process.argv.slice(3)) {
       cmdShow();
       return;
     case "set":
-      cmdSet(argv[1], argv[2]);
+      await cmdSet(argv[1], argv[2]);
       return;
     case "unset":
-      cmdUnset(argv[1]);
+      await cmdUnset(argv[1]);
       return;
     case "path":
       cmdPath();

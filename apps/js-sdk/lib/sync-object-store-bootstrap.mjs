@@ -5,7 +5,12 @@ import { readConfigFile, writeConfigFile, resolveBaseUrl } from "./client-config
 import { createFolderObjectStore } from "./storage/folder-object-store.mjs";
 import { createLocalObjectStore } from "./storage/local-object-store.mjs";
 import { createS3ObjectStore } from "./storage/s3-object-store.mjs";
-import { isFolderObjectStoreBackend, isS3ObjectStoreBackend } from "./sync-storage-backend.mjs";
+import {
+  isFolderObjectStoreBackend,
+  isS3ObjectStoreBackend,
+  isSftpObjectStoreBackend,
+} from "./sync-storage-backend.mjs";
+import { createSftpObjectStore } from "./storage/sftp-object-store.mjs";
 import { setDefaultSyncTransport } from "./sync-transport.mjs";
 import { isHostedStorageBackend } from "./sync-storage-backend.mjs";
 import { resolveDaemonDbPathFromEnv } from "./object-store-sync-runtime.mjs";
@@ -59,7 +64,9 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
     ? createFolderObjectStore
     : isS3ObjectStoreBackend(config)
       ? createS3ObjectStore
-      : createLocalObjectStore;
+      : isSftpObjectStoreBackend(config)
+        ? createSftpObjectStore
+        : createLocalObjectStore;
   openLocalStore = await storeFactory({
     dek,
     deviceUuid,

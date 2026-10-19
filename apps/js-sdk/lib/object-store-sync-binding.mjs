@@ -6,6 +6,7 @@ import { resolveFolderObjectStoreRootDir } from "./storage/folder-object-store.m
 import { resolveLocalObjectStoreRootDir } from "./storage/local-object-store.mjs";
 import { FOLDER_STORAGE_ADAPTER_ID } from "./storage/folder-adapter.mjs";
 import { resolveS3ObjectStoreConfig, S3_OBJECT_STORE_BACKEND_ID } from "./storage/s3-config.mjs";
+import { resolveSftpObjectStoreConfig, SFTP_OBJECT_STORE_BACKEND_ID } from "./storage/sftp-config.mjs";
 import { resolveStorageBackendId } from "./sync-storage-backend.mjs";
 
 /**
@@ -53,6 +54,14 @@ export function resolveObjectStoreSyncBindingKey(
       .trim()
       .replace(/^\/+|\/+$/g, "");
     return `${S3_OBJECT_STORE_BACKEND_ID}:${s3.bucket}:${prefix}`;
+  }
+  if (backendId === SFTP_OBJECT_STORE_BACKEND_ID) {
+    const sftp = resolveSftpObjectStoreConfig(config, env);
+    const root = String(sftp.root ?? "")
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/\/+$/, "");
+    return `${SFTP_OBJECT_STORE_BACKEND_ID}:${sftp.host}:${sftp.port}:${root}`;
   }
   if (options.rootDir) {
     return `${backendId}:${resolveStorageRootRealpathForBinding(options.rootDir)}`;

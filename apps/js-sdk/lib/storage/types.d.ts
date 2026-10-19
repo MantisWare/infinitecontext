@@ -84,6 +84,21 @@ export declare class NotSupportedError extends StorageError {}
 export declare class AuthExpiredError extends StorageError {}
 export declare class RateLimitedError extends StorageError {}
 
+export type StorageSftpConfig = {
+  host?: string;
+  port?: number;
+  username?: string;
+  root?: string;
+  auth?: "key" | "agent" | "password";
+  privateKeyPath?: string;
+  knownHostsPath?: string;
+  hostKeySha256?: string;
+  agent?: boolean;
+  timeoutMs?: number;
+  lockTtlMs?: number;
+  leaseSkewMs?: number;
+};
+
 export declare function assertStorageCiphertext(body: unknown): void;
 export declare function buildStorageObjectBytes(
   aad: string,
