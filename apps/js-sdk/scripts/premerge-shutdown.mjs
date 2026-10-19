@@ -1,6 +1,16 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 
+import {
+  collectLegProcessPids,
+  removePrivateTmpDirVerified,
+  signalPids,
+  waitForLegProcessesIdle,
+} from "./premerge-process-utils.mjs";
+
+const LEG_TERM_WAIT_MS = 5000;
+const LEG_KILL_WAIT_MS = 3000;
+
 /**
  * Shared premerge shutdown / TMPDIR hygiene (used by premerge.mjs and regression tests).
  * @param {object} opts
@@ -41,22 +51,60 @@ export function createPremergeShutdown(opts) {
   }
 
   function cleanupPremergeTmpRoot() {
-    cleanupNodeCompileCache();
-    const root = premergeTmpRoot;
-    if (!root || !fs.existsSync(root)) {
+    removePrivateTmpDirVerified(premergeTmpRoot, () => {
+      cleanupNodeCompileCache();
+    });
+  }
+
+  /**
+   * @param {import("node:child_process").Signal} [signal]
+   */
+  async function terminateActiveLeg(signal = "SIGTERM") {
+    const child = activeChild;
+    if (!child?.pid) {
       return;
     }
+    const rootPid = child.pid;
+    const pgid = child.pid;
     try {
-      fs.rmSync(root, { recursive: true, force: true });
+      process.kill(-pgid, signal);
     } catch {
-      /* best-effort */
+      try {
+        child.kill(signal);
+      } catch {
+        /* ignore */
+      }
     }
+    const pids = collectLegProcessPids(rootPid, pgid);
+    signalPids(pids, signal);
+    await waitForLegProcessesIdle(rootPid, pgid, LEG_TERM_WAIT_MS);
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }
+    const killPids = collectLegProcessPids(rootPid, pgid);
+    signalPids(killPids, "SIGKILL");
+    await waitForLegProcessesIdle(rootPid, pgid, LEG_KILL_WAIT_MS);
+    activeChild = null;
+  }
+
+  function finishShutdown() {
+    cleanupAll();
+    cleanupPremergeTmpRoot();
   }
 
   function exitPremerge(code) {
-    cleanupNodeCompileCache();
+    if (shuttingDown) {
+      finishShutdown();
+      process.exit(shutdownExitCode ?? 130);
+    }
     cleanupPremergeTmpRoot();
-    process.exit(shutdownExitCode ?? code);
+    process.exit(code);
   }
 
   /**
@@ -68,9 +116,10 @@ export function createPremergeShutdown(opts) {
       return;
     }
     console.error(message);
-    killActiveProcessGroup("SIGKILL");
-    cleanupAll();
-    exitPremerge(code);
+    void terminateActiveLeg("SIGKILL").then(() => {
+      cleanupAll();
+      exitPremerge(code);
+    });
   }
 
   /**
@@ -137,33 +186,14 @@ export function createPremergeShutdown(opts) {
             reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
             return;
           }
-          killActiveProcessGroup("SIGKILL");
-          cleanupAll();
-          exitPremerge(status ?? 1);
+          void terminateActiveLeg("SIGKILL").then(() => {
+            cleanupAll();
+            exitPremerge(status ?? 1);
+          });
+          return;
         }
         resolve(out);
       });
-    });
-  }
-
-  /**
-   * @param {number} [maxMs]
-   */
-  function waitForActiveChildExit(maxMs = 15000) {
-    return new Promise((resolve) => {
-      const child = activeChild;
-      if (!child) {
-        resolve();
-        return;
-      }
-      const done = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      child.once("close", done);
-      child.once("error", done);
-      const timer = setTimeout(done, maxMs);
-      timer.unref?.();
     });
   }
 
@@ -176,12 +206,8 @@ export function createPremergeShutdown(opts) {
     }
     shuttingDown = true;
     shutdownExitCode = signal === "SIGINT" ? 130 : 143;
-    killActiveProcessGroup("SIGTERM");
-    await waitForActiveChildExit();
-    killActiveProcessGroup("SIGKILL");
-    cleanupAll();
-    cleanupNodeCompileCache();
-    cleanupPremergeTmpRoot();
+    await terminateActiveLeg("SIGTERM");
+    finishShutdown();
     process.exit(shutdownExitCode);
   }
 
@@ -200,6 +226,8 @@ export function createPremergeShutdown(opts) {
     exitPremerge,
     finalizeTmpHygiene,
     onSignal,
+    finishShutdown,
+    terminateActiveLeg,
     registerSignalHandlers,
     cleanupPremergeTmpRoot,
     cleanupNodeCompileCache,

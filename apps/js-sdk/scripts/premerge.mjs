@@ -18,6 +18,9 @@ import {
   parseNodeVersionParts,
   parsePremergePackageCounts,
   resolveRepoRootsFromImportMeta,
+  warnIfNodePtyMissing,
+  isNodePtyLoadable,
+  assertPremergeRejectsAllowLibTestEnv,
 } from "./premerge-lib.mjs";
 import {
   assertPremergePostgresUrlsSafe,
@@ -58,19 +61,7 @@ let shutdown;
  * @param {NodeJS.Signals} signal
  */
 function killActiveProcessGroup(signal) {
-  const child = shutdown.activeChild;
-  if (!child?.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      /* ignore */
-    }
-  }
+  void shutdown.terminateActiveLeg(signal);
 }
 
 function cleanupNodeCompileCache() {
@@ -190,6 +181,12 @@ try {
   fail(error instanceof Error ? error.message : String(error));
 }
 
+try {
+  assertPremergeRejectsAllowLibTestEnv(process.env);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+
 await run("npm", ["run", "guard:12"]);
 await run("node", ["scripts/check-lib-no-test-env.mjs"]);
 loadApiEnvFile();
@@ -251,6 +248,8 @@ try {
 }
 
 const icTmpBeforeTests = listAllIcTmpDirs(premergeTmpRoot);
+const nodePtyLoadable = isNodePtyLoadable(sdkRoot);
+warnIfNodePtyMissing(sdkRoot);
 
 let testOut = "";
 let testRunFailed = false;
@@ -289,7 +288,7 @@ totals.tests = parsed.tests;
 
 try {
   assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
-  assertPremergePackageTestSections(testOut);
+  assertPremergePackageTestSections(testOut, { nodePtyLoadable });
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }

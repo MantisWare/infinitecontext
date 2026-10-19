@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -135,13 +136,63 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
   "@infinitecontext/sync-cursor": 1,
-  infinitecontext: 586,
+  infinitecontext: 591,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
   "infinitecontext-python-sdk": 6,
 };
 
+/** Onboarding wizard e2e tests when node-pty loads (describe.skip when absent). */
+export const PREMERGE_ONBOARDING_PTY_TEST_COUNT = 13;
+
 export const PREMERGE_EXPECTED_PACKAGE_NAMES = Object.keys(PREMERGE_PACKAGE_MIN_PASS);
+
+/**
+ * @param {string} sdkRoot
+ */
+export function isNodePtyLoadable(sdkRoot) {
+  try {
+    const req = createRequire(path.join(sdkRoot, "package.json"));
+    req.resolve("node-pty");
+    req("node-pty");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} sdkRoot
+ */
+export function warnIfNodePtyMissing(sdkRoot) {
+  if (!isNodePtyLoadable(sdkRoot)) {
+    console.error(
+      `WARNING: node-pty is not loadable — onboarding wizard e2e (${PREMERGE_ONBOARDING_PTY_TEST_COUNT} tests) will not run and are not counted in skipped totals (environmental silent drop vs js-sdk floor baseline).`,
+    );
+  }
+}
+
+/**
+ * @param {Record<string, string | undefined>} env
+ */
+export function assertPremergeRejectsAllowLibTestEnv(env) {
+  const raw = String(env.ALLOW_LIB_TEST_ENV ?? "").trim();
+  if (raw === "1" || raw.toLowerCase() === "true") {
+    throw new Error(
+      "premerge refuses ALLOW_LIB_TEST_ENV — lib/ TEST env guard bypass is not allowed in premerge/CI (unset ALLOW_LIB_TEST_ENV)",
+    );
+  }
+}
+
+/**
+ * @param {boolean} [nodePtyLoadable]
+ */
+export function infinitecontextMinPassFloor(nodePtyLoadable = false) {
+  return (
+    PREMERGE_PACKAGE_MIN_PASS.infinitecontext +
+    (nodePtyLoadable ? PREMERGE_ONBOARDING_PTY_TEST_COUNT : 0)
+  );
+}
 
 export const PREMERGE_PYTHON_SDK_VENV_FAIL_HINT =
   "premerge: infinitecontext-python-sdk did not run pytest — Python 3.8 .venv is required (0 tests is never a pass). " +
@@ -290,7 +341,12 @@ export function assertPremergeExpectedPackagesDefineTestScript(repoRoot) {
   }
 }
 
-export function assertPremergePackageTestSections(output) {
+/**
+ * @param {string} output
+ * @param {{ nodePtyLoadable?: boolean }} [opts]
+ */
+export function assertPremergePackageTestSections(output, opts = {}) {
+  const { nodePtyLoadable = false } = opts;
   const byPackage = parsePremergePackageCounts(output);
   /** @type {string[]} */
   const problems = [];
@@ -314,9 +370,13 @@ export function assertPremergePackageTestSections(output) {
     if (totals.tests === 0) {
       problems.push(`${name}: matched 0 tests (empty glob or describe.skip-only suite)`);
     }
-    const minPass = PREMERGE_PACKAGE_MIN_PASS[name];
+    let minPass = PREMERGE_PACKAGE_MIN_PASS[name];
+    if (name === "infinitecontext") {
+      minPass = infinitecontextMinPassFloor(nodePtyLoadable);
+    }
     if (minPass !== undefined && totals.pass < minPass) {
-      problems.push(`${name}: pass ${totals.pass} < floor ${minPass} (no node-pty baseline)`);
+      const ptyNote = name === "infinitecontext" && nodePtyLoadable ? " (with node-pty)" : " (no node-pty baseline)";
+      problems.push(`${name}: pass ${totals.pass} < floor ${minPass}${ptyNote}`);
     }
     const accounted = totals.pass + totals.fail + totals.skipped;
     if (accounted !== totals.tests) {

@@ -12,15 +12,30 @@ import {
   assertGitTreeClean,
   assertNoNewIcTmpDirLeaks,
   assertPremergePackageTestSections,
+  assertPremergeRejectsAllowLibTestEnv,
   assertPremergeTestTotalsValid,
+  infinitecontextMinPassFloor,
   isNodeVersionAtLeast,
   parseNodeVersionParts,
   parsePremergePackageCounts,
+  PREMERGE_PACKAGE_MIN_PASS,
 } from "../../scripts/premerge-lib.mjs";
 
 const sdkRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 
 describe("premerge gate helpers", () => {
+  it("refuses ALLOW_LIB_TEST_ENV in premerge", () => {
+    assert.throws(() => assertPremergeRejectsAllowLibTestEnv({ ALLOW_LIB_TEST_ENV: "1" }), /refuses ALLOW_LIB_TEST_ENV/);
+    assert.throws(() => assertPremergeRejectsAllowLibTestEnv({ ALLOW_LIB_TEST_ENV: "true" }), /refuses ALLOW_LIB_TEST_ENV/);
+    assert.doesNotThrow(() => assertPremergeRejectsAllowLibTestEnv({}));
+  });
+
+  it("uses js-sdk floor 591 without node-pty and +13 when pty loads", () => {
+    assert.equal(PREMERGE_PACKAGE_MIN_PASS.infinitecontext, 591);
+    assert.equal(infinitecontextMinPassFloor(false), 591);
+    assert.equal(infinitecontextMinPassFloor(true), 604);
+  });
+
   it("requires Node >=22.12", () => {
     assert.equal(isNodeVersionAtLeast([22, 12, 0], PREMERGE_MIN_NODE), true);
     assert.equal(isNodeVersionAtLeast([22, 11, 9], PREMERGE_MIN_NODE), false);
