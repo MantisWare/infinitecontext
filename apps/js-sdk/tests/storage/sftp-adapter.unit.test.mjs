@@ -22,10 +22,31 @@ function createFakeSftpClient() {
 
   /** @type {Map<string, Buffer>} */
   const openHandles = new Map();
+  /** @type {{ extensions?: Record<string, string>, ext_openssh_rename?: Function } | null} */
+  let lastSftp = null;
 
   const client = {
     setPosixRename(enabled) {
       posixRename = enabled;
+      if (lastSftp) {
+        lastSftp.extensions = posixRename
+          ? { "posix-rename@openssh.com": "1", "fsync@openssh.com": "1" }
+          : {};
+        lastSftp.ext_openssh_rename = posixRename
+          ? (from, to, cb) => {
+              const src = String(from);
+              const dst = String(to);
+              const row = files.get(src);
+              if (!row) {
+                cb(new Error("ENOENT"));
+                return;
+              }
+              files.set(dst, row);
+              files.delete(src);
+              cb(null);
+            }
+          : undefined;
+      }
     },
     async connect() {},
     async end() {},
@@ -79,23 +100,8 @@ function createFakeSftpClient() {
           ext_openssh_fsync(_h, cb) {
             cb(null);
           },
-          ext_openssh_rename(from, to, cb) {
-            if (!posixRename) {
-              cb(new Error("unsupported"));
-              return;
-            }
-            const src = String(from);
-            const dst = String(to);
-            const row = files.get(src);
-            if (!row) {
-              cb(new Error("ENOENT"));
-              return;
-            }
-            files.set(dst, row);
-            files.delete(src);
-            cb(null);
-          },
         };
+        lastSftp = sftp;
         cb(null, sftp);
       },
     },
