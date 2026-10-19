@@ -5,6 +5,9 @@ import { StorageError } from "./errors.mjs";
 
 export const SFTP_OBJECT_STORE_BACKEND_ID = "sftp";
 
+/** Writable chroot directory for `atmoz/sftp` (local emu + CI after Fix PR compose). */
+export const SFTP_ATMOZ_DEFAULT_ROOT = "upload";
+
 /** @type {readonly string[]} */
 export const SFTP_CONFIG_SCALAR_KEYS = Object.freeze([
   "host",
@@ -73,7 +76,9 @@ export function resolveSftpObjectStoreConfig(config = {}, env = process.env) {
   const username = String(
     env.IC_SFTP_TEST_USER ?? env.INFINITECONTEXT_SFTP_USER ?? fromBlock.username ?? "",
   ).trim();
-  const root = String(env.IC_SFTP_TEST_ROOT ?? env.INFINITECONTEXT_SFTP_ROOT ?? fromBlock.root ?? "").trim();
+  const root = String(env.IC_SFTP_TEST_ROOT ?? env.INFINITECONTEXT_SFTP_ROOT ?? fromBlock.root ?? "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
 
   if (!host) {
     throw new StorageError(
@@ -138,7 +143,7 @@ export function resolveSftpObjectStoreConfig(config = {}, env = process.env) {
     host,
     port,
     username,
-    root: root.replace(/\/+$/, "") || "/",
+    root,
     auth,
     privateKeyPath,
     knownHostsPath,

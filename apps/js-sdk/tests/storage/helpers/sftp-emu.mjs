@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { SFTP_ATMOZ_DEFAULT_ROOT } from "../../../lib/storage/sftp-config.mjs";
 import { sha256HostKeyFingerprint } from "../../../lib/storage/sftp-host-key.mjs";
 
 const DEFAULT_IMAGE =
@@ -28,7 +29,7 @@ export function resolveSftpEmuConfigFromEnv(env = process.env) {
   const port = Number(env.IC_SFTP_TEST_PORT ?? 2222);
   const host = String(env.IC_SFTP_TEST_HOST ?? "127.0.0.1").trim();
   const username = String(env.IC_SFTP_TEST_USER ?? "ic").trim();
-  const root = String(env.IC_SFTP_TEST_ROOT ?? "upload").trim();
+  const root = String(env.IC_SFTP_TEST_ROOT ?? SFTP_ATMOZ_DEFAULT_ROOT).trim();
 
   let containerName;
   if (!probeTcp(host, port)) {

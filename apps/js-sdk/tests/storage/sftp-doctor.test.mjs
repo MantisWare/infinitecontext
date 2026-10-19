@@ -67,7 +67,7 @@ describe("storage doctor sftp", () => {
           host: "127.0.0.1",
           port: 22,
           username: "ic",
-          root: "/upload",
+          root: "upload",
           hostKeySha256: "SHA256:x",
           injectClient: fake,
         });

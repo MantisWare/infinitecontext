@@ -88,6 +88,7 @@ export type StorageSftpConfig = {
   host?: string;
   port?: number;
   username?: string;
+  /** Remote path prefix; use `upload` for atmoz/sftp chroot (see storage-sftp-adapter.md). */
   root?: string;
   auth?: "key" | "agent" | "password";
   privateKeyPath?: string;

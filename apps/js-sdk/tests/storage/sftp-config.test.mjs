@@ -11,7 +11,7 @@ import { assertStorageConfigSetAllowed } from "../../lib/storage/storage-config-
 describe("sftp-config", () => {
   it("requires host, username, and root", () => {
     assert.throws(
-      () => resolveSftpObjectStoreConfig({ storage: { sftp: { username: "ic", root: "/upload" } } }),
+      () => resolveSftpObjectStoreConfig({ storage: { sftp: { username: "ic", root: "upload" } } }),
       (err) => err instanceof StorageError,
     );
   });
@@ -49,5 +49,19 @@ describe("sftp-config", () => {
 
   it("allows storage.backend", () => {
     assert.equal(assertKnownSftpConfigKey("storage.backend"), "storage.backend");
+  });
+
+  it("normalizes storage.sftp.root slashes (atmoz uses upload)", () => {
+    const cfg = resolveSftpObjectStoreConfig({
+      storage: {
+        sftp: {
+          host: "127.0.0.1",
+          username: "ic",
+          root: "/upload/",
+          privateKeyPath: "/tmp/key",
+        },
+      },
+    });
+    assert.equal(cfg.root, "upload");
   });
 });

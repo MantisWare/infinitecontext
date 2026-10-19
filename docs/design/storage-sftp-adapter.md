@@ -14,6 +14,16 @@ infinitecontext config set storage.sftp.hostKeySha256 SHA256:…
 
 3. Set backend and connection fields (`config set storage.backend sftp`, `storage.sftp.host`, `storage.sftp.port`, `storage.sftp.username`, `storage.sftp.root`).
 
+### atmoz/sftp (local emulator / Fix PR compose)
+
+The `atmoz/sftp` image creates user home with a **writable chroot subdirectory** named `upload`. Object keys live under that directory (not the session `/` home). Set:
+
+```bash
+infinitecontext config set storage.sftp.root upload
+```
+
+Do **not** use `/upload` or `.` — paths are relative to the SFTP session root (`/home/<user>/`), and only `upload/` is writable. Tests and `IC_SFTP_TEST_ROOT` default to `upload`.
+
 Password and key passphrases: `infinitecontext config set storage.sftp.password` (prompted; never pass on argv). Stored under `storage.sftp.password` / `storage.sftp.keyPassphrase` in `lib/storage/secret-store.mjs`, not in `config.json`.
 
 ## Configuration
@@ -24,7 +34,7 @@ Password and key passphrases: `infinitecontext config set storage.sftp.password`
 | `storage.sftp.host` | Hostname or IP (required) |
 | `storage.sftp.port` | TCP port (default 22) |
 | `storage.sftp.username` | SFTP user (required) |
-| `storage.sftp.root` | Remote directory for `ic-v1/` layout (required) |
+| `storage.sftp.root` | Remote directory prefix for `ic-v1/` layout (required; **`upload`** on `atmoz/sftp`) |
 | `storage.sftp.auth` | `key` \| `agent` \| `password` |
 | `storage.sftp.privateKeyPath` | Path to private key (key auth) |
 | `storage.sftp.knownHostsPath` | Default `~/.ssh/known_hosts` when `hostKeySha256` unset |

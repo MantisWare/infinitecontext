@@ -170,7 +170,7 @@ describe("sftp adapter unit", () => {
       host: "127.0.0.1",
       port: 22,
       username: "ic",
-      root: "/upload",
+      root: "upload",
       hostKeySha256: "SHA256:abc",
       clientFactory: async () => {
         throw new StorageError("sftp backend needs ssh2-sftp-client: npm i ssh2-sftp-client", "unavailable");
@@ -185,7 +185,7 @@ describe("sftp adapter unit", () => {
       host: "127.0.0.1",
       port: 2222,
       username: "ic",
-      root: "/upload",
+      root: "upload",
       hostKeySha256: "SHA256:due7LpKlrJmBm9hgaYNpWmvVNTx0CM+D2kOn8ZrJ7lU",
       injectClient: fake,
     });
@@ -207,7 +207,7 @@ describe("sftp adapter unit", () => {
       host: "127.0.0.1",
       port: 22,
       username: "ic",
-      root: "/upload",
+      root: "upload",
       hostKeySha256: "SHA256:x",
       injectClient: fake,
     });
@@ -229,7 +229,7 @@ describe("sftp adapter unit", () => {
       host: "127.0.0.1",
       port: 22,
       username: "ic",
-      root: "/upload",
+      root: "upload",
       hostKeySha256: "SHA256:x",
       injectClient: fake,
     });
@@ -248,7 +248,7 @@ runStorageAdapterContractSuite(
       host: "127.0.0.1",
       port: 22,
       username: "ic",
-      root: "/upload",
+      root: "upload",
       hostKeySha256: "SHA256:x",
       injectClient: fake,
     });

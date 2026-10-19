@@ -32,7 +32,11 @@ export {
   resolveLocalObjectStoreRootDir,
 } from "./local-object-store.mjs";
 export { S3_OBJECT_STORE_BACKEND_ID, resolveS3ObjectStoreConfig } from "./s3-config.mjs";
-export { SFTP_OBJECT_STORE_BACKEND_ID, resolveSftpObjectStoreConfig } from "./sftp-config.mjs";
+export {
+  SFTP_ATMOZ_DEFAULT_ROOT,
+  SFTP_OBJECT_STORE_BACKEND_ID,
+  resolveSftpObjectStoreConfig,
+} from "./sftp-config.mjs";
 export { createSftpStorageAdapter } from "./sftp-adapter.mjs";
 export { createSftpObjectStore } from "./sftp-object-store.mjs";
 export { runStorageDoctorSftp } from "./storage-doctor-sftp.mjs";
