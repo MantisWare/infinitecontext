@@ -8,8 +8,8 @@ import {
   waitForLegProcessesIdle,
 } from "./premerge-process-utils.mjs";
 
-const LEG_TERM_WAIT_MS = 5000;
-const LEG_KILL_WAIT_MS = 3000;
+const LEG_TERM_WAIT_MS = 8000;
+const LEG_KILL_WAIT_MS = 8000;
 
 /**
  * Shared premerge shutdown / TMPDIR hygiene (used by premerge.mjs and regression tests).

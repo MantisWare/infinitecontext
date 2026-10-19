@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 /** @param {number} pid */
 export function listChildPids(pid) {
@@ -146,6 +147,59 @@ export function waitForLegProcessesIdle(rootPid, pgid, timeoutMs, excludePid = p
 
 /**
  * @param {string} root
+ * @param {NodeJS.Signals} [signal]
+ */
+export function killProcessesUsingPath(root, signal = "SIGKILL") {
+  if (!root) {
+    return;
+  }
+  const normalized = path.resolve(root);
+  let entries;
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    if (!/^\d+$/.test(ent)) {
+      continue;
+    }
+    const pid = Number(ent);
+    if (pid === process.pid) {
+      continue;
+    }
+    /** @type {string[]} */
+    const probes = [];
+    try {
+      probes.push(fs.readlinkSync(`/proc/${ent}/cwd`));
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = fs.readFileSync(`/proc/${ent}/environ`, "latin1");
+      for (const part of raw.split("\0")) {
+        if (part.startsWith("TMPDIR=") || part.startsWith("IC_PREMERGE_TMPDIR=")) {
+          probes.push(part.slice(part.indexOf("=") + 1));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    for (const probe of probes) {
+      if (probe && path.resolve(probe).startsWith(normalized)) {
+        try {
+          process.kill(pid, signal);
+        } catch {
+          /* ignore */
+        }
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * @param {string} root
  * @param {(dir: string) => void} [beforeRm]
  */
 export function removePrivateTmpDirVerified(root, beforeRm) {
@@ -157,6 +211,7 @@ export function removePrivateTmpDirVerified(root, beforeRm) {
     return true;
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    killProcessesUsingPath(root, "SIGKILL");
     try {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch {
