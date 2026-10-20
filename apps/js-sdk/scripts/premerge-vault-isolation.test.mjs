@@ -88,11 +88,15 @@ describe("premerge vault-agent cleanup isolation", () => {
   it("never reads the developer real ~/.infinitecontext", () => {
     const realHome = path.join(os.homedir(), ".infinitecontext");
     const fakePremergeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fake-premerge-home-"));
-    const pids = listVaultAgentServePidsForHome(fakePremergeHome);
-    assert.ok(Array.isArray(pids));
-    assert.notEqual(path.resolve(infinitecontextHome()), path.resolve(fakePremergeHome));
-    if (fs.existsSync(realHome)) {
-      assert.ok(fs.statSync(realHome).isDirectory());
+    try {
+      const pids = listVaultAgentServePidsForHome(fakePremergeHome);
+      assert.ok(Array.isArray(pids));
+      assert.notEqual(path.resolve(infinitecontextHome()), path.resolve(fakePremergeHome));
+      if (fs.existsSync(realHome)) {
+        assert.ok(fs.statSync(realHome).isDirectory());
+      }
+    } finally {
+      fs.rmSync(fakePremergeHome, { recursive: true, force: true });
     }
   });
 });

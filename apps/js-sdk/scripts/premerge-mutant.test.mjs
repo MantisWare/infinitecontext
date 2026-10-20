@@ -75,6 +75,7 @@ describe("premerge mutants must fail", () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m6-"));
+    try {
     const child = spawn(process.execPath, [lateWriterLeg], {
       cwd: sdkRoot,
       env: {
