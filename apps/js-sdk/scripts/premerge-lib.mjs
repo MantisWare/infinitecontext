@@ -125,7 +125,8 @@ export function postgresProbeTargetFromUrl(databaseUrl) {
 }
 
 /**
- * Minimum pass counts (measured without node-pty). Packages must appear, have fail === 0, pass >= floor.
+ * Minimum pass counts measured with node-pty unavailable (native module missing or
+ * `IC_PREMERGE_FORCE_NO_PTY=1` on the premerge process). Floors must equal measured pass counts exactly.
  * @type {Record<string, number>}
  */
 export const PREMERGE_PACKAGE_MIN_PASS = {
@@ -136,11 +137,14 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
   "@infinitecontext/sync-cursor": 1,
-  infinitecontext: 593,
+  infinitecontext: 633,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
   "infinitecontext-python-sdk": 6,
 };
+
+/** Measured infinitecontext pass when node-pty loads (onboarding wizard e2e suite runs). */
+export const PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY = 646;
 
 /** Onboarding wizard e2e tests when node-pty loads (describe.skip when absent). */
 export const PREMERGE_ONBOARDING_PTY_TEST_COUNT = 13;
@@ -148,9 +152,14 @@ export const PREMERGE_ONBOARDING_PTY_TEST_COUNT = 13;
 export const PREMERGE_EXPECTED_PACKAGE_NAMES = Object.keys(PREMERGE_PACKAGE_MIN_PASS);
 
 /**
+ * Whether node-pty loads for onboarding wizard e2e. Force off with `IC_PREMERGE_FORCE_NO_PTY=1`
+ * on the premerge process (same floors as CI without the native module).
  * @param {string} sdkRoot
  */
 export function isNodePtyLoadable(sdkRoot) {
+  if (String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1") {
+    return false;
+  }
   try {
     const req = createRequire(path.join(sdkRoot, "package.json"));
     req.resolve("node-pty");
@@ -188,10 +197,9 @@ export function assertPremergeRejectsAllowLibTestEnv(env) {
  * @param {boolean} [nodePtyLoadable]
  */
 export function infinitecontextMinPassFloor(nodePtyLoadable = false) {
-  return (
-    PREMERGE_PACKAGE_MIN_PASS.infinitecontext +
-    (nodePtyLoadable ? PREMERGE_ONBOARDING_PTY_TEST_COUNT : 0) // 593 + 13 = 606
-  );
+  return nodePtyLoadable
+    ? PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY
+    : PREMERGE_PACKAGE_MIN_PASS.infinitecontext;
 }
 
 export const PREMERGE_PYTHON_SDK_VENV_FAIL_HINT =

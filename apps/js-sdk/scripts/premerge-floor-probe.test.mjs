@@ -44,25 +44,27 @@ describe("premerge per-package floors (measured counts)", () => {
     });
   }
 
-  it("infinitecontext with node-pty: pass 605 fails (floor 606)", () => {
+  it("infinitecontext with node-pty: one pass below floor fails", () => {
     const floor = infinitecontextMinPassFloor(true);
-    assert.equal(floor, 606);
     const broken = withPackagePass(okOut, "infinitecontext", floor - 1);
     assert.throws(
       () => assertPremergePackageTestSections(broken, { nodePtyLoadable: true }),
-      /pass 605 < floor 606/,
+      new RegExp(`pass ${floor - 1} < floor ${floor}`),
     );
   });
 
-  it("infinitecontext with node-pty: pass 606 passes gate probe output", () => {
+  it("infinitecontext with node-pty: probe at floor passes gate", () => {
     assert.doesNotThrow(() =>
       assertPremergePackageTestSections(okOut, { nodePtyLoadable: true }),
     );
   });
 
-  it("infinitecontext without node-pty: probe pass 606 still clears floor 593", () => {
-    assert.doesNotThrow(() =>
-      assertPremergePackageTestSections(okOut, { nodePtyLoadable: false }),
+  it("infinitecontext without node-pty: one pass below floor fails", () => {
+    const floor = infinitecontextMinPassFloor(false);
+    const broken = withPackagePass(okOut, "infinitecontext", floor - 1);
+    assert.throws(
+      () => assertPremergePackageTestSections(broken, { nodePtyLoadable: false }),
+      new RegExp(`pass ${floor - 1} < floor ${floor}`),
     );
   });
 });

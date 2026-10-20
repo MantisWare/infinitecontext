@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const blockingFixture = path.join(sdkRoot, "tests/storage/fixtures/premerge-blocking-cleanup-sigint.mjs");
 const lateWriterLeg = path.join(sdkRoot, "tests/storage/fixtures/premerge-late-writer-leg.mjs");
+const orphanFdLeg = path.join(sdkRoot, "tests/storage/fixtures/premerge-m1b-orphan-fd-leg.mjs");
 
 /**
  * @param {string} script
@@ -23,14 +24,22 @@ async function sigintExitCode(script, extraEnv = {}) {
     const deadline = Date.now() + 15_000;
     const onData = (c) => {
       buf += String(c);
-      if (buf.includes("BLOCKING_CLEANUP_STARTED") || buf.includes("LATE_WRITER_LEG_READY")) {
+      if (
+        buf.includes("BLOCKING_CLEANUP_STARTED") ||
+        buf.includes("LATE_WRITER_LEG_READY") ||
+        buf.includes("ORPHAN_FD_LEG_READY")
+      ) {
         resolve(undefined);
       }
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     const poll = () => {
-      if (buf.includes("BLOCKING_CLEANUP_STARTED") || buf.includes("LATE_WRITER_LEG_READY")) {
+      if (
+        buf.includes("BLOCKING_CLEANUP_STARTED") ||
+        buf.includes("LATE_WRITER_LEG_READY") ||
+        buf.includes("ORPHAN_FD_LEG_READY")
+      ) {
         resolve(undefined);
         return;
       }
@@ -47,6 +56,12 @@ async function sigintExitCode(script, extraEnv = {}) {
   return new Promise((resolve) => child.on("exit", (c) => resolve(c)));
 }
 
+/**
+ * M1b (skip process-group `-pgid` kill) is a surviving production mutant: `collectLegProcessPids`
+ * still signals every leg child and same-group member, and `killProcessesUsingPath` catches
+ * TMPDIR cwd/env holders. Orphans with only an open fd under TMPDIR (no cwd/env match) can outlive
+ * shutdown but do not block `fs.rmSync` once the directory is unlinked — see orphan-fd fixture.
+ */
 describe("premerge mutants must fail", () => {
   it("M1: single setImmediate yield breaks blocking SIGINT (exit not 130)", async () => {
     const code = await sigintExitCode(blockingFixture, { PREMERGE_MUTANT: "M1" });
@@ -114,7 +129,27 @@ describe("premerge mutants must fail", () => {
     }
   });
 
-  it("M1b only: skip -pgid alone still removes TMPDIR (surviving mutant — pid walk compensates)", async () => {
+  it("M1b only: detached orphan fd under TMPDIR still removed (surviving mutant — no cwd/env probe)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-orphan-"));
+    try {
+      const code = await sigintExitCode(orphanFdLeg, {
+        PREMERGE_MUTANT: "M1b",
+        IC_PREMERGE_TMPDIR: tmpRoot,
+        TMPDIR: tmpRoot,
+      });
+      assert.equal(code, 130);
+      assert.equal(fs.existsSync(tmpRoot), false);
+    } finally {
+      const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
+      killProcessesUsingPath(tmpRoot, "SIGKILL");
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      spawnSync("pkill", ["-f", "ic-orphan-fd-hold.bin"], { stdio: "ignore" });
+    }
+  });
+
+  it("M1b only: skip -pgid alone still removes TMPDIR for late-writer leg (surviving mutant)", async () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-only-"));

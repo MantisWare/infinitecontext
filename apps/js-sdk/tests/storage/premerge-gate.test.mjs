@@ -30,10 +30,10 @@ describe("premerge gate helpers", () => {
     assert.doesNotThrow(() => assertPremergeRejectsAllowLibTestEnv({}));
   });
 
-  it("uses js-sdk floor 593 without node-pty and 606 when pty loads", () => {
-    assert.equal(PREMERGE_PACKAGE_MIN_PASS.infinitecontext, 593);
-    assert.equal(infinitecontextMinPassFloor(false), 593);
-    assert.equal(infinitecontextMinPassFloor(true), 606);
+  it("uses measured js-sdk floors without node-pty and with pty", () => {
+    assert.equal(PREMERGE_PACKAGE_MIN_PASS.infinitecontext, 633);
+    assert.equal(infinitecontextMinPassFloor(false), 633);
+    assert.equal(infinitecontextMinPassFloor(true), 646);
   });
 
   it("requires Node >=22.12", () => {
