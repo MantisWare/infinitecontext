@@ -27,8 +27,14 @@ describe("premerge-process-utils", () => {
 
   it("removePrivateTmpDirVerified removes empty dir", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-rm-verify-"));
-    assert.equal(removePrivateTmpDirVerified(root), true);
-    assert.equal(fs.existsSync(root), false);
+    try {
+      assert.equal(removePrivateTmpDirVerified(root), true);
+      assert.equal(fs.existsSync(root), false);
+    } finally {
+      if (fs.existsSync(root)) {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
 
   it("collectLegProcessPids unions tree and group", () => {

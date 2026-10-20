@@ -69,6 +69,7 @@ describe("premerge shutdown helpers", () => {
     syncVaultAgentCleanup({ sdkRoot, premergeHome });
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(listVaultAgentServePidsForHome(premergeHome).length, 0);
+    fs.rmSync(premergeHome, { recursive: true, force: true });
   });
 
   it("SIGINT during late-writer leg removes TMPDIR and exits 130", async () => {

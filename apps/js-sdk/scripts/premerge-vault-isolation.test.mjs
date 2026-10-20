@@ -82,6 +82,7 @@ describe("premerge vault-agent cleanup isolation", () => {
         /* ignore */
       }
     }
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("never reads the developer real ~/.infinitecontext", () => {
