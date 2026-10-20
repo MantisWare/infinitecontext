@@ -136,7 +136,7 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
   "@infinitecontext/sync-cursor": 1,
-  infinitecontext: 591,
+  infinitecontext: 593,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
   "infinitecontext-python-sdk": 6,
@@ -190,7 +190,7 @@ export function assertPremergeRejectsAllowLibTestEnv(env) {
 export function infinitecontextMinPassFloor(nodePtyLoadable = false) {
   return (
     PREMERGE_PACKAGE_MIN_PASS.infinitecontext +
-    (nodePtyLoadable ? PREMERGE_ONBOARDING_PTY_TEST_COUNT : 0)
+    (nodePtyLoadable ? PREMERGE_ONBOARDING_PTY_TEST_COUNT : 0) // 593 + 13 = 606
   );
 }
 

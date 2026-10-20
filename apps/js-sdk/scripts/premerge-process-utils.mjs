@@ -211,7 +211,9 @@ export function removePrivateTmpDirVerified(root, beforeRm) {
     return true;
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    killProcessesUsingPath(root, "SIGKILL");
+    if (!String(process.env.PREMERGE_MUTANT ?? "").includes("M6")) {
+      killProcessesUsingPath(root, "SIGKILL");
+    }
     try {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch {

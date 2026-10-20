@@ -1,35 +1,23 @@
 #!/usr/bin/env node
-/**
- * Mimics premerge after a failing pnpm test: finally runs slow cleanupAll; SIGINT must still exit 130.
- */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createPremergeShutdown } from "../../../scripts/premerge-shutdown.mjs";
+import { createPremergeShutdown, drainPendingSigint } from "../../../scripts/premerge-shutdown.mjs";
 
 const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sigint-cleanup-"));
-const marker = path.join(premergeTmpRoot, "cleanup-started.txt");
+
+const slowCleanup = () => {
+  console.log("CLEANUP_STARTED");
+  spawnSync("sleep", ["3"], { stdio: "ignore" });
+};
 
 /** @type {ReturnType<typeof createPremergeShutdown>} */
 let shutdown;
-
-const slowCleanup = async () => {
-  fs.writeFileSync(marker, "started\n");
-  console.log("CLEANUP_STARTED");
-  for (let i = 0; i < 150; i += 1) {
-    if (shutdown.shuttingDown) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-};
-
 shutdown = createPremergeShutdown({
   premergeTmpRoot,
-  cleanupAll: () => {
-    /* sync entry unused; premerge calls cleanup in finally directly */
-  },
+  cleanupAll: slowCleanup,
   killActiveProcessGroup(signal) {
     void shutdown.terminateActiveLeg(signal);
   },
@@ -47,10 +35,10 @@ try {
     testRunFailed = true;
   }
 } finally {
-  await slowCleanup();
+  slowCleanup();
 }
 
-await new Promise((resolve) => setImmediate(resolve));
+await drainPendingSigint();
 
 if (testRunFailed && !shutdown.shuttingDown) {
   shutdown.exitPremerge(1);

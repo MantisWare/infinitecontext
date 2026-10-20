@@ -7,8 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { removePrivateTmpDirVerified } from "./premerge-process-utils.mjs";
-import { listVaultAgentServePids, syncVaultAgentCleanup } from "./premerge-vault-cleanup.mjs";
-import { ensureDetachedVaultAgent } from "../lib/vault-agent.mjs";
+import { syncVaultAgentCleanup, listVaultAgentServePidsForHome } from "./premerge-vault-cleanup.mjs";
 
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lateWriterLeg = path.join(
@@ -56,12 +55,20 @@ describe("premerge shutdown helpers", () => {
     assert.equal(code, 130);
   });
 
-  it("syncVaultAgentCleanup leaves no vault-agent-serve processes", async () => {
-    await ensureDetachedVaultAgent();
-    assert.ok(listVaultAgentServePids().length > 0);
-    syncVaultAgentCleanup(sdkRoot);
+  it("syncVaultAgentCleanup scoped to premerge HOME only", async () => {
+    const premergeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-shutdown-vault-home-"));
+    const serve = path.join(sdkRoot, "lib/vault-agent-serve.mjs");
+    const child = spawn(process.execPath, [serve], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, HOME: premergeHome, IC_PREMERGE_HOME: premergeHome },
+    });
+    child.unref();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(listVaultAgentServePidsForHome(premergeHome).length > 0);
+    syncVaultAgentCleanup({ sdkRoot, premergeHome });
     await new Promise((r) => setTimeout(r, 200));
-    assert.equal(listVaultAgentServePids().length, 0);
+    assert.equal(listVaultAgentServePidsForHome(premergeHome).length, 0);
   });
 
   it("SIGINT during late-writer leg removes TMPDIR and exits 130", async () => {

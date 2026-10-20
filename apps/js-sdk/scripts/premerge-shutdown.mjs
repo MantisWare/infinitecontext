@@ -11,6 +11,16 @@ import {
 const LEG_TERM_WAIT_MS = 8000;
 const LEG_KILL_WAIT_MS = 8000;
 
+/** Yield so SIGINT during blocking cleanup is observed before exitPremerge(1). */
+export async function drainPendingSigint() {
+  if (String(process.env.PREMERGE_MUTANT ?? "").includes("M1")) {
+    await new Promise((resolve) => setImmediate(resolve));
+    return;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
 /**
  * Shared premerge shutdown / TMPDIR hygiene (used by premerge.mjs and regression tests).
  * @param {object} opts
@@ -64,6 +74,9 @@ export function createPremergeShutdown(opts) {
     if (!child?.pid) {
       return;
     }
+    if (String(process.env.PREMERGE_MUTANT ?? "").includes("M7")) {
+      return;
+    }
     const rootPid = child.pid;
     const pgid = child.pid;
     try {
@@ -112,7 +125,7 @@ export function createPremergeShutdown(opts) {
   }
 
   function exitPremerge(code) {
-    if (shuttingDown) {
+    if (shuttingDown && !String(process.env.PREMERGE_MUTANT ?? "").includes("M3")) {
       finishShutdown();
       process.exit(shutdownExitCode ?? 130);
     }
@@ -124,28 +137,28 @@ export function createPremergeShutdown(opts) {
    * @param {string} message
    * @param {number} [code]
    */
-  function fail(message, code = 1) {
+  async function fail(message, code = 1) {
     if (shuttingDown) {
-      return;
+      exitPremerge(shutdownExitCode ?? 130);
     }
     console.error(message);
-    void terminateActiveLeg("SIGKILL").then(() => {
-      cleanupAll();
-      exitPremerge(code);
-    });
+    await terminateActiveLeg("SIGKILL");
+    cleanupAll();
+    exitPremerge(code);
+    throw new Error("premerge fail did not terminate process");
   }
 
   /**
    * @param {Set<string>} icTmpBeforeTests
    */
-  function finalizeTmpHygiene(icTmpBeforeTests) {
+  async function finalizeTmpHygiene(icTmpBeforeTests) {
     if (shuttingDown) {
       return;
     }
     try {
       assertNoNewIcTmpDirLeaks(icTmpBeforeTests, listAllIcTmpDirs());
     } catch (error) {
-      fail(error instanceof Error ? error.message : String(error));
+      await fail(error instanceof Error ? error.message : String(error));
     }
     cleanupPremergeTmpRoot();
   }
@@ -213,7 +226,7 @@ export function createPremergeShutdown(opts) {
   async function completeShutdownAfterSignal() {
     await terminateActiveLeg("SIGTERM");
     finishShutdown();
-    process.exit(shutdownExitCode ?? 130);
+    exitPremerge(shutdownExitCode ?? 130);
   }
 
   /**
@@ -227,12 +240,20 @@ export function createPremergeShutdown(opts) {
   }
 
   function registerSignalHandlers() {
-    process.on("SIGINT", () => {
-      if (!beginShutdown("SIGINT")) {
+    const onInt = () => {
+      const arm = () => {
+        if (!beginShutdown("SIGINT")) {
+          return;
+        }
+        void completeShutdownAfterSignal();
+      };
+      if (String(process.env.PREMERGE_MUTANT ?? "").includes("M2")) {
+        setTimeout(arm, 2000);
         return;
       }
-      void completeShutdownAfterSignal();
-    });
+      arm();
+    };
+    process.on("SIGINT", onInt);
     process.on("SIGTERM", () => {
       if (!beginShutdown("SIGTERM")) {
         return;
@@ -253,6 +274,7 @@ export function createPremergeShutdown(opts) {
     registerSignalHandlers,
     cleanupPremergeTmpRoot,
     cleanupNodeCompileCache,
+    drainPendingSigint,
     get shuttingDown() {
       return shuttingDown;
     },
