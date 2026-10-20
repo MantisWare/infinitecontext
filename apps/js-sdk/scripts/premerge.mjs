@@ -105,6 +105,7 @@ shutdown = createPremergeShutdown({
 shutdown.registerSignalHandlers();
 
 function premergeChildEnv(extra = {}) {
+  const forceNoPty = String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1";
   return {
     ...process.env,
     HOME: premergeHome,
@@ -115,6 +116,7 @@ function premergeChildEnv(extra = {}) {
     TEMP: premergeTmpRoot,
     IC_PREMERGE_TMPDIR: premergeTmpRoot,
     DISABLE_V8_COMPILE_CACHE: "1",
+    ...(forceNoPty ? { IC_PREMERGE_FORCE_NO_PTY: "1" } : {}),
     ...extra,
   };
 }

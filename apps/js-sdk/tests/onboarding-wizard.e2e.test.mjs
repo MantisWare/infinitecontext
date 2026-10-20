@@ -19,7 +19,8 @@ try {
   pty = null;
 }
 
-const describeOnboarding = pty ? describe : describe.skip;
+const forceNoPty = String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1";
+const describeOnboarding = pty && !forceNoPty ? describe : describe.skip;
 
 // ── keystroke sequences the wizard expects ───────────────────────
 
