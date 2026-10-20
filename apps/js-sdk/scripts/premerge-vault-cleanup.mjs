@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readPremergeVaultAgentPids } from "./premerge-vault-registry.mjs";
+import { readPremergeVaultAgentPids } from "../lib/premerge-vault-registry.mjs";
 
 /**
  * @param {number} pid

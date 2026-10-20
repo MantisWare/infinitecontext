@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 
 import { infinitecontextHome } from "../lib/credentials.mjs";
 import { syncVaultAgentCleanup, listVaultAgentServePidsForHome } from "./premerge-vault-cleanup.mjs";
-import { registerPremergeVaultAgentPid } from "./premerge-vault-registry.mjs";
+import { registerPremergeVaultAgentPid } from "../lib/premerge-vault-registry.mjs";
 
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serveScript = path.join(sdkRoot, "lib/vault-agent-serve.mjs");

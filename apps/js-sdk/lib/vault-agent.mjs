@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { infinitecontextHome } from "./credentials.mjs";
-import { registerPremergeVaultAgentPid } from "../scripts/premerge-vault-registry.mjs";
+import { registerPremergeVaultAgentPid } from "./premerge-vault-registry.mjs";
 
 const SOCKET_NAME = "vault-agent.sock";
 const PID_NAME = "vault-agent.pid";
