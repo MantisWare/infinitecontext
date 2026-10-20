@@ -106,11 +106,7 @@ describe("premerge mutants must fail", () => {
     await new Promise((resolve) => child.on("exit", resolve));
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(fs.existsSync(tmpRoot), true);
-    try {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
   it("M7: skip process-group kill leaves active leg child alive", async () => {
