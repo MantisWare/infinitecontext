@@ -1,4 +1,5 @@
 import { StorageError } from "./errors.mjs";
+import { isTestRuntime } from "./test-hooks.mjs";
 import {
   assertDbusSendAvailableOnLinux,
   isLinuxSecretServiceOnSessionBus,
@@ -67,7 +68,7 @@ export async function isKeyringUsableForAuto() {
   if (!platformKeychainMarkerId()) {
     return false;
   }
-  if (process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
+  if (isTestRuntime() && process.env.INFINITECONTEXT_KEYRING_DURABLE === "0") {
     return false;
   }
   return probeKeyringSecretService();

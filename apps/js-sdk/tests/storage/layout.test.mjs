@@ -25,6 +25,7 @@ import {
   decryptLogSegment,
   encryptLogSegment,
   encodeCrockfordBase32,
+  parseStrictVaultKdfParams,
   parseStrictWrappedDekBytes,
   layoutRootPath,
   layoutSegmentEnvelopeDigest,
@@ -265,7 +266,7 @@ describe("vault.json codec", () => {
         decodeVaultJson(
           json.replace('"memorySizeKiB":65536', '"memorySizeKiB":1024'),
         ),
-      /memorySizeKiB out of allowed range/,
+      /below floor/,
     );
     assert.throws(
       () => decodeVaultJson('{"ic_vault_v":1,"kdf_salt_b64":"x","kdf":{},"wrapped_dek_b64":"x","extra":1}'),
@@ -281,5 +282,30 @@ describe("vault.json codec", () => {
     wrapped.extra = true;
     const wrappedBytes = new TextEncoder().encode(JSON.stringify(wrapped));
     assert.throws(() => parseStrictWrappedDekBytes(wrappedBytes), /forbidden field/);
+  });
+
+  it("caps hostile vault KDF params to QA #11 ceiling", () => {
+    assert.throws(
+      () =>
+        parseStrictVaultKdfParams({
+          algorithm: "argon2id",
+          memorySizeKiB: 524_288,
+          iterations: 3,
+          parallelism: 4,
+          hashLength: 32,
+        }),
+      /above ceiling/,
+    );
+    assert.throws(
+      () =>
+        parseStrictVaultKdfParams({
+          algorithm: "argon2id",
+          memorySizeKiB: 65536,
+          iterations: 100,
+          parallelism: 4,
+          hashLength: 32,
+        }),
+      /iterations above ceiling/,
+    );
   });
 });

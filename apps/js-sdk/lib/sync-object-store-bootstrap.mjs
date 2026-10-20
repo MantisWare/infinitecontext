@@ -74,7 +74,11 @@ export async function configureObjectStoreSyncTransportIfNeeded(options = {}) {
   return openLocalStore;
 }
 
-/** @param {Record<string, unknown>} config */
+/**
+ * Support override: `INFINITECONTEXT_DEVICE_UUID` pins the device id without writing config (see storage-backends guide).
+ *
+ * @param {Record<string, unknown>} config
+ */
 function resolveOrCreateDeviceUuid(config) {
   const envUuid = String(process.env.INFINITECONTEXT_DEVICE_UUID ?? "").trim();
   if (envUuid) return normalizeDeviceUuid(envUuid);

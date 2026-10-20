@@ -2,8 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import "../../../../scripts/ic-test-tmp-preload.mjs";
+
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-storage-test-home-"));
 process.env.HOME = isolatedHome;
+if (process.env.NODE_ENV === undefined || process.env.NODE_ENV === "") {
+  process.env.NODE_ENV = "test";
+}
 
 function cleanupIsolatedHome() {
   try {

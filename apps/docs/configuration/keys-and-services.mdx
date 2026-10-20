@@ -17,6 +17,8 @@ These settings apply to the CLI, sync daemon, TUI, MCP server, and SDKs on your 
 | Legacy API key | One of key **or** login | — | `INFINITECONTEXT_API_KEY` | `apiKey` | Use `infinitecontext login` or set a project key |
 | Account session | One of key **or** login | — | (stored in `~/.infinitecontext/credentials.json`) | — | Run `infinitecontext login` |
 | Skip npm update check | No | check enabled | `INFINITECONTEXT_NO_UPDATE_CHECK=1` / `true` / `yes` | — | Optional registry lookup on CLI start (not telemetry) |
+| Node.js (JS SDK / storage) | **Yes** for storage tests | — | — | — | Requires **Node ≥ 22.12** (`apps/js-sdk`); older Node fails with missing built-ins (for example `node:sqlite`) |
+| S3-compatible storage | When `storage.backend=s3` | — | `AWS_*`, `AWS_ENDPOINT_URL`, `INFINITECONTEXT_S3_BUCKET` | `storage.s3.*` in `config.json` | Uses AWS default credential chain; see [Storage backends](/guides/storage-backends) |
 
 ```bash
 infinitecontext config show    # shows active server (hosted vs self-host)

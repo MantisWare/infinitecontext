@@ -1,6 +1,6 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, execSync, spawn } from 'node:child_process';
+import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,200 @@ const execFileAsync = promisify(execFile);
 
 const DB_URL = process.env.SYNC_E2E_DATABASE_URL ?? process.env.VAULT_E2E_DATABASE_URL;
 let postgresReady = false;
+/** @type {Set<string>} */
+let vaultAgentPidsBaseline = new Set();
+/** @type {Set<string>} */
+const trackedVaultAgentPids = new Set();
+
+/** @type {ChildProcess[]} */
+const trackedDaemonChildren: ChildProcess[] = [];
+/** @type {string[]} */
+const trackedTempHomes: string[] = [];
+
+function snapshotVaultAgentPids() {
+    try {
+        const out = execSync('pgrep -f "[v]ault-agent-serve.mjs" || true', { encoding: 'utf8' }).trim();
+        if (!out) return new Set<string>();
+        return new Set(out.split('\n').filter(Boolean));
+    } catch {
+        return new Set<string>();
+    }
+}
+
+function readLinuxPpid(pid: number): number | null {
+    try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const match = stat.match(/^\d+ \([^)]+\) [A-Z] (\d+)/);
+        return match ? Number(match[1]) : null;
+    } catch {
+        return null;
+    }
+}
+
+function isDescendantOf(pid: number, ancestorPid: number): boolean {
+    let current = pid;
+    for (let depth = 0; depth < 64; depth += 1) {
+        if (current === ancestorPid) return true;
+        const ppid = readLinuxPpid(current);
+        if (!ppid || ppid <= 1) return false;
+        current = ppid;
+    }
+    return false;
+}
+
+function registerVaultAgentsSpawnedByTrackedDaemons(tempHomes: string[] = trackedTempHomes) {
+    const daemonPids = trackedDaemonChildren
+        .map((child) => child.pid)
+        .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
+    const after = snapshotVaultAgentPids();
+    for (const pid of after) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
+        const numeric = Number(pid);
+        if (!numeric) continue;
+        if (daemonPids.some((daemonPid) => isDescendantOf(numeric, daemonPid))) {
+            trackedVaultAgentPids.add(pid);
+            continue;
+        }
+        try {
+            const cmdline = fs.readFileSync(`/proc/${numeric}/cmdline`, 'utf8');
+            if (tempHomes.some((home) => cmdline.includes(home))) {
+                trackedVaultAgentPids.add(pid);
+            }
+        } catch {
+            /* process exited */
+        }
+    }
+}
+
+function shutdownVaultAgentsForHomes(homes: string[]) {
+    for (const home of homes) {
+        const pidFile = path.join(home, '.infinitecontext', 'vault-agent.pid');
+        try {
+            const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+            if (Number.isInteger(pid) && pid > 0) {
+                trackedVaultAgentPids.add(String(pid));
+                try {
+                    process.kill(pid, 'SIGTERM');
+                } catch {
+                    /* ignore */
+                }
+            }
+        } catch {
+            /* no pid file */
+        }
+    }
+}
+
+async function terminateTrackedVaultAgents() {
+    registerVaultAgentsSpawnedByTrackedDaemons();
+    for (const pid of trackedVaultAgentPids) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
+        try {
+            process.kill(Number(pid), 'SIGTERM');
+        } catch {
+            /* ignore */
+        }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    for (const pid of [...trackedVaultAgentPids]) {
+        if (vaultAgentPidsBaseline.has(pid)) continue;
+        try {
+            process.kill(Number(pid), 'SIGKILL');
+        } catch {
+            /* ignore */
+        }
+    }
+    trackedVaultAgentPids.clear();
+}
+
+function trackTempHome(prefix: string) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    trackedTempHomes.push(dir);
+    return dir;
+}
+
+function spawnDaemonStart(env: NodeJS.ProcessEnv) {
+    const child = spawn(process.execPath, [cliPath, 'sync', 'start'], {
+        env,
+        stdio: 'ignore',
+    });
+    trackedDaemonChildren.push(child);
+    return child;
+}
+
+async function terminateTrackedChild(child: ChildProcess) {
+    if (!child.pid || child.exitCode !== null) return;
+    try {
+        child.kill('SIGTERM');
+    } catch {
+        /* exited */
+    }
+    await Promise.race([
+        new Promise<void>((resolve) => {
+            if (child.exitCode !== null) {
+                resolve();
+                return;
+            }
+            child.once('exit', () => resolve());
+        }),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
+    if (child.exitCode === null && child.pid) {
+        try {
+            child.kill('SIGKILL');
+        } catch {
+            /* ignore */
+        }
+    }
+}
+
+async function cleanupDaemonLeaks() {
+    for (const child of trackedDaemonChildren.splice(0)) {
+        await terminateTrackedChild(child);
+    }
+    for (const home of trackedTempHomes.splice(0)) {
+        try {
+            fs.rmSync(home, { recursive: true, force: true });
+        } catch {
+            /* ignore */
+        }
+    }
+}
+
+function vaultAgentPidsScopedToTrackedHomes(): Set<string> {
+    const scoped = new Set<string>();
+    for (const pid of snapshotVaultAgentPids()) {
+        if (vaultAgentPidsBaseline.has(pid)) {
+            continue;
+        }
+        const numeric = Number(pid);
+        if (!numeric) {
+            continue;
+        }
+        if (trackedVaultAgentPids.has(pid)) {
+            scoped.add(pid);
+            continue;
+        }
+        try {
+            const cmdline = fs.readFileSync(`/proc/${numeric}/cmdline`, 'utf8');
+            if (trackedTempHomes.some((home) => cmdline.includes(home))) {
+                scoped.add(pid);
+            }
+        } catch {
+            /* exited */
+        }
+    }
+    return scoped;
+}
+
+function assertNoDaemonLeaksAfterCleanup() {
+    const scoped = vaultAgentPidsScopedToTrackedHomes();
+    assert.equal(
+        scoped.size,
+        0,
+        `vault-agent-serve.mjs still running for this test's temp homes: ${[...scoped].join(', ')}`,
+    );
+}
 let server: ReturnType<typeof serve> | null = null;
 let baseUrl = '';
 let cliPath = '';
@@ -52,6 +246,7 @@ before(async () => {
     await new Promise<void>((resolve) => {
         server = serve({ fetch: app.fetch, port }, () => resolve());
     });
+    vaultAgentPidsBaseline = snapshotVaultAgentPids();
 
     apiJson = async (method, urlPath, body, token) => {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -64,9 +259,38 @@ before(async () => {
     };
 });
 
-after(() => {
+async function shutdownDaemonE2e(exitCode = 0) {
+    await cleanupDaemonLeaks();
+    await terminateTrackedVaultAgents();
     server?.close?.();
+    if (installRoot && fs.existsSync(installRoot)) {
+        fs.rmSync(installRoot, { recursive: true, force: true });
+    }
+    if (exitCode !== 0) {
+        process.exit(exitCode);
+    }
+}
+
+process.on('SIGINT', () => {
+    void shutdownDaemonE2e(130);
 });
+process.on('SIGTERM', () => {
+    void shutdownDaemonE2e(143);
+});
+
+after(async () => {
+    await shutdownDaemonE2e(0);
+});
+
+describe('sync daemon two-device e2e (postgres)', () => {
+    afterEach(async () => {
+        const tempHomes = [...trackedTempHomes];
+        shutdownVaultAgentsForHomes(tempHomes);
+        registerVaultAgentsSpawnedByTrackedDaemons(tempHomes);
+        await cleanupDaemonLeaks();
+        await terminateTrackedVaultAgents();
+        assertNoDaemonLeaksAfterCleanup();
+    });
 
 function writeCredentials(home: string, creds: Record<string, unknown>) {
     const dir = path.join(home, '.infinitecontext');
@@ -123,10 +347,7 @@ async function ensureDaemonDb(dbFile: string) {
 
 async function runDaemonCycle(home: string, dbFile: string) {
     await ensureDaemonDb(dbFile);
-    const child = spawn(process.execPath, [cliPath, 'sync', 'start'], {
-        env: cliEnv(home, dbFile),
-        stdio: 'ignore',
-    });
+    const child = spawnDaemonStart(cliEnv(home, dbFile));
     await new Promise((r) => setTimeout(r, 4000));
     try {
         await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: cliEnv(home, dbFile) });
@@ -246,13 +467,12 @@ queueSyncMutation(mutationForMessageAppend(contextId, [{
     await execFileAsync(process.execPath, [file], { env: cliEnv(home, path.join(home, 'daemon.db')) });
 }
 
-describe('sync daemon two-device e2e (postgres)', () => {
     it('plaintext: daemon pull/push converges offline appends on two homes', async () => {
         if (!postgresReady) return;
         const email = `daemon-plain-${Date.now()}@example.com`;
         const auth = await authPair(email);
-        const homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-daemon-a-'));
-        const homeB = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-daemon-b-'));
+        const homeA = trackTempHome('ic-daemon-a-');
+        const homeB = trackTempHome('ic-daemon-b-');
         const dbA = path.join(homeA, 'daemon.db');
         const dbB = path.join(homeB, 'daemon.db');
         writeCredentials(homeA, {
@@ -320,7 +540,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
             },
             auth.accessA,
         );
-        const homeB = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-daemon-vb-'));
+        const homeB = trackTempHome('ic-daemon-vb-');
         const dbB = path.join(homeB, 'daemon.db');
         writeCredentials(homeB, {
             accessToken: auth.accessB,
@@ -380,8 +600,8 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const email = `daemon-vdel-${Date.now()}@example.com`;
         const auth = await authPair(email);
         const material = await setupVaultCrypto(auth.accessA);
-        const homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vdel-a-'));
-        const homeB = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vdel-b-'));
+        const homeA = trackTempHome('ic-vdel-a-');
+        const homeB = trackTempHome('ic-vdel-b-');
         const dbA = path.join(homeA, 'daemon.db');
         const dbB = path.join(homeB, 'daemon.db');
         writeCredentials(homeA, {
@@ -485,7 +705,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const email = `daemon-vupd-${Date.now()}@example.com`;
         const auth = await authPair(email);
         const material = await setupVaultCrypto(auth.accessA);
-        const homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-vupd-a-'));
+        const homeA = trackTempHome('ic-vupd-a-');
         const dbA = path.join(homeA, 'daemon.db');
         writeCredentials(homeA, {
             accessToken: auth.accessA,
@@ -579,7 +799,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         if (!postgresReady) return;
         const email = `daemon-offline-${Date.now()}@example.com`;
         const auth = await authPair(email);
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-offline-'));
+        const home = trackTempHome('ic-daemon-offline-');
         const dbFile = path.join(home, 'daemon.db');
         writeCredentials(home, {
             accessToken: auth.accessA,
@@ -627,10 +847,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         };
 
         await ensureDaemonDb(dbFile);
-        const offlineChild = spawn(process.execPath, [cliPath, 'sync', 'start'], {
-            env: offlineEnv,
-            stdio: 'ignore',
-        });
+        const offlineChild = spawnDaemonStart(offlineEnv);
         await new Promise((r) => setTimeout(r, 4500));
         try {
             await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: offlineEnv });
@@ -643,10 +860,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         const beforeCount = ((contextsBefore.body.data as any[]) ?? []).length;
 
         await ensureDaemonDb(dbFile);
-        const onlineChild = spawn(process.execPath, [cliPath, 'sync', 'start'], {
-            env: cliEnv(home, dbFile, ingestEnv),
-            stdio: 'ignore',
-        });
+        const onlineChild = spawnDaemonStart(cliEnv(home, dbFile, ingestEnv));
         await new Promise((r) => setTimeout(r, 8000));
         try {
             await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: cliEnv(home, dbFile, ingestEnv) });
@@ -655,10 +869,7 @@ describe('sync daemon two-device e2e (postgres)', () => {
         }
         await new Promise((r) => setTimeout(r, 300));
         await ensureDaemonDb(dbFile);
-        const onlineChild2 = spawn(process.execPath, [cliPath, 'sync', 'start'], {
-            env: cliEnv(home, dbFile, ingestEnv),
-            stdio: 'ignore',
-        });
+        const onlineChild2 = spawnDaemonStart(cliEnv(home, dbFile, ingestEnv));
         await new Promise((r) => setTimeout(r, 5000));
         try {
             await execFileAsync(process.execPath, [cliPath, 'sync', 'stop'], { env: cliEnv(home, dbFile, ingestEnv) });

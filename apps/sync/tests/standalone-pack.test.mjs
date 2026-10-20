@@ -13,26 +13,31 @@ const syncRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 describe("sync standalone pack", () => {
   it("installs packed sync alone and loads store without infinitecontext", () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-pack-out-"));
-    const tgz = packSyncFromStaging({ packDestination: outDir });
-    assert.ok(fs.existsSync(tgz));
-
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sync-standalone-"));
-    fs.writeFileSync(
-      path.join(installDir, "package.json"),
-      JSON.stringify({ name: "ic-sync-smoke", private: true, type: "module" }),
-    );
-    execSync(`npm install --no-save --ignore-scripts --legacy-peer-deps "file:${tgz}"`, {
-      cwd: installDir,
-      stdio: "inherit",
-    });
+    try {
+      const tgz = packSyncFromStaging({ packDestination: outDir });
+      assert.ok(fs.existsSync(tgz));
 
-    const script = path.join(installDir, "smoke.mjs");
-    fs.writeFileSync(
-      script,
-      `import { resolveDbPath } from '@infinitecontext/sync/store';
+      fs.writeFileSync(
+        path.join(installDir, "package.json"),
+        JSON.stringify({ name: "ic-sync-smoke", private: true, type: "module" }),
+      );
+      execSync(`npm install --no-save --ignore-scripts --legacy-peer-deps "file:${tgz}"`, {
+        cwd: installDir,
+        stdio: "inherit",
+      });
+
+      const script = path.join(installDir, "smoke.mjs");
+      fs.writeFileSync(
+        script,
+        `import { resolveDbPath } from '@infinitecontext/sync/store';
 if (typeof resolveDbPath !== 'function') process.exit(2);
 `,
-    );
-    execSync(`node ${script}`, { cwd: installDir, stdio: "inherit" });
+      );
+      execSync(`node ${script}`, { cwd: installDir, stdio: "inherit" });
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.rmSync(installDir, { recursive: true, force: true });
+    }
   });
 });

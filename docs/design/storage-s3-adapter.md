@@ -29,9 +29,9 @@ Remote ciphertext object storage using the **`StorageAdapter`** contract over **
 | `config.json` → `storage.s3.endpoint` | Custom base URL (optional; prefer `AWS_ENDPOINT_URL`) |
 | Env | `AWS_*`, `AWS_ENDPOINT_URL`, `INFINITECONTEXT_S3_BUCKET`, `INFINITECONTEXT_S3_PREFIX` |
 
-## CI
+## Local MinIO emulator
 
-**`storage.yml`** builds a **pinned MinIO server from source** (`git clone --branch RELEASE.2024-11-07T00-52-20Z` + `go build` — GitHub/dl.min.io release binaries return **410** in CI). The server listens on port **9000**. When `IC_REQUIRE_MINIO=1`, tests require `AWS_ENDPOINT_URL` + the CI test bucket env. S3 **`init()`** uses the **cached basic CAS probe** only (no per-init race). **`storage-doctor-cas-minio.test.mjs`** runs **`doctor --recheck-cas`** and **`doctor --cas-race`** against MinIO. Tests skip locally without MinIO.
+**`apps/js-sdk/tests/storage/compose.yaml`** runs a **pinned MinIO** image (`RELEASE.2024-11-07T00-52-20Z`) on **127.0.0.1:9000** with bucket **`infinitecontext-ci`**. Use `npm run storage:emu:up` / `storage:emu:down` from `apps/js-sdk`. When `IC_REQUIRE_MINIO=1`, tests require `AWS_ENDPOINT_URL` + the test bucket env. S3 **`init()`** uses the **cached basic CAS probe** only (no per-init race). **`storage-doctor-cas-minio.test.mjs`** runs **`doctor --recheck-cas`** and **`doctor --cas-race`** against MinIO. Tests skip locally without MinIO unless the emulator is up.
 
 ## Related docs
 

@@ -34,8 +34,17 @@ const DEVICE_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PREV_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const ENVELOPE_FIELD_NAMES = new Set(["v", "alg", "nonce", "ct"]);
-const KDF_MAX_MEMORY_KIB = 524_288;
-const KDF_MAX_ITERATIONS = 100;
+/** QA #11: vault.json KDF bounds (ceiling + floor at default profile). */
+export const VAULT_KDF_MIN_MEMORY_KIB = VAULT_KDF_PARAMS.memorySizeKiB;
+export const VAULT_KDF_MAX_MEMORY_KIB = 262144;
+export const VAULT_KDF_MIN_ITERATIONS = VAULT_KDF_PARAMS.iterations;
+export const VAULT_KDF_MAX_ITERATIONS = 10;
+export const VAULT_KDF_MIN_PARALLELISM = 1;
+export const VAULT_KDF_MAX_PARALLELISM = 8;
+const KDF_MIN_MEMORY_KIB = VAULT_KDF_MIN_MEMORY_KIB;
+const KDF_MAX_MEMORY_KIB = VAULT_KDF_MAX_MEMORY_KIB;
+const KDF_MIN_ITERATIONS = VAULT_KDF_MIN_ITERATIONS;
+const KDF_MAX_ITERATIONS = VAULT_KDF_MAX_ITERATIONS;
 
 const VAULT_KDF_FIELD_NAMES = new Set([
   "algorithm",
@@ -471,26 +480,40 @@ export function parseStrictVaultKdfParams(kdf) {
   if (kdf.algorithm !== VAULT_KDF_PARAMS.algorithm) {
     throw new Error("vault.json kdf algorithm must be argon2id");
   }
-  const memorySizeKiB = Number(kdf.memorySizeKiB);
-  const iterations = Number(kdf.iterations);
-  const parallelism = Number(kdf.parallelism);
+  if (typeof kdf.memorySizeKiB !== "number" || !Number.isSafeInteger(kdf.memorySizeKiB)) {
+    throw new Error("vault.json kdf memorySizeKiB must be a safe integer");
+  }
+  if (typeof kdf.iterations !== "number" || !Number.isSafeInteger(kdf.iterations)) {
+    throw new Error("vault.json kdf iterations must be a safe integer");
+  }
+  if (typeof kdf.parallelism !== "number" || !Number.isSafeInteger(kdf.parallelism)) {
+    throw new Error("vault.json kdf parallelism must be a safe integer");
+  }
+  const memorySizeKiB = kdf.memorySizeKiB;
+  const iterations = kdf.iterations;
+  const parallelism = kdf.parallelism;
   const hashLength = Number(kdf.hashLength);
-  if (
-    !Number.isSafeInteger(memorySizeKiB) ||
-    memorySizeKiB < VAULT_KDF_PARAMS.memorySizeKiB ||
-    memorySizeKiB > KDF_MAX_MEMORY_KIB
-  ) {
-    throw new Error("vault.json kdf memorySizeKiB out of allowed range");
+  if (memorySizeKiB < KDF_MIN_MEMORY_KIB) {
+    throw new Error(
+      `vault.json kdf memorySizeKiB below floor (${KDF_MIN_MEMORY_KIB} KiB / 64 MiB)`,
+    );
   }
-  if (
-    !Number.isSafeInteger(iterations) ||
-    iterations < VAULT_KDF_PARAMS.iterations ||
-    iterations > KDF_MAX_ITERATIONS
-  ) {
-    throw new Error("vault.json kdf iterations out of allowed range");
+  if (memorySizeKiB > KDF_MAX_MEMORY_KIB) {
+    throw new Error(
+      `vault.json kdf memorySizeKiB above ceiling (${KDF_MAX_MEMORY_KIB} KiB / 256 MiB)`,
+    );
   }
-  if (!Number.isSafeInteger(parallelism) || parallelism < 1 || parallelism > 8) {
-    throw new Error("vault.json kdf parallelism out of range");
+  if (iterations < KDF_MIN_ITERATIONS) {
+    throw new Error(`vault.json kdf iterations below floor (${KDF_MIN_ITERATIONS})`);
+  }
+  if (iterations > KDF_MAX_ITERATIONS) {
+    throw new Error(`vault.json kdf iterations above ceiling (${KDF_MAX_ITERATIONS})`);
+  }
+  if (parallelism < VAULT_KDF_MIN_PARALLELISM) {
+    throw new Error(`vault.json kdf parallelism below floor (${VAULT_KDF_MIN_PARALLELISM})`);
+  }
+  if (parallelism > VAULT_KDF_MAX_PARALLELISM) {
+    throw new Error(`vault.json kdf parallelism above ceiling (${VAULT_KDF_MAX_PARALLELISM})`);
   }
   if (hashLength !== VAULT_KDF_PARAMS.hashLength) {
     throw new Error("vault.json kdf hashLength must be 32");

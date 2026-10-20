@@ -42,7 +42,7 @@ export async function runSyncCli(subcommand, args) {
       return await fn();
     } catch (error) {
       const msg = formatSyncCliError(error);
-      if (msg !== error?.message) {
+      if (msg !== error?.message || error?.code === "cas_conditional_unconfirmed") {
         console.error(msg);
         process.exitCode = 1;
         return;

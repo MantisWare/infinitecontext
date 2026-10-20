@@ -5,5 +5,8 @@
   "exports": {
     ".": "./src/index.mjs"
   },
-  "files": ["src"]
+  "files": ["src"],
+  "scripts": {
+    "test": "node ../../scripts/run-node-test.mjs --import ../../scripts/ic-test-tmp-preload.mjs -- 'tests/**/*.test.mjs'"
+  }
 }

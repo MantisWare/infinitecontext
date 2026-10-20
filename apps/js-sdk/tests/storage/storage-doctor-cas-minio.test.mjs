@@ -20,6 +20,7 @@ import { STORAGE_CAPABILITIES } from "../../lib/storage/types.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const cliEntry = path.join(repoRoot, "src/cli/entry.mjs");
+const raceDoubleWinPreload = path.join(repoRoot, "tests/storage/preload-s3-cas-race-double-win.mjs");
 
 /**
  * @returns {{ bucket: string, prefix: string, region: string, endpoint?: string } | null}
@@ -66,10 +67,15 @@ function writeS3ConfigInHome(homeDir, prefix) {
  * @param {Record<string, string>} [envPatch]
  * @param {string[]} doctorArgs
  */
-function spawnStorageDoctorCli(homeDir, envPatch, doctorArgs) {
+function spawnStorageDoctorCli(homeDir, envPatch, doctorArgs, options = {}) {
+  const env = { ...process.env, ...envPatch, HOME: homeDir };
+  if (options.casRaceDoubleWin) {
+    env.NODE_OPTIONS = `--import=${raceDoubleWinPreload}`;
+    env.NODE_ENV = env.NODE_ENV ?? "test";
+  }
   const res = spawnSync(process.execPath, [cliEntry, "storage", "doctor", ...doctorArgs], {
     cwd: repoRoot,
-    env: { ...process.env, ...envPatch, HOME: homeDir },
+    env,
     encoding: "utf8",
   });
   assert.equal(res.status, 0, res.stderr || res.stdout || `exit ${res.status}`);
@@ -88,8 +94,22 @@ async function withIsolatedInfinitecontextHome(fn) {
   await fn(homeDir);
 }
 
-const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
 const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
+const bucketEnv = String(process.env.INFINITECONTEXT_S3_TEST_BUCKET ?? "").trim();
+const endpointEnv = String(process.env.AWS_ENDPOINT_URL ?? process.env.INFINITECONTEXT_S3_ENDPOINT ?? "").trim();
+if (requireMinio && (!bucketEnv || !endpointEnv)) {
+  throw new Error(
+    "IC_REQUIRE_MINIO=1 but S3 test config is missing (set AWS_ENDPOINT_URL and INFINITECONTEXT_S3_TEST_BUCKET)",
+  );
+}
+
+const s3Config = resolveS3AdapterTestConfigFromEnv(process.env);
+
+if (requireMinio && !s3Config) {
+  throw new Error(
+    "IC_REQUIRE_MINIO=1 but MinIO/S3 endpoint is unreachable (check AWS_ENDPOINT_URL and bucket)",
+  );
+}
 
 (s3Config ? describe : describe.skip)("storage doctor CAS CLI (MinIO / CI)", () => {
   it("CLI doctor --recheck-cas clears cas_unsafe on a healthy backend", async () => {
@@ -152,7 +172,7 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
         bucket: s3Config.bucket,
         prefix,
       });
-      spawnStorageDoctorCli(homeDir, { INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" }, ["--cas-race=5"]);
+      spawnStorageDoctorCli(homeDir, {}, ["--cas-race=5"], { casRaceDoubleWin: true });
       const defaultCachePath = storageCasCacheFilePath();
       const beforeMarker = readStorageCasCorruptionMarkerFile(defaultCachePath)?.corruptedAtMs ?? 0;
 
@@ -190,11 +210,7 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
       await adapter.init();
       await adapter.close();
 
-      const race = spawnStorageDoctorCli(
-        homeDir,
-        { INFINITECONTEXT_S3_CAS_RACE_DOUBLE_WIN_TEST: "1" },
-        ["--cas-race=5"],
-      );
+      const race = spawnStorageDoctorCli(homeDir, {}, ["--cas-race=5"], { casRaceDoubleWin: true });
       assert.equal(race.persistedUnsafe, true);
 
       assert.ok(fs.existsSync(storageCasCacheLastGoodPath(defaultCachePath)));
@@ -281,6 +297,3 @@ const requireMinio = process.env.IC_REQUIRE_MINIO === "1";
   });
 });
 
-if (requireMinio && !s3Config) {
-  throw new Error("IC_REQUIRE_MINIO=1 but S3 test config is missing");
-}

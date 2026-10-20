@@ -25,6 +25,10 @@ import { normalizeVectorSyncCursor } from "../../lib/sync-cursor.mjs";
 import { createFilesystemStorageAdapter } from "../../lib/storage/filesystem-adapter.mjs";
 import { createFolderStorageAdapter } from "../../lib/storage/folder-adapter.mjs";
 import { createMemoryStorageAdapter } from "../../lib/storage/memory-adapter.mjs";
+import {
+  resetObjectStoreSyncSegmentWriteHooksForTests,
+  setObjectStoreSyncSegmentWriteHooksForTests,
+} from "../../lib/object-store-sync.mjs";
 import { ObjectStoreSyncTransport } from "../../lib/storage/object-store-sync-transport.mjs";
 
 const TEST_DEK = new Uint8Array(32).fill(11);
@@ -136,15 +140,21 @@ function registerTransportSuite(label, factory) {
         op: "context_create",
         payload: { metadata: { source: "crash-test" } },
       };
-      const crashed = new ObjectStoreSyncTransport(adapter, {
-        dek: TEST_DEK,
-        deviceUuid: DEVICE_A,
-        layoutPrefix: LAYOUT_PREFIX,
-        localState: local,
-        testHookAfterSegmentWrite: () => {},
-        testHookSkipLocalSaveAfterSegmentWrite: true,
+      setObjectStoreSyncSegmentWriteHooksForTests({
+        afterSegmentWrite: () => {},
+        skipLocalSaveAfterSegmentWrite: true,
       });
-      await crashed.pushSyncMutations([mutation]);
+      try {
+        const crashed = new ObjectStoreSyncTransport(adapter, {
+          dek: TEST_DEK,
+          deviceUuid: DEVICE_A,
+          layoutPrefix: LAYOUT_PREFIX,
+          localState: local,
+        });
+        await crashed.pushSyncMutations([mutation]);
+      } finally {
+        resetObjectStoreSyncSegmentWriteHooksForTests();
+      }
       const recovered = createTransport(adapter, DEVICE_A, local);
       const retry = await recovered.pushSyncMutations([mutation]);
       assert.deepEqual(retry.applied, []);

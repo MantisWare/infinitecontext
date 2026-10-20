@@ -1,0 +1,43 @@
+services:
+  minio:
+    build:
+      context: ./docker/minio
+      args:
+        MINIO_GIT_TAG: RELEASE.2024-11-07T00-52-20Z
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - target: 9000
+        published: "${IC_STORAGE_EMU_MINIO_PORT:-9000}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  sftp:
+    image: atmoz/sftp@sha256:7e439fabeae536fa254340724c042e11999924d906417dbb5c73602ad518813f
+    ports:
+      - target: 22
+        published: "${IC_STORAGE_EMU_SFTP_PORT:-2222}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - ./fixtures/ssh/generated/id_ed25519.pub:/home/ic/.ssh/keys/id_ed25519.pub:ro
+    # atmoz/sftp user:pass:uid:gid:writable-dirs — key auth via mounted .ssh/keys; chroot write dir must be `upload`
+    command: ic:::::upload
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+
+volumes:
+  minio-data:

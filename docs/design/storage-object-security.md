@@ -22,6 +22,14 @@ This protects against **accidental misuse** (calling `putObject` with hand-built
 
 Future work: optional decrypt-and-policy check in the vault layer before seal, or content-addressed blobs with DEK-side plaintext hash in AAD.
 
+## Residual metadata (Phase 4.5 note)
+
+Cleartext **AAD** fields and object **key paths** can reveal the chosen layout prefix (for example `accounts/.../ic-v1/...`). Device and manifest objects are not padded to a fixed size, so object counts and growth can be inferred from blob sizes on the remote; log segments use padding (see layout design). Treat this as an accepted metadata leak in the current threat model unless you hash prefixes in AAD or pad small objects.
+
+## Node.js version
+
+The JS SDK storage stack requires **Node ≥ 22.12**. Older runtimes may fail early in the test suite without a clear message unless you use `npm run premerge`, which prints an explicit version preflight.
+
 ## CI
 
 GitHub Actions workflow **`ci.yml`** on pull requests and `main`:
@@ -29,4 +37,4 @@ GitHub Actions workflow **`ci.yml`** on pull requests and `main`:
 1. **`check`** — `pnpm -r check` (including `CI=true` builds such as `apps/mcp-server`).
 2. **`test`** — runs after `check` succeeds; Postgres **17** service container, schema migrate, then serial `pnpm -r test --workspace-concurrency=1`.
 
-**`storage.yml`** additionally runs storage module syntax checks and `apps/js-sdk/tests/storage/*.test.mjs` on every pull request.
+From `apps/js-sdk`, **`npm run premerge`** (with optional `STORAGE_EMU=1` after `storage:emu:up`) runs the #12 path guard, syntax checks, and storage tests including `tests/storage/*.test.mjs`.
