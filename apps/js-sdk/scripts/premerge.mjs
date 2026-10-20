@@ -54,6 +54,7 @@ process.env.IC_PREMERGE_VAULT_PID_REGISTRY = vaultPidRegistryPath;
 process.env.DISABLE_V8_COMPILE_CACHE = "1";
 console.log(`premerge: private TMPDIR=${premergeTmpRoot}`);
 console.log(`premerge: isolated HOME=${premergeHome}`);
+console.log(`premerge: node pid=${process.pid}`);
 
 const minioPort = String(process.env.IC_STORAGE_EMU_MINIO_PORT ?? "9000");
 const sftpPort = String(process.env.IC_STORAGE_EMU_SFTP_PORT ?? "2222");

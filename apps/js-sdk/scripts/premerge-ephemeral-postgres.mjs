@@ -80,12 +80,26 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
     });
   }
 
+  /** @type {(() => void) | null} */
+  let teardown = null;
+  const cleanup = () => {
+    if (!teardown) {
+      return;
+    }
+    const fn = teardown;
+    teardown = null;
+    fn();
+  };
+
   const up = dockerCompose(["-f", composeFile, "-p", project, "up", "-d", "postgres"]);
   if (up.status !== 0) {
     throw new Error(
       `premerge: ephemeral Postgres failed to start (project=${project}): ${up.stderr || up.stdout}`,
     );
   }
+  teardown = () => {
+    dockerCompose(["-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"]);
+  };
 
   const pgEnv = { ...env, PGPASSWORD: password };
   let pgReady = false;
@@ -102,32 +116,42 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
     spawnSync("sleep", ["1"]);
   }
   if (!pgReady) {
-    dockerCompose(["-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"]);
+    cleanup();
     throw new Error(
       `premerge: ephemeral Postgres not ready on 127.0.0.1:${port} after 40s (project=${project})`,
     );
   }
 
-  for (const dbName of [syncDb, vaultDb]) {
-    spawnSync(
-      "psql",
-      [
-        "-h",
-        "127.0.0.1",
-        "-p",
-        port,
-        "-U",
-        user,
-        "-d",
-        "postgres",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-c",
-        `CREATE DATABASE "${dbName}" OWNER "${user}";`,
-      ],
-      { encoding: "utf8", env: pgEnv },
-    );
-    migrateEphemeralDatabase(repoRoot, { port, dbName, password, user });
+  try {
+    for (const dbName of [syncDb, vaultDb]) {
+      const created = spawnSync(
+        "psql",
+        [
+          "-h",
+          "127.0.0.1",
+          "-p",
+          port,
+          "-U",
+          user,
+          "-d",
+          "postgres",
+          "-v",
+          "ON_ERROR_STOP=1",
+          "-c",
+          `CREATE DATABASE "${dbName}" OWNER "${user}";`,
+        ],
+        { encoding: "utf8", env: pgEnv },
+      );
+      if (created.status !== 0) {
+        throw new Error(
+          `premerge: CREATE DATABASE ${dbName} failed: ${created.stderr || created.stdout}`,
+        );
+      }
+      migrateEphemeralDatabase(repoRoot, { port, dbName, password, user });
+    }
+  } catch (error) {
+    cleanup();
+    throw error;
   }
 
   const syncUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${syncDb}`;
@@ -138,12 +162,24 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
   process.env.SYNC_E2E_DATABASE_URL = syncUrl;
   process.env.VAULT_E2E_DATABASE_URL = vaultUrl;
 
-  /** @type {() => void} */
-  const cleanup = () => {
-    dockerCompose(["-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"]);
-  };
-
   return { project, port, syncDb, vaultDb, cleanup };
+}
+
+/**
+ * @param {string} [projectPrefix]
+ */
+export function listIcPremergeDockerResources(projectPrefix = "ic_premerge") {
+  const ps = spawnSync("docker", ["ps", "-a", "--format", "{{.Names}}"], { encoding: "utf8" });
+  const nets = spawnSync("docker", ["network", "ls", "--format", "{{.Name}}"], { encoding: "utf8" });
+  const names = String(ps.stdout ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((n) => n.includes(projectPrefix));
+  const networks = String(nets.stdout ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((n) => n.includes(projectPrefix));
+  return { containers: names, networks, count: names.length + networks.length };
 }
 
 /**

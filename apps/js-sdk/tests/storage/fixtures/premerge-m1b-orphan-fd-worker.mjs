@@ -5,6 +5,7 @@ import os from "node:os";
 const tmp = process.env.IC_PREMERGE_TMPDIR ?? process.env.TMPDIR ?? os.tmpdir();
 fs.mkdirSync(tmp, { recursive: true });
 const holdPath = `${tmp}/ic-orphan-fd-hold.bin`;
+const pidPath = `${tmp}/ic-orphan-fd-orphan.pid`;
 fs.writeFileSync(holdPath, "hold");
 
 const orphan = spawn(
@@ -20,6 +21,7 @@ const orphan = spawn(
     stdio: "ignore",
   },
 );
+fs.writeFileSync(pidPath, String(orphan.pid));
 orphan.unref();
 
 setTimeout(() => process.exit(0), 120_000);

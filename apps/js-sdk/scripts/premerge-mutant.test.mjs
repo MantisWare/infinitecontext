@@ -144,8 +144,18 @@ describe("premerge mutants must fail", () => {
     } finally {
       const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
       killProcessesUsingPath(tmpRoot, "SIGKILL");
+      const orphanPidPath = path.join(tmpRoot, "ic-orphan-fd-orphan.pid");
+      if (fs.existsSync(orphanPidPath)) {
+        const orphanPid = Number(fs.readFileSync(orphanPidPath, "utf8").trim());
+        if (orphanPid > 0) {
+          try {
+            process.kill(orphanPid, "SIGKILL");
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       fs.rmSync(tmpRoot, { recursive: true, force: true });
-      spawnSync("pkill", ["-f", "ic-orphan-fd-hold.bin"], { stdio: "ignore" });
     }
   });
 
