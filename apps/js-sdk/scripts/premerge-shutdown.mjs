@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 
 import {
   collectLegProcessPids,
-  collectProcessTreePids,
   removePrivateTmpDirVerified,
   signalPids,
   waitForLegProcessesIdle,
@@ -103,9 +102,7 @@ export function createPremergeShutdown(opts) {
       activeChild = null;
       return;
     }
-    const pids = mut.includes("M1b")
-      ? collectProcessTreePids(rootPid)
-      : collectLegProcessPids(rootPid, pgid);
+    const pids = collectLegProcessPids(rootPid, pgid);
     signalPids(pids, signal);
     await waitForLegProcessesIdle(rootPid, pgid, LEG_TERM_WAIT_MS);
     if (!skipGroupKill) {
@@ -119,9 +116,7 @@ export function createPremergeShutdown(opts) {
         }
       }
     }
-    const killPids = mut.includes("M1b")
-      ? collectProcessTreePids(rootPid)
-      : collectLegProcessPids(rootPid, pgid);
+    const killPids = collectLegProcessPids(rootPid, pgid);
     signalPids(killPids, "SIGKILL");
     await waitForLegProcessesIdle(rootPid, pgid, LEG_KILL_WAIT_MS);
     activeChild = null;

@@ -114,7 +114,24 @@ describe("premerge mutants must fail", () => {
     }
   });
 
-  it("M1b: skip process-group kill leaves TMPDIR after late-writer SIGINT", async () => {
+  it("M1b only: skip -pgid alone still removes TMPDIR (surviving mutant — pid walk compensates)", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-only-"));
+    try {
+      const code = await sigintExitCode(lateWriterLeg, {
+        PREMERGE_MUTANT: "M1b",
+        IC_PREMERGE_TMPDIR: tmpRoot,
+        TMPDIR: tmpRoot,
+      });
+      assert.equal(code, 130);
+      assert.equal(fs.existsSync(tmpRoot), false);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("M1b+M6+M7: skip group kill and path kill leaves TMPDIR after late-writer SIGINT", async () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-"));
