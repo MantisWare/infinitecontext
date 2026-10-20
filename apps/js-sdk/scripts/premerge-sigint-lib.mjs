@@ -74,18 +74,21 @@ export function premergeProcessAlive(pid) {
 export async function runPremergeSigintOnce(opts) {
   const { category, label, pattern, head, password, extraEnv = {}, outsideVaultMarker } = opts;
   const intDelayMs =
-    category === "js-sdk-leg" ? 450 : category === "fail-cleanup" ? 50 : 80;
+    category === "js-sdk-leg" ? 450 : category === "fail-cleanup" ? 0 : 80;
   const timeoutMs =
-    category === "js-sdk-leg" ? 1_500_000 : category === "fail-cleanup" ? 120_000 : 900_000;
+    category === "js-sdk-leg" ? 1_500_000 : category === "fail-cleanup" ? 900_000 : 900_000;
 
   const envPairs = Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`);
   const inner = [
     "cd /workspace/apps/js-sdk",
-    "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
-    `EXPECTED_SHA=${head}`,
-    `POSTGRES_PASSWORD=${password}`,
-    ...envPairs,
-    "node scripts/premerge.mjs",
+    [
+      "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      "PREMERGE_MUTANT=",
+      `EXPECTED_SHA=${head}`,
+      `POSTGRES_PASSWORD=${password}`,
+      ...envPairs,
+      "node scripts/premerge.mjs",
+    ].join(" "),
   ].join(" && ");
 
   const beforeDocker = icPremergeDockerLeftovers();
@@ -103,7 +106,6 @@ export async function runPremergeSigintOnce(opts) {
     if (intSent) {
       return;
     }
-    intSent = true;
     if (premergePid === null) {
       premergePid = parsePremergeNodePidFromLog(log);
     }
@@ -113,6 +115,7 @@ export async function runPremergeSigintOnce(opts) {
     try {
       assertPremergeNodePid(premergePid);
       process.kill(premergePid, "SIGINT");
+      intSent = true;
     } catch {
       /* ignore */
     }
@@ -128,14 +131,18 @@ export async function runPremergeSigintOnce(opts) {
     }
     if (!hit && pattern.test(log)) {
       hit = 1;
-      setTimeout(signalPremerge, intDelayMs);
+      if (intDelayMs <= 0) {
+        signalPremerge();
+      } else {
+        setTimeout(signalPremerge, intDelayMs);
+      }
     }
   };
   child.stdout.on("data", onData);
   child.stderr.on("data", onData);
 
   const code = await Promise.race([
-    new Promise((resolve) => child.on("exit", (c) => resolve(c ?? 1))),
+    new Promise((resolve) => child.on("close", (c) => resolve(c ?? 1))),
     new Promise((resolve) =>
       setTimeout(() => {
         try {
@@ -148,6 +155,13 @@ export async function runPremergeSigintOnce(opts) {
     ),
   ]);
 
+  if (!hit && pattern.test(log)) {
+    hit = 1;
+    if (!intSent && premergeProcessAlive(premergePid ?? -1)) {
+      signalPremerge();
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
   await new Promise((r) => setTimeout(r, 1500));
   const tmpDir = parsePremergeTmpDirFromLog(log);
   let tmpLeft = tmpDir && fs.existsSync(tmpDir) ? 1 : 0;

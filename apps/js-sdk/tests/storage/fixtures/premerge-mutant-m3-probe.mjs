@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createPremergeShutdown, drainPendingSigint } from "../../../scripts/premerge-shutdown.mjs";
+import { createPremergeShutdown } from "../../../scripts/premerge-shutdown.mjs";
 
 const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-m3-probe-"));
 const shutdown = createPremergeShutdown({
@@ -15,5 +15,5 @@ const shutdown = createPremergeShutdown({
 });
 
 shutdown.beginShutdown("SIGINT");
-await drainPendingSigint();
+await shutdown.drainPendingSigint();
 shutdown.exitPremerge(1);

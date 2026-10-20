@@ -11,16 +11,6 @@ import {
 const LEG_TERM_WAIT_MS = 8000;
 const LEG_KILL_WAIT_MS = 8000;
 
-/** Yield so SIGINT during blocking cleanup is observed before exitPremerge(1). */
-export async function drainPendingSigint() {
-  if (String(process.env.PREMERGE_MUTANT ?? "").includes("M1")) {
-    await new Promise((resolve) => setImmediate(resolve));
-    return;
-  }
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setTimeout(resolve, 50));
-}
-
 /**
  * Shared premerge shutdown / TMPDIR hygiene (used by premerge.mjs and regression tests).
  * @param {object} opts
@@ -44,6 +34,19 @@ export function createPremergeShutdown(opts) {
   let shuttingDown = false;
   /** @type {number | null} */
   let shutdownExitCode = null;
+
+  /** Yield so SIGINT during blocking cleanup is observed before exitPremerge(1). */
+  async function drainPendingSigint() {
+    if (String(process.env.PREMERGE_MUTANT ?? "").includes("M1")) {
+      await new Promise((resolve) => setImmediate(resolve));
+      return;
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    const until = Date.now() + 500;
+    while (!shuttingDown && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
 
   function cleanupNodeCompileCache() {
     const root = premergeTmpRoot;
@@ -162,6 +165,10 @@ export function createPremergeShutdown(opts) {
       exitPremerge(shutdownExitCode ?? 130);
     }
     console.error(message);
+    await drainPendingSigint();
+    if (shuttingDown) {
+      exitPremerge(shutdownExitCode ?? 130);
+    }
     await terminateActiveLeg("SIGKILL");
     cleanupAll();
     exitPremerge(code);

@@ -43,9 +43,12 @@ describe("premerge ephemeral Postgres docker hygiene", () => {
 
     const inner = [
       "cd /workspace/apps/js-sdk",
-      `EXPECTED_SHA=${headOut}`,
-      `POSTGRES_PASSWORD=${password}`,
-      "node scripts/premerge.mjs",
+      [
+        "PREMERGE_MUTANT=",
+        `EXPECTED_SHA=${headOut}`,
+        `POSTGRES_PASSWORD=${password}`,
+        "node scripts/premerge.mjs",
+      ].join(" "),
     ].join(" && ");
 
     const child = spawn("bash", ["-lc", `sg docker -c ${JSON.stringify(inner)}`], {
