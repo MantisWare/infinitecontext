@@ -19,10 +19,14 @@ describe("premerge-process-utils", () => {
 
   it("killProcessesUsingPath targets processes under TMPDIR", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "ic-killpath-"));
-    const nested = path.join(root, "nested");
-    fs.mkdirSync(nested);
-    killProcessesUsingPath(root, "SIGKILL");
-    assert.equal(fs.existsSync(root), true);
+    try {
+      const nested = path.join(root, "nested");
+      fs.mkdirSync(nested);
+      killProcessesUsingPath(root, "SIGKILL");
+      assert.equal(fs.existsSync(root), true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("removePrivateTmpDirVerified removes empty dir", () => {
