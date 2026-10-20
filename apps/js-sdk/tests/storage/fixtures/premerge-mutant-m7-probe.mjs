@@ -27,4 +27,9 @@ const alive = shutdown.activeChild?.pid && (() => {
   }
 })();
 console.log(alive ? "CHILD_ALIVE" : "CHILD_GONE");
+try {
+  fs.rmSync(premergeTmpRoot, { recursive: true, force: true });
+} catch {
+  /* ignore */
+}
 process.exit(0);
