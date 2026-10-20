@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 
 import {
   collectLegProcessPids,
+  collectProcessTreePids,
   removePrivateTmpDirVerified,
   signalPids,
   waitForLegProcessesIdle,
@@ -61,9 +62,15 @@ export function createPremergeShutdown(opts) {
   }
 
   function cleanupPremergeTmpRoot() {
-    removePrivateTmpDirVerified(premergeTmpRoot, () => {
+    const ok = removePrivateTmpDirVerified(premergeTmpRoot, () => {
       cleanupNodeCompileCache();
     });
+    if (!ok) {
+      console.error(
+        `ERROR: premerge failed to remove private TMPDIR after retry — leftover path: ${premergeTmpRoot}`,
+      );
+    }
+    return ok;
   }
 
   /**
@@ -74,33 +81,47 @@ export function createPremergeShutdown(opts) {
     if (!child?.pid) {
       return;
     }
-    if (String(process.env.PREMERGE_MUTANT ?? "").includes("M7")) {
+    const mut = String(process.env.PREMERGE_MUTANT ?? "");
+    if (mut.includes("M7")) {
       return;
     }
     const rootPid = child.pid;
     const pgid = child.pid;
-    try {
-      process.kill(-pgid, signal);
-    } catch {
+    const skipGroupKill = mut.includes("M1b") || mut.includes("M1") || mut.includes("M2");
+    if (!skipGroupKill) {
       try {
-        child.kill(signal);
+        process.kill(-pgid, signal);
       } catch {
-        /* ignore */
+        try {
+          child.kill(signal);
+        } catch {
+          /* ignore */
+        }
       }
     }
-    const pids = collectLegProcessPids(rootPid, pgid);
+    if (mut.includes("M1") || mut.includes("M2")) {
+      activeChild = null;
+      return;
+    }
+    const pids = mut.includes("M1b")
+      ? collectProcessTreePids(rootPid)
+      : collectLegProcessPids(rootPid, pgid);
     signalPids(pids, signal);
     await waitForLegProcessesIdle(rootPid, pgid, LEG_TERM_WAIT_MS);
-    try {
-      process.kill(-pgid, "SIGKILL");
-    } catch {
+    if (!skipGroupKill) {
       try {
-        child.kill("SIGKILL");
+        process.kill(-pgid, "SIGKILL");
       } catch {
-        /* ignore */
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
       }
     }
-    const killPids = collectLegProcessPids(rootPid, pgid);
+    const killPids = mut.includes("M1b")
+      ? collectProcessTreePids(rootPid)
+      : collectLegProcessPids(rootPid, pgid);
     signalPids(killPids, "SIGKILL");
     await waitForLegProcessesIdle(rootPid, pgid, LEG_KILL_WAIT_MS);
     activeChild = null;
@@ -108,7 +129,9 @@ export function createPremergeShutdown(opts) {
 
   function finishShutdown() {
     cleanupAll();
-    cleanupPremergeTmpRoot();
+    if (!cleanupPremergeTmpRoot()) {
+      process.exit(1);
+    }
   }
 
   /**
@@ -129,7 +152,9 @@ export function createPremergeShutdown(opts) {
       finishShutdown();
       process.exit(shutdownExitCode ?? 130);
     }
-    cleanupPremergeTmpRoot();
+    if (!cleanupPremergeTmpRoot()) {
+      process.exit(1);
+    }
     process.exit(code);
   }
 
@@ -209,10 +234,18 @@ export function createPremergeShutdown(opts) {
         }
         if (status !== 0) {
           if (allowFailure) {
+            if (shuttingDown) {
+              reject(new Error("shutting down"));
+              return;
+            }
             reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
             return;
           }
           void terminateActiveLeg("SIGKILL").then(() => {
+            if (shuttingDown) {
+              reject(new Error("shutting down"));
+              return;
+            }
             cleanupAll();
             exitPremerge(status ?? 1);
           });

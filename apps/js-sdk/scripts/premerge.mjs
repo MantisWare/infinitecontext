@@ -21,6 +21,7 @@ import {
   warnIfNodePtyMissing,
   isNodePtyLoadable,
   assertPremergeRejectsAllowLibTestEnv,
+  infinitecontextMinPassFloor,
 } from "./premerge-lib.mjs";
 import {
   assertPremergePostgresUrlsSafe,
@@ -50,6 +51,7 @@ process.env.IC_PREMERGE_TMPDIR = premergeTmpRoot;
 process.env.HOME = premergeHome;
 process.env.IC_PREMERGE_HOME = premergeHome;
 process.env.IC_PREMERGE_VAULT_PID_REGISTRY = vaultPidRegistryPath;
+process.env.DISABLE_V8_COMPILE_CACHE = "1";
 console.log(`premerge: private TMPDIR=${premergeTmpRoot}`);
 console.log(`premerge: isolated HOME=${premergeHome}`);
 
@@ -112,6 +114,7 @@ function premergeChildEnv(extra = {}) {
     TMP: premergeTmpRoot,
     TEMP: premergeTmpRoot,
     IC_PREMERGE_TMPDIR: premergeTmpRoot,
+    DISABLE_V8_COMPILE_CACHE: "1",
     ...extra,
   };
 }
@@ -140,6 +143,24 @@ process.on("exit", () => {
     killActiveProcessGroup("SIGTERM");
   }
   cleanupAll();
+  if (fs.existsSync(premergeTmpRoot)) {
+    shutdown.cleanupPremergeTmpRoot();
+  }
+});
+
+process.on("unhandledRejection", (reason) => {
+  if (shutdown?.shuttingDown) {
+    void shutdown.drainPendingSigint().then(() => {
+      exitPremerge(shutdown.shutdownExitCode ?? 130);
+    });
+    return;
+  }
+  console.error(reason);
+  cleanupAll();
+  if (!shutdown.cleanupPremergeTmpRoot()) {
+    process.exit(1);
+  }
+  process.exit(1);
 });
 
 function loadApiEnvFile() {
@@ -225,11 +246,11 @@ async function main() {
   if (!skipLegs) {
     await runLeg("npm", ["run", "guard:12"]);
     if (stopAfter === "guard:12") {
-      return;
+      exitPremerge(0);
     }
     await runLeg("node", ["scripts/check-lib-no-test-env.mjs"]);
     if (stopAfter === "check-lib") {
-      return;
+      exitPremerge(0);
     }
     loadApiEnvFile();
     for (const key of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
@@ -254,7 +275,7 @@ async function main() {
 
     await runLeg("pnpm", ["-r", "check"], {}, repoRoot);
     if (stopAfter === "pnpm-check") {
-      return;
+      exitPremerge(0);
     }
 
     const emuComposeEnv = {
@@ -371,7 +392,10 @@ async function main() {
   console.log(`  HEAD: ${head}`);
   console.log("  per-package (floor pass):");
   for (const [name, row] of [...packageCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    const floor = PREMERGE_PACKAGE_MIN_PASS[name];
+    let floor = PREMERGE_PACKAGE_MIN_PASS[name];
+    if (name === "infinitecontext") {
+      floor = infinitecontextMinPassFloor(nodePtyLoadable);
+    }
     const floorLabel = floor !== undefined ? ` floor ${floor}` : "";
     console.log(
       `    ${name}: pass ${row.pass}, fail ${row.fail}, skipped ${row.skipped}, tests ${row.tests} (${row.blocks} block(s))${floorLabel}`,
@@ -390,7 +414,12 @@ main().catch(async (error) => {
   if (shutdown?.shuttingDown) {
     await shutdown.drainPendingSigint();
     exitPremerge(shutdown.shutdownExitCode ?? 130);
+    return;
   }
   console.error(error);
+  cleanupAll();
+  if (!shutdown.cleanupPremergeTmpRoot()) {
+    process.exit(1);
+  }
   process.exit(1);
 });

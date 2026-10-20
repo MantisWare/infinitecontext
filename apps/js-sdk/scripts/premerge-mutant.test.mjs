@@ -114,6 +114,64 @@ describe("premerge mutants must fail", () => {
     }
   });
 
+  it("M1b: skip process-group kill leaves TMPDIR after late-writer SIGINT", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-"));
+    try {
+      const code = await sigintExitCode(lateWriterLeg, {
+        PREMERGE_MUTANT: "M1b,M6,M7",
+        IC_PREMERGE_TMPDIR: tmpRoot,
+        TMPDIR: tmpRoot,
+      });
+      assert.equal(code, 130);
+      await new Promise((r) => setTimeout(r, 500));
+      assert.equal(fs.existsSync(tmpRoot), true);
+    } finally {
+      const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
+      killProcessesUsingPath(tmpRoot, "SIGKILL");
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("M1: skip leg termination leaves TMPDIR after late-writer SIGINT", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1-"));
+    try {
+      await sigintExitCode(lateWriterLeg, {
+        PREMERGE_MUTANT: "M1,M6,M7",
+        IC_PREMERGE_TMPDIR: tmpRoot,
+        TMPDIR: tmpRoot,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+      assert.equal(fs.existsSync(tmpRoot), true);
+    } finally {
+      const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
+      killProcessesUsingPath(tmpRoot, "SIGKILL");
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("M2: delayed shutdown + no path kill leaves TMPDIR after late-writer SIGINT", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m2-late-"));
+    try {
+      await sigintExitCode(lateWriterLeg, {
+        PREMERGE_MUTANT: "M2,M6,M7",
+        IC_PREMERGE_TMPDIR: tmpRoot,
+        TMPDIR: tmpRoot,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+      assert.equal(fs.existsSync(tmpRoot), true);
+    } finally {
+      const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
+      killProcessesUsingPath(tmpRoot, "SIGKILL");
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("M7: skip process-group kill leaves active leg child alive", async () => {
     const probe = path.join(sdkRoot, "tests/storage/fixtures/premerge-mutant-m7-probe.mjs");
     const out = await new Promise((resolve, reject) => {

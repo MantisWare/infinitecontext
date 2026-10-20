@@ -395,6 +395,14 @@ export function assertPremergePackageTestSections(output, opts = {}) {
 /**
  * @param {string} [tmpRootOverride] When set (premerge private TMPDIR), scan only that directory.
  */
+/**
+ * @param {string} dirPath
+ */
+export function isPremergeToolingCacheDir(dirPath) {
+  const base = path.basename(dirPath);
+  return base === "node-compile-cache" || /^v8-compile-cache-\d+$/.test(base);
+}
+
 export function listAllIcTmpDirs(tmpRootOverride) {
   const tmpRoot = path.resolve(
     tmpRootOverride ?? process.env.IC_PREMERGE_TMPDIR ?? process.env.TMPDIR ?? os.tmpdir(),
@@ -428,9 +436,13 @@ export function assertNoNewIcTmpDirLeaks(before, after) {
   /** @type {string[]} */
   const leaked = [];
   for (const dir of after) {
-    if (!before.has(dir)) {
-      leaked.push(dir);
+    if (before.has(dir)) {
+      continue;
     }
+    if (isPremergeToolingCacheDir(dir)) {
+      continue;
+    }
+    leaked.push(dir);
   }
   if (leaked.length > 0) {
     throw new Error(

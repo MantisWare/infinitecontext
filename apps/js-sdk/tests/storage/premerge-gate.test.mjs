@@ -103,6 +103,16 @@ python-sdk: FAIL — Python 3.8 .venv is required (0 tests is never a pass). Ins
     });
   });
 
+  it("ignores v8-compile-cache and node-compile-cache in TMPDIR leak check", () => {
+    const before = new Set(["/tmp/ic-premerge-1-tmpdir-abc"]);
+    const after = new Set([
+      ...before,
+      "/tmp/ic-premerge-1-tmpdir-abc/v8-compile-cache-0",
+      "/tmp/ic-premerge-1-tmpdir-abc/node-compile-cache",
+    ]);
+    assert.doesNotThrow(() => assertNoNewIcTmpDirLeaks(before, after));
+  });
+
   it("detects untagged new dirs in TMPDIR leak check", () => {
     const before = new Set(["/tmp/a"]);
     const after = new Set(["/tmp/a", "/tmp/ic-untagged-leak"]);
