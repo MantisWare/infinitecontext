@@ -93,6 +93,10 @@ describe("premerge ephemeral Postgres docker hygiene", () => {
     if (process.env.IC_PREMERGE_LIVE_DOCKER !== "1") {
       return;
     }
+    const probe = spawn("docker", ["info"], { stdio: "ignore" });
+    if (probe.status !== 0) {
+      return;
+    }
     const password = loadPostgresPassword(repoRoot);
     process.env.POSTGRES_PASSWORD = password;
     const pg = startEphemeralPostgresForPremerge(repoRoot, process.env);
