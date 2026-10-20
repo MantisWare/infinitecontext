@@ -31,9 +31,9 @@ describe("premerge gate helpers", () => {
   });
 
   it("uses measured js-sdk floors without node-pty and with pty", () => {
-    assert.equal(PREMERGE_PACKAGE_MIN_PASS.infinitecontext, 634);
-    assert.equal(infinitecontextMinPassFloor(false), 634);
-    assert.equal(infinitecontextMinPassFloor(true), 647);
+    assert.equal(PREMERGE_PACKAGE_MIN_PASS.infinitecontext, 638);
+    assert.equal(infinitecontextMinPassFloor(false), 638);
+    assert.equal(infinitecontextMinPassFloor(true), 651);
   });
 
   it("requires Node >=22.12", () => {
