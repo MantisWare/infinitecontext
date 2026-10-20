@@ -55,10 +55,14 @@ describe("premerge per-package floors (measured counts)", () => {
   });
 
   it("infinitecontext with node-pty: pass 606 passes gate probe output", () => {
-    const withPty = withPackagePass(okOut, "infinitecontext", 606);
-    const adjusted = withPty.replace(/# tests 595\n/, "# tests 608\n");
     assert.doesNotThrow(() =>
-      assertPremergePackageTestSections(adjusted, { nodePtyLoadable: true }),
+      assertPremergePackageTestSections(okOut, { nodePtyLoadable: true }),
+    );
+  });
+
+  it("infinitecontext without node-pty: probe pass 606 still clears floor 593", () => {
+    assert.doesNotThrow(() =>
+      assertPremergePackageTestSections(okOut, { nodePtyLoadable: false }),
     );
   });
 });
