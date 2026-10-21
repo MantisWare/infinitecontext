@@ -133,6 +133,7 @@ function cleanupEmu() {
   spawnSync("npm", ["run", "storage:emu:down"], {
     cwd: sdkRoot,
     stdio: "inherit",
+    timeout: shutdown?.shuttingDown ? 25_000 : undefined,
     env: premergeChildEnv({
       IC_STORAGE_EMU_MINIO_PORT: minioPort,
       IC_STORAGE_EMU_SFTP_PORT: sftpPort,

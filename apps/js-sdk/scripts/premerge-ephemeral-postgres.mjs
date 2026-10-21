@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+const PREMERGE_DOCKER_LABEL = "com.infinitecontext.premerge=true";
+
 /**
  * @param {string} repoRoot
  */
@@ -44,6 +46,30 @@ function pickFreePort() {
 }
 
 /**
+ * @param {string} repoRoot
+ * @param {string} project
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {import("node:child_process").SpawnSyncReturns<string>}
+ */
+export function tearDownEphemeralPostgresProject(repoRoot, project, env = process.env) {
+  const composeFile = path.join(repoRoot, "apps/postgres/compose.yaml");
+  const composeEnv = {
+    ...env,
+    COMPOSE_PROJECT_NAME: project,
+  };
+  return spawnSync(
+    "docker",
+    ["compose", "-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"],
+    {
+      cwd: path.dirname(composeFile),
+      env: composeEnv,
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+}
+
+/**
  * Starts an isolated Postgres (unique compose project, random port). Never uses 5433 or the dev DB name.
  * @param {string} repoRoot
  * @param {NodeJS.ProcessEnv} env
@@ -77,6 +103,7 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
       cwd: path.dirname(composeFile),
       env: composeEnv,
       encoding: "utf8",
+      timeout: 300_000,
     });
   }
 
@@ -98,7 +125,12 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
     );
   }
   teardown = () => {
-    dockerCompose(["-f", composeFile, "-p", project, "down", "-v", "--remove-orphans"]);
+    const down = tearDownEphemeralPostgresProject(repoRoot, project, composeEnv);
+    if (down.status !== 0) {
+      console.error(
+        `premerge: ephemeral Postgres teardown failed (project=${project}): ${down.stderr || down.stdout}`,
+      );
+    }
   };
 
   const pgEnv = { ...env, PGPASSWORD: password };
@@ -171,6 +203,7 @@ export function startEphemeralPostgresForPremerge(repoRoot, env = process.env) {
 export function listIcPremergeDockerResources(projectPrefix = "ic_premerge") {
   const ps = spawnSync("docker", ["ps", "-a", "--format", "{{.Names}}"], { encoding: "utf8" });
   const nets = spawnSync("docker", ["network", "ls", "--format", "{{.Name}}"], { encoding: "utf8" });
+  const vols = spawnSync("docker", ["volume", "ls", "--format", "{{.Name}}"], { encoding: "utf8" });
   const names = String(ps.stdout ?? "")
     .split("\n")
     .map((s) => s.trim())
@@ -179,7 +212,17 @@ export function listIcPremergeDockerResources(projectPrefix = "ic_premerge") {
     .split("\n")
     .map((s) => s.trim())
     .filter((n) => n.includes(projectPrefix));
-  return { containers: names, networks, count: names.length + networks.length };
+  const volumes = String(vols.stdout ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((n) => n.includes(projectPrefix));
+  return {
+    containers: names,
+    networks,
+    volumes,
+    count: names.length + networks.length + volumes.length,
+    label: PREMERGE_DOCKER_LABEL,
+  };
 }
 
 /**

@@ -114,10 +114,10 @@ export function collectLegProcessPids(rootPid, pgid, excludePid = process.pid) {
  * @param {number[]} pids
  * @param {NodeJS.Signals} signal
  */
-export function signalPids(pids, signal) {
+export function signalPids(pids, signal, kill = process.kill.bind(process)) {
   for (const pid of pids) {
     try {
-      process.kill(pid, signal);
+      kill(pid, signal);
     } catch {
       /* already dead */
     }

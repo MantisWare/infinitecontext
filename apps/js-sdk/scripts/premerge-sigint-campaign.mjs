@@ -52,7 +52,7 @@ for (let i = 1; i <= 5; i += 1) {
 
 fs.writeFileSync(
   tsvPath,
-  "category\tlabel\trc\ttmpLeft\thit\tpremergePid\tpremergeAlive\tdockerLeft\tmarkerOk\tvaultOutside\n",
+  "category\tlabel\trc\ttmpLeft\thit\tpremergePid\tpremergeAlive\tdockerBefore\tdockerAfter\tvaultBefore\tvaultAfter\tmarkerOk\n",
 );
 
 let fail = 0;
@@ -67,8 +67,7 @@ for (const [category, label, pattern, extra] of runs) {
     extraEnv: extra ?? {},
     outsideVaultMarker,
   });
-  const dockerLeft = row.dockerAfter.count;
-  const line = `${category}\t${label}\trc=${row.code}\ttmpLeft=${row.tmpLeft}\thit=${row.hit}\tpremergePid=${row.premergePid ?? ""}\tpremergeAlive=${row.premergeAlive}\tdockerLeft=${dockerLeft}\tmarkerOk=${row.markerOk}\tvaultOutside=${row.vaultOutside}\n`;
+  const line = `${category}\t${label}\trc=${row.code}\ttmpLeft=${row.tmpLeft}\thit=${row.hit}\tpremergePid=${row.premergePid ?? ""}\tpremergeAlive=${row.premergeAlive}\tdockerBefore=${row.dockerBefore.count}\tdockerAfter=${row.dockerAfter.count}\tvaultBefore=${row.vaultBefore}\tvaultAfter=${row.vaultAfter}\tmarkerOk=${row.markerOk}\n`;
   fs.appendFileSync(tsvPath, line);
   console.log(line.trim(), row.ok ? "OK" : "FAIL");
   if (!row.ok) {

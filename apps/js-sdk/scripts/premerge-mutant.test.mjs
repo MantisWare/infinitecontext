@@ -57,10 +57,18 @@ async function sigintExitCode(script, extraEnv = {}) {
 }
 
 /**
- * M1b (skip process-group `-pgid` kill) is a surviving production mutant: `collectLegProcessPids`
- * still signals every leg child and same-group member, and `killProcessesUsingPath` catches
- * TMPDIR cwd/env holders. Orphans with only an open fd under TMPDIR (no cwd/env match) can outlive
- * shutdown but do not block `fs.rmSync` once the directory is unlinked — see orphan-fd fixture.
+ * Mutant matrix (PREMERGE_MUTANT env only — never in production):
+ *
+ * | ID  | Effect                         | Outcome |
+ * |-----|--------------------------------|---------|
+ * | M1  | drainPendingSigint no-op       | KILLED (exit ≠ 130) |
+ * | M2  | delayed beginShutdown          | KILLED |
+ * | M3  | exitPremerge ignores latch     | KILLED (exit 1) |
+ * | M6  | skip killProcessesUsingPath    | KILLED (TMPDIR left) |
+ * | M7  | skip terminateActiveLeg        | KILLED (child alive) |
+ * | M1b | skip kill(-pgid) only          | STRUCTURAL KILL — see premerge-shutdown-group-kill.test.mjs; integration TMPDIR still clears via per-PID walk + path kill (redundant with M6/M7 caught) |
+ *
+ * M1b is not a production surviving mutant: group kill is mandatory and tested via kill(-pgid) ordering.
  */
 describe("premerge mutants must fail", () => {
   it("M1: single setImmediate yield breaks blocking SIGINT (exit not 130)", async () => {

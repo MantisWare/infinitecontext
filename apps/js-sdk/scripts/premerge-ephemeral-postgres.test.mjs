@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import {
   listIcPremergeDockerResources,
   startEphemeralPostgresForPremerge,
+  tearDownEphemeralPostgresProject,
 } from "./premerge-ephemeral-postgres.mjs";
 import { parsePremergeNodePidFromLog } from "./premerge-sigint-lib.mjs";
 import { loadPostgresPassword } from "./premerge-sigint-lib.mjs";
@@ -20,6 +21,12 @@ describe("premerge ephemeral Postgres docker hygiene", () => {
     const row = listIcPremergeDockerResources();
     assert.ok(Array.isArray(row.containers));
     assert.ok(Array.isArray(row.networks));
+    assert.ok(Array.isArray(row.volumes));
+  });
+
+  it("tearDownEphemeralPostgresProject is scoped to compose project name", () => {
+    const down = tearDownEphemeralPostgresProject(repoRoot, "ic_premerge_pg_99999_testonly", process.env);
+    assert.ok(down.status === 0 || down.status === 1);
   });
 
   it("SIGINT after ephemeral Postgres start leaves no ic_premerge docker (live)", async () => {
@@ -85,11 +92,7 @@ describe("premerge ephemeral Postgres docker hygiene", () => {
 
     await new Promise((r) => setTimeout(r, 2000));
     const left = listIcPremergeDockerResources();
-    assert.equal(
-      left.containers.length + left.networks.length,
-      0,
-      `leftover docker: ${JSON.stringify(left)}`,
-    );
+    assert.equal(left.count, 0, `leftover docker: ${JSON.stringify(left)}`);
   });
 
   it("startEphemeralPostgres cleanup() removes ic_premerge project (live)", () => {

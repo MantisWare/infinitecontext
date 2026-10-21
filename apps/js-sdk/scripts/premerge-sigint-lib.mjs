@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 import { listIcPremergeDockerResources } from "./premerge-ephemeral-postgres.mjs";
+import { listVaultAgentServePidsForHome } from "./premerge-vault-cleanup.mjs";
 
 /**
  * @param {string} log
@@ -18,6 +19,15 @@ export function parsePremergeNodePidFromLog(log) {
  */
 export function parsePremergeTmpDirFromLog(log) {
   const m = /premerge: private TMPDIR=(\S+)/.exec(log);
+  return m?.[1];
+}
+
+/**
+ * @param {string} log
+ * @returns {string | undefined}
+ */
+export function parsePremergeHomeFromLog(log) {
+  const m = /premerge: isolated HOME=(\S+)/.exec(log);
   return m?.[1];
 }
 
@@ -44,9 +54,18 @@ export function loadPostgresPassword(repoRoot) {
   return m[1].trim();
 }
 
-export function icPremergeDockerLeftovers() {
-  const { containers, networks } = listIcPremergeDockerResources();
-  return { containers, networks, count: containers.length + networks.length };
+export function icPremergeDockerInventory() {
+  return listIcPremergeDockerResources();
+}
+
+/**
+ * @param {string | undefined} premergeHome
+ */
+export function countPremergeVaultAgentLeaks(premergeHome) {
+  if (!premergeHome) {
+    return 0;
+  }
+  return listVaultAgentServePidsForHome(premergeHome).length;
 }
 
 /**
@@ -91,7 +110,7 @@ export async function runPremergeSigintOnce(opts) {
     ].join(" "),
   ].join(" && ");
 
-  const beforeDocker = icPremergeDockerLeftovers();
+  const beforeDocker = icPremergeDockerInventory();
   const child = spawn("bash", ["-lc", `sg docker -c ${JSON.stringify(inner)}`], {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -164,32 +183,38 @@ export async function runPremergeSigintOnce(opts) {
   }
   await new Promise((r) => setTimeout(r, 1500));
   const tmpDir = parsePremergeTmpDirFromLog(log);
+  const premergeHome = parsePremergeHomeFromLog(log);
   let tmpLeft = tmpDir && fs.existsSync(tmpDir) ? 1 : 0;
   if (tmpLeft && tmpDir) {
     await new Promise((r) => setTimeout(r, 8000));
     tmpLeft = fs.existsSync(tmpDir) ? 1 : 0;
   }
 
-  const afterDocker = icPremergeDockerLeftovers();
+  const afterDocker = icPremergeDockerInventory();
+  const vaultBefore = countPremergeVaultAgentLeaks(premergeHome);
+  const vaultAfter = countPremergeVaultAgentLeaks(premergeHome);
   const premergeAlive = premergePid !== null && premergeProcessAlive(premergePid) ? 1 : 0;
   const markerOk =
     !outsideVaultMarker || (outsideVaultMarker && fs.existsSync(outsideVaultMarker)) ? 1 : 0;
-  let vaultOutside = 0;
-  try {
-    vaultOutside = Number(
-      spawnSync("pgrep", ["-cf", "[v]ault-agent-serve.mjs"], { encoding: "utf8" }).stdout.trim() ||
-        "0",
-    );
-  } catch {
-    vaultOutside = -1;
-  }
+
+  const dockerOk =
+    beforeDocker.count === 0 &&
+    afterDocker.count === 0 &&
+    beforeDocker.containers.length === 0 &&
+    beforeDocker.networks.length === 0 &&
+    beforeDocker.volumes.length === 0 &&
+    afterDocker.containers.length === 0 &&
+    afterDocker.networks.length === 0 &&
+    afterDocker.volumes.length === 0;
 
   const ok =
     code === 130 &&
     tmpLeft === 0 &&
     hit === 1 &&
     premergeAlive === 0 &&
-    afterDocker.count === 0 &&
+    dockerOk &&
+    vaultBefore === 0 &&
+    vaultAfter === 0 &&
     markerOk === 1;
 
   return {
@@ -200,7 +225,8 @@ export async function runPremergeSigintOnce(opts) {
     hit,
     premergePid,
     premergeAlive,
-    vaultOutside,
+    vaultBefore,
+    vaultAfter,
     markerOk,
     dockerBefore: beforeDocker,
     dockerAfter: afterDocker,

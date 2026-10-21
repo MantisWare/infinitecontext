@@ -19,6 +19,7 @@ const LEG_KILL_WAIT_MS = 8000;
  * @param {(signal: import("node:child_process").Signal) => void} [opts.killActiveProcessGroup]
  * @param {(before: Set<string>, after: Set<string>) => void} [opts.assertNoNewIcTmpDirLeaks]
  * @param {() => Set<string>} [opts.listAllIcTmpDirs]
+ * @param {typeof process.kill} [opts.killProcess]
  */
 export function createPremergeShutdown(opts) {
   const {
@@ -27,6 +28,7 @@ export function createPremergeShutdown(opts) {
     killActiveProcessGroup = () => {},
     assertNoNewIcTmpDirLeaks = () => {},
     listAllIcTmpDirs = () => new Set(),
+    killProcess = process.kill.bind(process),
   } = opts;
 
   /** @type {import("node:child_process").ChildProcess | null} */
@@ -90,12 +92,16 @@ export function createPremergeShutdown(opts) {
     const rootPid = child.pid;
     const pgid = child.pid;
     const skipGroupKill = mut.includes("M1b") || mut.includes("M1") || mut.includes("M2");
+    const fast = shuttingDown;
+    const termSignal = fast ? "SIGKILL" : signal;
+    const termWaitMs = fast ? 250 : LEG_TERM_WAIT_MS;
+    const killWaitMs = fast ? 250 : LEG_KILL_WAIT_MS;
     if (!skipGroupKill) {
       try {
-        process.kill(-pgid, signal);
+        killProcess(-pgid, termSignal);
       } catch {
         try {
-          child.kill(signal);
+          killProcess(child.pid, termSignal);
         } catch {
           /* ignore */
         }
@@ -106,22 +112,22 @@ export function createPremergeShutdown(opts) {
       return;
     }
     const pids = collectLegProcessPids(rootPid, pgid);
-    signalPids(pids, signal);
-    await waitForLegProcessesIdle(rootPid, pgid, LEG_TERM_WAIT_MS);
+    signalPids(pids, termSignal, killProcess);
+    await waitForLegProcessesIdle(rootPid, pgid, termWaitMs);
     if (!skipGroupKill) {
       try {
-        process.kill(-pgid, "SIGKILL");
+        killProcess(-pgid, "SIGKILL");
       } catch {
         try {
-          child.kill("SIGKILL");
+          killProcess(child.pid, "SIGKILL");
         } catch {
           /* ignore */
         }
       }
     }
     const killPids = collectLegProcessPids(rootPid, pgid);
-    signalPids(killPids, "SIGKILL");
-    await waitForLegProcessesIdle(rootPid, pgid, LEG_KILL_WAIT_MS);
+    signalPids(killPids, "SIGKILL", killProcess);
+    await waitForLegProcessesIdle(rootPid, pgid, killWaitMs);
     activeChild = null;
   }
 

@@ -29,6 +29,8 @@ node apps/js-sdk/scripts/premerge-sigint-campaign.mjs
 
 Output TSV: `PREMERGE_SIGINT_TSV` (default `/tmp/premerge-sigint-final.tsv`).
 
-Each row must show `rc=130`, `tmpLeft=0`, `hit=1`, `premergeAlive=0`, `dockerLeft=0`, `markerOk=1`.
+Each row must show `rc=130`, `tmpLeft=0`, `hit=1`, `premergeAlive=0`, `dockerBefore=0`, `dockerAfter=0` (containers, networks, and volumes), `vaultBefore=0`, `vaultAfter=0` (premerge HOME only), `markerOk=1`.
+
+Clear inherited `PREMERGE_MUTANT` before each run (the driver sets `PREMERGE_MUTANT=` on the child).
 
 SIGINT is sent only to the Node PID printed as `premerge: node pid=…` in that run's log (never broad `pgrep`).
