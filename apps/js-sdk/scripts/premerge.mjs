@@ -277,6 +277,7 @@ async function main() {
       await fail(error instanceof Error ? error.message : String(error));
     }
 
+    console.log("premerge: starting pnpm -r check…");
     await runLeg("pnpm", ["-r", "check"], {}, repoRoot);
     if (stopAfter === "pnpm-check") {
       exitPremerge(0);

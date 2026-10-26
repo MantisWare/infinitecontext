@@ -237,6 +237,11 @@ export function createPremergeShutdown(opts) {
           return;
         }
         if (signal) {
+          if (signal === "SIGINT" || signal === "SIGTERM") {
+            beginShutdown(signal);
+            reject(new Error("shutting down"));
+            return;
+          }
           reject(new Error(`${cmd} ${args.join(" ")} terminated by ${signal}`));
           return;
         }
@@ -249,14 +254,20 @@ export function createPremergeShutdown(opts) {
             reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
             return;
           }
-          void terminateActiveLeg("SIGKILL").then(() => {
+          void (async () => {
+            await drainPendingSigint();
+            if (shuttingDown) {
+              reject(new Error("shutting down"));
+              return;
+            }
+            await terminateActiveLeg("SIGKILL");
             if (shuttingDown) {
               reject(new Error("shutting down"));
               return;
             }
             cleanupAll();
             exitPremerge(status ?? 1);
-          });
+          })();
           return;
         }
         resolve(out);

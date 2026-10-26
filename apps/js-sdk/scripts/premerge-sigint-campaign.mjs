@@ -29,7 +29,12 @@ for (let i = 1; i <= 4; i += 1) {
   runs.push(["early", `guard-${i}`, /guard:12|check-12-paths/, {}]);
 }
 for (let i = 1; i <= 3; i += 1) {
-  runs.push(["early", `pnpm-${i}`, /(^|# )Scope: [0-9]+ of/, {}]);
+  runs.push([
+    "early",
+    `pnpm-${i}`,
+    /premerge: starting pnpm -r check|Scope: [0-9]+ of/,
+    {},
+  ]);
 }
 for (let i = 1; i <= 3; i += 1) {
   runs.push(["early", `fetch-${i}`, /check-12-paths/, {}]);
