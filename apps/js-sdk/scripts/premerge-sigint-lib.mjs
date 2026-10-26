@@ -110,9 +110,15 @@ export async function runPremergeSigintOnce(opts) {
     ].join(" "),
   ].join(" && ");
 
+  const dockerWrap = String(process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP ?? "sg docker -c").trim();
+  const shellCmd = dockerWrap ? `${dockerWrap} ${JSON.stringify(inner)}` : inner;
   const beforeDocker = icPremergeDockerInventory();
-  const child = spawn("bash", ["-lc", `sg docker -c ${JSON.stringify(inner)}`], {
+  const child = spawn("bash", ["-lc", shellCmd], {
     stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      PATH: process.env.PATH ?? "",
+    },
   });
 
   let log = "";

@@ -82,8 +82,8 @@ export function premergeProbeTestOutput(probe) {
   }
   return `${basePackages}
 > infinitecontext@1.5.0 test /workspace/apps/js-sdk
-# tests 653
-# pass 651
+# tests 657
+# pass 655
 # fail 0
 # skipped 2
 # duration_ms 1
