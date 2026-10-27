@@ -144,7 +144,7 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
 };
 
 /** Measured infinitecontext pass when node-pty loads (onboarding wizard e2e suite runs). */
-export const PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY = 655;
+export const PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY = 656;
 
 /** Onboarding wizard e2e tests when node-pty loads (describe.skip when absent). */
 export const PREMERGE_ONBOARDING_PTY_TEST_COUNT = 13;
