@@ -21,6 +21,7 @@ function runPremergeProbe(extraEnv) {
       IC_PREMERGE_SKIP_LEGS: "1",
       IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
       IC_PREMERGE_ALLOW_DIRTY: "1",
+      IC_PREMERGE_FORCE_NO_PTY: "",
       ...extraEnv,
     },
   });
