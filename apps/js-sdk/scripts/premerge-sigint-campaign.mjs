@@ -49,6 +49,7 @@ for (let i = 1; i <= 5; i += 1) {
     /premerge package test coverage failed/,
     {
       IC_PREMERGE_SKIP_LEGS: "1",
+      IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
       IC_PREMERGE_ALLOW_DIRTY: "1",
       IC_PREMERGE_PROBE: "floor-violation",
     },

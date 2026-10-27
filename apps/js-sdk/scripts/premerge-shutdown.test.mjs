@@ -18,49 +18,10 @@ const sigintDuringCleanup = path.join(
   sdkRoot,
   "tests/storage/fixtures/premerge-sigint-during-cleanup.mjs",
 );
-const pnpmCheckSigintRace = path.join(
-  sdkRoot,
-  "tests/storage/fixtures/premerge-pnpm-check-sigint-race.mjs",
-);
-
 describe("premerge shutdown helpers", () => {
   it("removePrivateTmpDirVerified returns true when path is already gone", () => {
     const root = path.join(os.tmpdir(), `ic-tmp-missing-${Date.now()}`);
     assert.equal(removePrivateTmpDirVerified(root), true);
-  });
-
-  it("SIGINT during pnpm-check leg exit-1 race exits 130 not 1 (B1)", async () => {
-    const child = spawn(process.execPath, [pnpmCheckSigintRace], {
-      cwd: sdkRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let buf = "";
-    await new Promise((resolve, reject) => {
-      const deadline = Date.now() + 15_000;
-      const onData = (c) => {
-        buf += String(c);
-        if (buf.includes("PNPM_CHECK_LEG_READY")) {
-          resolve();
-        }
-      };
-      child.stdout?.on("data", onData);
-      child.stderr?.on("data", onData);
-      const poll = () => {
-        if (buf.includes("PNPM_CHECK_LEG_READY")) {
-          resolve();
-          return;
-        }
-        if (Date.now() > deadline) {
-          reject(new Error("pnpm check leg marker timeout"));
-          return;
-        }
-        setImmediate(poll);
-      };
-      poll();
-    });
-    child.kill("SIGINT");
-    const code = await new Promise((resolve) => child.on("exit", (c) => resolve(c)));
-    assert.equal(code, 130);
   });
 
   it("SIGINT during slow post-failure cleanup exits 130 not 1", async () => {

@@ -18,6 +18,9 @@ process.env.IC_PREMERGE_TMPDIR = premergeTmpRoot;
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 const worker = path.join(fixtureDir, "premerge-m1b-orphan-fd-worker.mjs");
+if (!String(process.env.IC_PREMERGE_ORPHAN_PID_FILE ?? "").trim()) {
+  process.env.IC_PREMERGE_ORPHAN_PID_FILE = path.join(callerTmp, `${tag}-orphan.pid`);
+}
 
 const shutdown = createPremergeShutdown({
   premergeTmpRoot,

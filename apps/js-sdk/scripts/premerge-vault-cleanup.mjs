@@ -84,7 +84,28 @@ export function syncVaultAgentCleanup(opts) {
     ...readPremergeVaultAgentPids(vaultPidRegistryPath),
     ...listVaultAgentServePidsForHome(premergeHome),
   ]);
+  const homeResolved = path.resolve(premergeHome);
+  const serveBasename = "vault-agent-serve.mjs";
+  /**
+   * @param {number} pid
+   */
+  function pidStillMatchesPremergeVault(pid) {
+    try {
+      const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      if (!cmdline.includes(serveBasename) && !cmdline.includes("premerge-vault-agent-shutdown")) {
+        return false;
+      }
+      const env = readProcEnviron(pid);
+      return path.resolve(env.HOME ?? "") === homeResolved;
+    } catch {
+      return false;
+    }
+  }
+
   for (const pid of killSet) {
+    if (!pidStillMatchesPremergeVault(pid)) {
+      continue;
+    }
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -92,6 +113,9 @@ export function syncVaultAgentCleanup(opts) {
     }
   }
   for (const pid of killSet) {
+    if (!pidStillMatchesPremergeVault(pid)) {
+      continue;
+    }
     try {
       process.kill(pid, "SIGKILL");
     } catch {

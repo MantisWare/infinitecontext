@@ -27,9 +27,12 @@ import {
   assertPremergePostgresUrlsSafe,
   startEphemeralPostgresForPremerge,
 } from "./premerge-ephemeral-postgres.mjs";
+import { sanitizePremergeProductionEnv } from "./premerge-mutant.mjs";
 import { createPremergeShutdown } from "./premerge-shutdown.mjs";
 import { syncVaultAgentCleanup } from "./premerge-vault-cleanup.mjs";
 import { premergeProbeTestOutput } from "./premerge-probe-output.mjs";
+
+sanitizePremergeProductionEnv();
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
@@ -245,16 +248,31 @@ async function main() {
   }
 
   const skipLegs = process.env.IC_PREMERGE_SKIP_LEGS === "1";
+  const skipLegsAllowed = String(process.env.IC_PREMERGE_ALLOW_SKIP_LEGS ?? "").trim() === "1";
   const stopAfter = String(process.env.IC_PREMERGE_STOP_AFTER ?? "");
+  const stopAfterAllowed = String(process.env.IC_PREMERGE_ALLOW_STOP_AFTER ?? "").trim() === "1";
+
+  if (skipLegs && !skipLegsAllowed) {
+    await fail(
+      "premerge refuses IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_ALLOW_SKIP_LEGS=1 (not a real gate pass)",
+    );
+  }
+  if (stopAfter && !stopAfterAllowed) {
+    await fail(
+      "premerge refuses IC_PREMERGE_STOP_AFTER without IC_PREMERGE_ALLOW_STOP_AFTER=1 (test-only hook)",
+    );
+  }
 
   if (!skipLegs) {
     await runLeg("npm", ["run", "guard:12"]);
     if (stopAfter === "guard:12") {
-      exitPremerge(0);
+      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
+      exitPremerge(92);
     }
     await runLeg("node", ["scripts/check-lib-no-test-env.mjs"]);
     if (stopAfter === "check-lib") {
-      exitPremerge(0);
+      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
+      exitPremerge(92);
     }
     loadApiEnvFile();
     for (const key of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
@@ -280,7 +298,8 @@ async function main() {
     console.log("premerge: starting pnpm -r check…");
     await runLeg("pnpm", ["-r", "check"], {}, repoRoot);
     if (stopAfter === "pnpm-check") {
-      exitPremerge(0);
+      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
+      exitPremerge(92);
     }
 
     const emuComposeEnv = {
@@ -358,7 +377,10 @@ async function main() {
       exitPremerge(shutdown.shutdownExitCode ?? 130);
     }
   } else if (skipLegs) {
-    testOut = premergeProbeTestOutput("ok");
+    console.error(
+      "premerge: IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_PROBE — refusing synthetic summary (exit 92)",
+    );
+    exitPremerge(92);
   }
 
   const parsed = absorbNodeTestTotals(testOut);

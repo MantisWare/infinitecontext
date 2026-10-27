@@ -19,6 +19,7 @@ function runPremergeProbe(extraEnv) {
       ...process.env,
       EXPECTED_SHA: head,
       IC_PREMERGE_SKIP_LEGS: "1",
+      IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
       IC_PREMERGE_ALLOW_DIRTY: "1",
       ...extraEnv,
     },
@@ -29,7 +30,10 @@ describe("real premerge gate failures", () => {
   it("floor violation exits non-zero without premerge summary success path", () => {
     const res = runPremergeProbe({ IC_PREMERGE_PROBE: "floor-violation" });
     assert.notEqual(res.status, 0);
-    assert.match(res.stderr + res.stdout, /premerge package test coverage failed|pass \d+ < floor/);
+    assert.match(
+      res.stderr + res.stdout,
+      /premerge package test coverage failed|exact count required|pass \d+ [<>] floor/,
+    );
     assert.doesNotMatch(res.stdout, /starting storage emulator/);
   });
 

@@ -382,9 +382,12 @@ export function assertPremergePackageTestSections(output, opts = {}) {
     if (name === "infinitecontext") {
       minPass = infinitecontextMinPassFloor(nodePtyLoadable);
     }
-    if (minPass !== undefined && totals.pass < minPass) {
+    if (minPass !== undefined && totals.pass !== minPass) {
       const ptyNote = name === "infinitecontext" && nodePtyLoadable ? " (with node-pty)" : " (no node-pty baseline)";
-      problems.push(`${name}: pass ${totals.pass} < floor ${minPass}${ptyNote}`);
+      const relation = totals.pass < minPass ? "<" : ">";
+      problems.push(
+        `${name}: pass ${totals.pass} ${relation} floor ${minPass} (exact count required)${ptyNote}`,
+      );
     }
     const accounted = totals.pass + totals.fail + totals.skipped;
     if (accounted !== totals.tests) {

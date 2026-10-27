@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 
+import { hasPremergeMutant } from "./premerge-mutant.mjs";
 import {
   collectLegProcessPids,
   removePrivateTmpDirVerified,
@@ -20,6 +21,7 @@ const LEG_KILL_WAIT_MS = 8000;
  * @param {(before: Set<string>, after: Set<string>) => void} [opts.assertNoNewIcTmpDirLeaks]
  * @param {() => Set<string>} [opts.listAllIcTmpDirs]
  * @param {typeof process.kill} [opts.killProcess]
+ * @param {{ scheduleSigintOnLegFailureClose?: boolean }} [opts.testHooks]
  */
 export function createPremergeShutdown(opts) {
   const {
@@ -29,6 +31,7 @@ export function createPremergeShutdown(opts) {
     assertNoNewIcTmpDirLeaks = () => {},
     listAllIcTmpDirs = () => new Set(),
     killProcess = process.kill.bind(process),
+    testHooks = {},
   } = opts;
 
   /** @type {import("node:child_process").ChildProcess | null} */
@@ -39,7 +42,7 @@ export function createPremergeShutdown(opts) {
 
   /** Yield so SIGINT during blocking cleanup is observed before exitPremerge(1). */
   async function drainPendingSigint() {
-    if (String(process.env.PREMERGE_MUTANT ?? "").includes("M1")) {
+    if (hasPremergeMutant("M1")) {
       await new Promise((resolve) => setImmediate(resolve));
       return;
     }
@@ -85,13 +88,13 @@ export function createPremergeShutdown(opts) {
     if (!child?.pid) {
       return;
     }
-    const mut = String(process.env.PREMERGE_MUTANT ?? "");
-    if (mut.includes("M7")) {
+    if (hasPremergeMutant("M7")) {
       return;
     }
     const rootPid = child.pid;
     const pgid = child.pid;
-    const skipGroupKill = mut.includes("M1b") || mut.includes("M1") || mut.includes("M2");
+    const skipGroupKill =
+      hasPremergeMutant("M1b") || hasPremergeMutant("M1") || hasPremergeMutant("M2");
     const fast = shuttingDown;
     const termSignal = fast ? "SIGKILL" : signal;
     const termWaitMs = fast ? 250 : LEG_TERM_WAIT_MS;
@@ -107,7 +110,7 @@ export function createPremergeShutdown(opts) {
         }
       }
     }
-    if (mut.includes("M1") || mut.includes("M2")) {
+    if (hasPremergeMutant("M1") || hasPremergeMutant("M2")) {
       activeChild = null;
       return;
     }
@@ -152,7 +155,7 @@ export function createPremergeShutdown(opts) {
   }
 
   function exitPremerge(code) {
-    if (shuttingDown && !String(process.env.PREMERGE_MUTANT ?? "").includes("M3")) {
+    if (shuttingDown && !hasPremergeMutant("M3")) {
       finishShutdown();
       process.exit(shutdownExitCode ?? 130);
     }
@@ -254,6 +257,32 @@ export function createPremergeShutdown(opts) {
             reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
             return;
           }
+          if (testHooks.scheduleSigintOnLegFailureClose) {
+            const sigDelayMs = Number(process.env.PREMERGE_TEST_B1_SIGINT_DELAY_MS ?? 0);
+            const fire = () => {
+              try {
+                process.kill(process.pid, "SIGINT");
+              } catch {
+                /* ignore */
+              }
+            };
+            if (sigDelayMs <= 0) {
+              setImmediate(fire);
+            } else {
+              setTimeout(fire, sigDelayMs);
+            }
+          }
+          if (String(process.env.PREMERGE_TEST_REVERT_B1 ?? "").trim() === "1") {
+            void terminateActiveLeg("SIGKILL").then(() => {
+              if (shuttingDown) {
+                reject(new Error("shutting down"));
+                return;
+              }
+              cleanupAll();
+              exitPremerge(status ?? 1);
+            });
+            return;
+          }
           void (async () => {
             await drainPendingSigint();
             if (shuttingDown) {
@@ -299,7 +328,7 @@ export function createPremergeShutdown(opts) {
         }
         void completeShutdownAfterSignal();
       };
-      if (String(process.env.PREMERGE_MUTANT ?? "").includes("M2")) {
+      if (hasPremergeMutant("M2")) {
         setTimeout(arm, 2000);
         return;
       }

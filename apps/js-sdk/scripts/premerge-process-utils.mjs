@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { hasPremergeMutant } from "./premerge-mutant.mjs";
+
 /** @param {number} pid */
 export function listChildPids(pid) {
   /** @type {number[]} */
@@ -211,7 +213,7 @@ export function removePrivateTmpDirVerified(root, beforeRm) {
     return true;
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (!String(process.env.PREMERGE_MUTANT ?? "").includes("M6")) {
+    if (!hasPremergeMutant("M6")) {
       killProcessesUsingPath(root, "SIGKILL");
     }
     try {

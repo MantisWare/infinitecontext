@@ -13,10 +13,22 @@ const orphanFdLeg = path.join(sdkRoot, "tests/storage/fixtures/premerge-m1b-orph
  * @param {string} script
  * @param {Record<string, string>} [extraEnv]
  */
+/**
+ * @param {number} pid
+ */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function sigintExitCode(script, extraEnv = {}) {
   const child = spawn(process.execPath, [script], {
     cwd: sdkRoot,
-    env: { ...process.env, ...extraEnv },
+    env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let buf = "";
@@ -86,7 +98,7 @@ describe("premerge mutants must fail", () => {
     const code = await new Promise((resolve) => {
       const child = spawn(process.execPath, [probe], {
         cwd: sdkRoot,
-        env: { ...process.env, PREMERGE_MUTANT: "M3" },
+        env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", PREMERGE_MUTANT: "M3" },
         stdio: "ignore",
       });
       child.on("exit", (c) => resolve(c));
@@ -103,6 +115,7 @@ describe("premerge mutants must fail", () => {
       cwd: sdkRoot,
       env: {
         ...process.env,
+        IC_PREMERGE_ALLOW_MUTANT: "1",
         PREMERGE_MUTANT: "M6,M7",
         IC_PREMERGE_TMPDIR: tmpRoot,
         TMPDIR: tmpRoot,
@@ -141,28 +154,37 @@ describe("premerge mutants must fail", () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-m1b-orphan-"));
+    const orphanPidFile = path.join(os.tmpdir(), `ic-m1b-orphan-pid-${process.pid}-${Date.now()}.pid`);
+    /** @type {number | null} */
+    let orphanPid = null;
     try {
       const code = await sigintExitCode(orphanFdLeg, {
         PREMERGE_MUTANT: "M1b",
         IC_PREMERGE_TMPDIR: tmpRoot,
         TMPDIR: tmpRoot,
+        IC_PREMERGE_ORPHAN_PID_FILE: orphanPidFile,
       });
       assert.equal(code, 130);
       assert.equal(fs.existsSync(tmpRoot), false);
+      if (fs.existsSync(orphanPidFile)) {
+        orphanPid = Number(fs.readFileSync(orphanPidFile, "utf8").trim());
+      }
+      if (orphanPid && orphanPid > 0) {
+        assert.equal(processAlive(orphanPid), false, "orphan node must not survive the test");
+      }
     } finally {
       const { killProcessesUsingPath } = await import("./premerge-process-utils.mjs");
-      killProcessesUsingPath(tmpRoot, "SIGKILL");
-      const orphanPidPath = path.join(tmpRoot, "ic-orphan-fd-orphan.pid");
-      if (fs.existsSync(orphanPidPath)) {
-        const orphanPid = Number(fs.readFileSync(orphanPidPath, "utf8").trim());
-        if (orphanPid > 0) {
-          try {
-            process.kill(orphanPid, "SIGKILL");
-          } catch {
-            /* ignore */
-          }
+      if (orphanPid && orphanPid > 0) {
+        try {
+          process.kill(orphanPid, "SIGKILL");
+        } catch {
+          /* ignore */
         }
       }
+      if (fs.existsSync(orphanPidFile)) {
+        fs.unlinkSync(orphanPidFile);
+      }
+      killProcessesUsingPath(tmpRoot, "SIGKILL");
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
@@ -247,7 +269,7 @@ describe("premerge mutants must fail", () => {
     const out = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [probe], {
         cwd: sdkRoot,
-        env: { ...process.env, PREMERGE_MUTANT: "M7" },
+        env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", PREMERGE_MUTANT: "M7" },
         stdio: ["ignore", "pipe", "ignore"],
       });
       let buf = "";

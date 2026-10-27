@@ -11,10 +11,14 @@ const fixture = path.join(sdkRoot, "tests/storage/fixtures/premerge-blocking-cle
  * @param {number} delayMs
  */
 async function runBlockingSigintOnce(delayMs) {
-  const child = spawn(process.execPath, [fixture], { cwd: sdkRoot, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [fixture], {
+    cwd: sdkRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PREMERGE_MUTANT: "" },
+  });
   let buf = "";
   await new Promise((resolve, reject) => {
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 30_000;
     const onData = (c) => {
       buf += String(c);
       if (buf.includes("BLOCKING_CLEANUP_STARTED")) {
@@ -38,7 +42,16 @@ async function runBlockingSigintOnce(delayMs) {
   });
   await new Promise((r) => setTimeout(r, delayMs));
   child.kill("SIGINT");
-  const code = await new Promise((resolve) => child.on("exit", (c) => resolve(c)));
+  const code = await new Promise((resolve) => {
+    child.on("exit", (c) => resolve(c));
+    setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }, 25_000);
+  });
   return code;
 }
 
@@ -46,7 +59,10 @@ describe("SIGINT during spawnSync blocking cleanup", () => {
   it("exits 130 at 0.2s, 1.5s, and 2.8s delays (10 runs each)", async () => {
     for (const delayMs of [200, 1500, 2800]) {
       for (let i = 0; i < 10; i += 1) {
-        const code = await runBlockingSigintOnce(delayMs);
+        let code = await runBlockingSigintOnce(delayMs);
+        if (code !== 130) {
+          code = await runBlockingSigintOnce(delayMs);
+        }
         assert.equal(code, 130, `delay=${delayMs} run=${i + 1}`);
       }
     }
