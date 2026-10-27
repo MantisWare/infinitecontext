@@ -396,6 +396,13 @@ async function main() {
   totals.skipped = parsed.skipped;
   totals.tests = parsed.tests;
 
+  if (skipLegs && skipLegsAllowed && probe && probe !== "floor-violation") {
+    console.error(
+      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
+    );
+    exitPremerge(92);
+  }
+
   try {
     if (!(skipLegs && probe === "floor-violation")) {
       assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
@@ -416,13 +423,6 @@ async function main() {
   }
 
   const packageCounts = parsePremergePackageCounts(testOut);
-
-  if (skipLegs && skipLegsAllowed) {
-    console.error(
-      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
-    );
-    exitPremerge(92);
-  }
 
   console.log("");
   console.log("premerge summary:");
