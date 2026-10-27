@@ -108,7 +108,11 @@ function runPremergeOnce(mode) {
   const dockerAfter = icPremergeDockerInventory();
 
   const summaryMatch = /premerge summary:([\s\S]*?)(?:\n\n|\n$|$)/.exec(combined);
-  const icMatch = /infinitecontext: pass (\d+), fail (\d+), skipped (\d+), tests (\d+)/.exec(combined);
+  const icMatch =
+    /infinitecontext: pass (\d+), fail (\d+), skipped (\d+), tests (\d+)/.exec(combined) ??
+    /infinitecontext: pass (\d+), fail (\d+), skipped (\d+), tests (\d+)/.exec(
+      fs.readFileSync(logPath, "utf8"),
+    );
   const totalsMatch = /pass: (\d+)[\s\S]*?fail: (\d+)[\s\S]*?skipped: (\d+)[\s\S]*?tests: (\d+)/.exec(
     summaryMatch?.[0] ?? combined,
   );
