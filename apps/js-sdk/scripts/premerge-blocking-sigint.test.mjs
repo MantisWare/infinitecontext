@@ -55,8 +55,8 @@ async function runBlockingSigintOnce(delayMs) {
   return code;
 }
 
-describe("SIGINT during spawnSync blocking cleanup", () => {
-  it("exits 130 at 0.2s, 1.5s, and 2.8s delays (10 runs each)", async () => {
+describe("SIGINT during spawnSync blocking cleanup", { timeout: 600_000 }, () => {
+  it("exits 130 at 0.2s, 1.5s, and 2.8s delays (10 runs each)", { timeout: 600_000 }, async () => {
     for (const delayMs of [200, 1500, 2800]) {
       for (let i = 0; i < 10; i += 1) {
         let code = await runBlockingSigintOnce(delayMs);
