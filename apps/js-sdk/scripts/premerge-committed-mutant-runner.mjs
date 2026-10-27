@@ -63,10 +63,17 @@ function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
     if (nameFilter) {
       args.push("--test-name-pattern", nameFilter);
     }
+    /** @type {Record<string, string | undefined>} */
+    const childEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith("NODE_TEST")) {
+        delete childEnv[key];
+      }
+    }
     const run = spawnSync(process.execPath, args, {
       cwd: path.join(wtRoot, "apps/js-sdk"),
       encoding: "utf8",
-      env: { ...process.env },
+      env: childEnv,
       execArgv: [],
     });
     const combined = `${run.stdout}\n${run.stderr}`;
