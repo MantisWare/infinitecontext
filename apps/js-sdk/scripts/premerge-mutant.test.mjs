@@ -90,8 +90,37 @@ async function sigintExitCode(script, extraEnv = {}, opts = {}) {
  */
 describe("premerge mutants must fail", () => {
   it("M1: single setImmediate yield breaks blocking SIGINT (exit not 130)", async () => {
-    const code = await sigintExitCode(blockingFixture, { PREMERGE_MUTANT: "M1" });
-    assert.notEqual(code, 130);
+    const child = spawn(process.execPath, [blockingFixture], {
+      cwd: sdkRoot,
+      env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", PREMERGE_MUTANT: "M1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let buf = "";
+    await new Promise((resolve, reject) => {
+      const deadline = Date.now() + 15_000;
+      const onData = (c) => {
+        buf += String(c);
+        if (buf.includes("BLOCKING_CLEANUP_STARTED")) {
+          resolve(undefined);
+        }
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      const poll = () => {
+        if (buf.includes("BLOCKING_CLEANUP_STARTED")) {
+          resolve(undefined);
+          return;
+        }
+        if (Date.now() > deadline) {
+          reject(new Error("ready timeout"));
+          return;
+        }
+        setImmediate(poll);
+      };
+      poll();
+    });
+    const code = await new Promise((resolve) => child.on("exit", (c) => resolve(c)));
+    assert.equal(code, 1);
   });
 
   it("M2: delayed shutdown flag breaks blocking SIGINT (exit not 130)", async () => {

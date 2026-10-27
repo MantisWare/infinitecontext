@@ -10,7 +10,7 @@ const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-block-cleanup-
 
 const slowCleanup = () => {
   console.log("BLOCKING_CLEANUP_STARTED");
-  spawnSync("sleep", ["3"], { stdio: "ignore" });
+  spawnSync("sleep", ["1"], { stdio: "ignore" });
 };
 
 /** @type {ReturnType<typeof createPremergeShutdown>} */
