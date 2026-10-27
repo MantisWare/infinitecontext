@@ -420,7 +420,10 @@ export function isEphemeralPremergeTestFixtureDir(dirPath) {
   return (
     base.startsWith("ic-b1-offset-") ||
     base.startsWith("ic-b1-race-") ||
-    base.startsWith("ic-m6-path-")
+    base.startsWith("ic-m6-path-") ||
+    base.startsWith("ic-group-kill-") ||
+    base.startsWith("ic-m1b-group-") ||
+    base.startsWith("ic-sm7-group-")
   );
 }
 
