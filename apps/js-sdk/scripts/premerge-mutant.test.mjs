@@ -25,10 +25,16 @@ function processAlive(pid) {
   }
 }
 
-async function sigintExitCode(script, extraEnv = {}) {
+/**
+ * @param {string} script
+ * @param {Record<string, string>} [extraEnv]
+ * @param {{ intDelayMs?: number }} [opts]
+ */
+async function sigintExitCode(script, extraEnv = {}, opts = {}) {
+  const intDelayMs = opts.intDelayMs ?? 200;
   const child = spawn(process.execPath, [script], {
     cwd: sdkRoot,
-    env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", ...extraEnv },
+    env: { ...process.env, PREMERGE_MUTANT: "", IC_PREMERGE_ALLOW_MUTANT: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let buf = "";
@@ -63,7 +69,7 @@ async function sigintExitCode(script, extraEnv = {}) {
     };
     poll();
   });
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, intDelayMs));
   child.kill("SIGINT");
   return new Promise((resolve) => child.on("exit", (c) => resolve(c)));
 }
