@@ -36,6 +36,7 @@ async function sigintExitCode(script, extraEnv = {}, opts = {}) {
     cwd: sdkRoot,
     env: { ...process.env, PREMERGE_MUTANT: "", IC_PREMERGE_ALLOW_MUTANT: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
+    execArgv: [],
   });
   let buf = "";
   await new Promise((resolve, reject) => {

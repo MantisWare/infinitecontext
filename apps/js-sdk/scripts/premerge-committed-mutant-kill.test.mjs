@@ -13,6 +13,7 @@ describe("committed source mutants (clean tree)", () => {
       cwd: sdkRoot,
       encoding: "utf8",
       env: { ...process.env },
+      execArgv: [],
     });
     assert.equal(
       run.status,
