@@ -35,7 +35,14 @@ function offsetRange(full) {
     }
     return out;
   }
-  return [-60, 0, 5, 50, 200, 450];
+  /** Default gate: cover early positive offsets where reverted B1 exits 1 (+5…+120). */
+  /** @type {number[]} */
+  const sample = [-60, 0, 5];
+  for (let o = 15; o <= 120; o += 15) {
+    sample.push(o);
+  }
+  sample.push(200, 450);
+  return [...new Set(sample)].sort((a, b) => a - b);
 }
 
 describe("B1 leg fail vs SIGINT offset probe (300 ms leg exit)", () => {
