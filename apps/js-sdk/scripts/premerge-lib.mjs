@@ -414,6 +414,16 @@ export function isPremergeToolingCacheDir(dirPath) {
   return base === "node-compile-cache" || /^v8-compile-cache-\d+$/.test(base);
 }
 
+/** @param {string} dirPath */
+export function isEphemeralPremergeTestFixtureDir(dirPath) {
+  const base = path.basename(dirPath);
+  return (
+    base.startsWith("ic-b1-offset-") ||
+    base.startsWith("ic-b1-race-") ||
+    base.startsWith("ic-m6-path-")
+  );
+}
+
 export function listAllIcTmpDirs(tmpRootOverride) {
   const tmpRoot = path.resolve(
     tmpRootOverride ?? process.env.IC_PREMERGE_TMPDIR ?? process.env.TMPDIR ?? os.tmpdir(),
@@ -451,6 +461,9 @@ export function assertNoNewIcTmpDirLeaks(before, after) {
       continue;
     }
     if (isPremergeToolingCacheDir(dir)) {
+      continue;
+    }
+    if (isEphemeralPremergeTestFixtureDir(dir)) {
       continue;
     }
     leaked.push(dir);

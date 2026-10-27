@@ -26,6 +26,8 @@ function cleanupTmp() {
   }
 }
 
+process.on("exit", cleanupTmp);
+
 if (offsetMs > 0) {
   process.env.PREMERGE_TEST_B1_SIGINT_DELAY_MS = String(offsetMs);
 }
@@ -59,6 +61,7 @@ try {
   process.exit(0);
 } catch {
   if (shutdown.shuttingDown) {
+    cleanupTmp();
     shutdown.exitPremerge(shutdown.shutdownExitCode ?? 130);
   }
   cleanupTmp();
