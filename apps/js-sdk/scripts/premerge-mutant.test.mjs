@@ -315,6 +315,7 @@ describe("premerge mutants must fail", () => {
         cwd: sdkRoot,
         env: { ...process.env, IC_PREMERGE_ALLOW_MUTANT: "1", PREMERGE_MUTANT: "M7" },
         stdio: ["ignore", "pipe", "ignore"],
+        execArgv: [],
       });
       let buf = "";
       child.stdout?.on("data", (c) => {

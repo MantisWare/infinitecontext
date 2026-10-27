@@ -27,6 +27,14 @@ const alive = shutdown.activeChild?.pid && (() => {
   }
 })();
 console.log(alive ? "CHILD_ALIVE" : "CHILD_GONE");
+const legPid = shutdown.activeChild?.pid;
+if (legPid) {
+  try {
+    process.kill(legPid, "SIGKILL");
+  } catch {
+    /* ignore */
+  }
+}
 try {
   fs.rmSync(premergeTmpRoot, { recursive: true, force: true });
 } catch {
