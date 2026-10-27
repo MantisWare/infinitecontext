@@ -9,10 +9,17 @@ const runner = path.join(sdkRoot, "scripts/premerge-committed-mutant-runner.mjs"
 
 describe("committed source mutants (clean tree)", () => {
   it("regression tests fail on committed mutant branches", () => {
+    /** @type {Record<string, string | undefined>} */
+    const childEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith("NODE_TEST")) {
+        delete childEnv[key];
+      }
+    }
     const run = spawnSync(process.execPath, [runner], {
       cwd: sdkRoot,
       encoding: "utf8",
-      env: { ...process.env },
+      env: childEnv,
       execArgv: [],
     });
     assert.equal(

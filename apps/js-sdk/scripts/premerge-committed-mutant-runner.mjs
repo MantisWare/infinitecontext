@@ -50,10 +50,16 @@ function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
     const patchPath = path.join(patchDir, patchName);
     const apply = spawnSync("git", ["-C", wtRoot, "apply", patchPath], { encoding: "utf8" });
     assert.equal(apply.status, 0, apply.stderr || apply.stdout);
+    const gitIdent = {
+      GIT_AUTHOR_NAME: "premerge-mutant",
+      GIT_AUTHOR_EMAIL: "premerge-mutant@infinitecontext.local",
+      GIT_COMMITTER_NAME: "premerge-mutant",
+      GIT_COMMITTER_EMAIL: "premerge-mutant@infinitecontext.local",
+    };
     const commit = spawnSync(
       "git",
       ["-C", wtRoot, "commit", "-am", `test: committed mutant ${patchName}`],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: { ...process.env, ...gitIdent } },
     );
     assert.equal(commit.status, 0, commit.stderr || commit.stdout);
 
