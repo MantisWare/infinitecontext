@@ -67,6 +67,7 @@ function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
       cwd: path.join(wtRoot, "apps/js-sdk"),
       encoding: "utf8",
       env: { ...process.env },
+      execArgv: [],
     });
     const combined = `${run.stdout}\n${run.stderr}`;
     assert.match(combined, /# tests \d+/, "expected test file to execute in worktree");
