@@ -396,7 +396,7 @@ async function main() {
   totals.skipped = parsed.skipped;
   totals.tests = parsed.tests;
 
-  if (skipLegs && skipLegsAllowed && probe && probe !== "floor-violation") {
+  if (skipLegs && skipLegsAllowed && probe === "green") {
     console.error(
       "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
     );

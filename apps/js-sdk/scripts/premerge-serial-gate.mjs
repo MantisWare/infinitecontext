@@ -151,4 +151,27 @@ for (const mode of modes) {
     fail += 1;
   }
 }
+
+if (arg === "all" || process.argv[2] === "sigint") {
+  delete process.env.IC_SIGINT_OUTSIDE_VAULT_MARKER;
+  const sig = spawnSync(process.execPath, ["scripts/premerge-sigint-campaign.mjs"], {
+    cwd: sdkRoot,
+    encoding: "utf8",
+    env: { ...process.env, IC_SIGINT_OUTSIDE_VAULT_MARKER: "" },
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  fs.writeFileSync(path.join(gateRoot, "sigint-campaign.log"), `${sig.stdout}\n${sig.stderr}`);
+  const m = /fail=(\d+)\/(\d+)/.exec(`${sig.stdout}\n${sig.stderr}`);
+  const sigFail = m ? Number(m[1]) : 1;
+  const sigTotal = m ? Number(m[2]) : 45;
+  fs.writeFileSync(
+    path.join(gateRoot, "sigint-campaign.json"),
+    JSON.stringify({ fail: sigFail, total: sigTotal, status: sig.status }, null, 2),
+  );
+  console.log(JSON.stringify({ sigintFail: sigFail, sigintTotal: sigTotal, status: sig.status }));
+  if (sigFail > 0 || sig.status !== 0) {
+    fail += 1;
+  }
+}
+
 process.exit(fail > 0 ? 1 : 0);
