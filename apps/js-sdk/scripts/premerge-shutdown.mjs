@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { hasPremergeMutant } from "./premerge-mutant.mjs";
 import {
   collectLegProcessPids,
+  killProcessesUsingPath,
   removePrivateTmpDirVerified,
   signalPids,
   waitForLegProcessesIdle,
@@ -136,6 +137,7 @@ export function createPremergeShutdown(opts) {
 
   function finishShutdown() {
     cleanupAll();
+    killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
     if (!cleanupPremergeTmpRoot()) {
       process.exit(1);
     }

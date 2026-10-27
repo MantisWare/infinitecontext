@@ -1,0 +1,36 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -274,27 +274,14 @@ export function createPremergeShutdown(opts) {
+               setTimeout(fire, sigDelayMs);
+             }
+           }
+-          if (String(process.env.PREMERGE_TEST_REVERT_B1 ?? "").trim() === "1") {
+-            void terminateActiveLeg("SIGKILL").then(() => {
+-              if (shuttingDown) {
+-                reject(new Error("shutting down"));
+-                return;
+-              }
+-              cleanupAll();
+-              exitPremerge(status ?? 1);
+-            });
+-            return;
+-          }
+-          void (async () => {
+-            await drainPendingSigint();
++          void terminateActiveLeg("SIGKILL").then(() => {
+             if (shuttingDown) {
+               reject(new Error("shutting down"));
+               return;
+             }
+-            await terminateActiveLeg("SIGKILL");
+             if (shuttingDown) {
+               reject(new Error("shutting down"));
+               return;
+             }
+             cleanupAll();
+             exitPremerge(status ?? 1);
+-          })();
++          });
+           return;
+         }

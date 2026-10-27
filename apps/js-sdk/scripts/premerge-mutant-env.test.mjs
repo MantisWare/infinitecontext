@@ -48,6 +48,47 @@ describe("premerge production env sanitization", () => {
     assert.equal(code, 130, "M1 must not apply without IC_PREMERGE_ALLOW_MUTANT");
   });
 
+  it("IC_PREMERGE_SKIP_LEGS with allow+probe exits 92 with SYNTHETIC (not gate pass)", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(sdkRoot, "../.."),
+      encoding: "utf8",
+    }).stdout.trim();
+    const res = spawnSync(process.execPath, [premerge], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SHA: head,
+        IC_PREMERGE_ALLOW_DIRTY: "1",
+        IC_PREMERGE_SKIP_LEGS: "1",
+        IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
+        IC_PREMERGE_PROBE: "green",
+      },
+    });
+    assert.equal(res.status, 92);
+    assert.match(res.stderr + res.stdout, /SYNTHETIC/);
+  });
+
+  it("IC_PREMERGE_STOP_AFTER=guard:12 exits 92 (partial run)", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(sdkRoot, "../.."),
+      encoding: "utf8",
+    }).stdout.trim();
+    const res = spawnSync(process.execPath, [premerge], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SHA: head,
+        IC_PREMERGE_ALLOW_DIRTY: "1",
+        IC_PREMERGE_STOP_AFTER: "guard:12",
+        IC_PREMERGE_ALLOW_STOP_AFTER: "1",
+      },
+    });
+    assert.equal(res.status, 92);
+    assert.match(res.stderr + res.stdout, /partial run/);
+  });
+
   it("IC_PREMERGE_SKIP_LEGS without allow flag exits non-zero", () => {
     const head = spawnSync("git", ["rev-parse", "HEAD"], {
       cwd: path.resolve(sdkRoot, "../.."),

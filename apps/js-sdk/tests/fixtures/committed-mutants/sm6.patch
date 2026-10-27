@@ -1,0 +1,11 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -137,7 +137,6 @@ export function createPremergeShutdown(opts) {
+ 
+   function finishShutdown() {
+     cleanupAll();
+-    killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
+     if (!cleanupPremergeTmpRoot()) {
+       process.exit(1);
+     }

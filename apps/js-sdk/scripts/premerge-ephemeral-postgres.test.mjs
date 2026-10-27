@@ -26,7 +26,11 @@ describe("premerge ephemeral Postgres docker hygiene", () => {
 
   it("tearDownEphemeralPostgresProject is scoped to compose project name", () => {
     const down = tearDownEphemeralPostgresProject(repoRoot, "ic_premerge_pg_99999_testonly", process.env);
-    assert.ok(down.status === 0 || down.status === 1);
+    assert.equal(
+      down.status,
+      0,
+      `tearDownEphemeralPostgresProject must succeed (got ${down.status}): ${down.stderr || down.stdout}`,
+    );
   });
 
   it("SIGINT after ephemeral Postgres start leaves no ic_premerge docker (live)", async () => {

@@ -110,8 +110,15 @@ shutdown.registerSignalHandlers();
 
 function premergeChildEnv(extra = {}) {
   const forceNoPty = String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1";
+  /** @type {Record<string, string | undefined>} */
+  const base = { ...process.env };
+  delete base.PREMERGE_MUTANT;
+  delete base.PREMERGE_TEST_REVERT_B1;
+  delete base.PREMERGE_TEST_B1_SIGINT_DELAY_MS;
+  delete base.PREMERGE_TEST_B1_SIGINT_OFFSET_MS;
+  delete base.IC_PREMERGE_ALLOW_MUTANT;
   return {
-    ...process.env,
+    ...base,
     HOME: premergeHome,
     IC_PREMERGE_HOME: premergeHome,
     IC_PREMERGE_VAULT_PID_REGISTRY: vaultPidRegistryPath,
@@ -409,6 +416,13 @@ async function main() {
   }
 
   const packageCounts = parsePremergePackageCounts(testOut);
+
+  if (skipLegs && skipLegsAllowed) {
+    console.error(
+      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
+    );
+    exitPremerge(92);
+  }
 
   console.log("");
   console.log("premerge summary:");

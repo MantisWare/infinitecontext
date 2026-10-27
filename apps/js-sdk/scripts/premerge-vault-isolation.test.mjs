@@ -86,17 +86,31 @@ describe("premerge vault-agent cleanup isolation", () => {
   });
 
   it("never reads the developer real ~/.infinitecontext", () => {
-    const realHome = path.join(os.homedir(), ".infinitecontext");
+    const realIcDir = path.join(os.homedir(), ".infinitecontext");
+    fs.mkdirSync(realIcDir, { recursive: true });
+    const sentinel = path.join(realIcDir, "ic-premerge-no-read-sentinel");
+    fs.writeFileSync(sentinel, `probe-${process.pid}-${Date.now()}\n`);
+    const before = fs.statSync(sentinel).mtimeMs;
+
     const fakePremergeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fake-premerge-home-"));
     try {
       const pids = listVaultAgentServePidsForHome(fakePremergeHome);
       assert.ok(Array.isArray(pids));
       assert.notEqual(path.resolve(infinitecontextHome()), path.resolve(fakePremergeHome));
-      if (fs.existsSync(realHome)) {
-        assert.ok(fs.statSync(realHome).isDirectory());
-      }
+      syncVaultAgentCleanup({
+        sdkRoot,
+        premergeHome: fakePremergeHome,
+        vaultPidRegistryPath: path.join(fakePremergeHome, "empty-registry.txt"),
+      });
+      const after = fs.statSync(sentinel).mtimeMs;
+      assert.equal(after, before, "real ~/.infinitecontext sentinel must not be touched");
     } finally {
       fs.rmSync(fakePremergeHome, { recursive: true, force: true });
+      try {
+        fs.unlinkSync(sentinel);
+      } catch {
+        /* ignore */
+      }
     }
   });
 });
