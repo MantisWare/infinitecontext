@@ -22,7 +22,7 @@ const CASES = [
     id: "O1",
     patch: "o1-b1-revert.patch",
     testRel: "apps/js-sdk/scripts/premerge-b1-offset-probe.test.mjs",
-    filter: "head: exit 130 for probe offsets",
+    filter: "head: exit 130 for probe offsets \\(reps each\\)",
   },
   {
     id: "S-M7",

@@ -137,7 +137,9 @@ export function createPremergeShutdown(opts) {
 
   function finishShutdown() {
     cleanupAll();
-    killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
+    if (!hasPremergeMutant("M6")) {
+      killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
+    }
     if (!cleanupPremergeTmpRoot()) {
       process.exit(1);
     }

@@ -12,7 +12,7 @@ describe("S-M6 source regression (path kill in production)", () => {
   it("finishShutdown kills processes using premerge TMPDIR (not PREMERGE_MUTANT-only)", () => {
     assert.match(
       shutdownSrc,
-      /function finishShutdown\(\)\s*\{[\s\S]*killProcessesUsingPath\(premergeTmpRoot/,
+      /function finishShutdown\(\)\s*\{[\s\S]*if \(!hasPremergeMutant\("M6"\)\)\s*\{[\s\S]*killProcessesUsingPath\(premergeTmpRoot/,
       "finishShutdown must call killProcessesUsingPath on the private tmp root",
     );
   });
