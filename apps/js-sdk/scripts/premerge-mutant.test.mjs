@@ -72,7 +72,15 @@ async function sigintExitCode(script, extraEnv = {}, opts = {}) {
   });
   await new Promise((r) => setTimeout(r, intDelayMs));
   child.kill("SIGINT");
-  return new Promise((resolve) => child.on("exit", (c) => resolve(c)));
+  const code = await new Promise((resolve) => child.on("exit", (c) => resolve(c)));
+  if (child.pid) {
+    try {
+      process.kill(child.pid, "SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
+  return code;
 }
 
 /**
