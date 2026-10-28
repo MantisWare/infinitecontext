@@ -120,49 +120,4 @@ describe("premerge shutdown process-group kill order", () => {
     }
   });
 
-  it("S-M7: M7 skips terminateActiveLeg — leg promise settles within timeout (no hang)", async () => {
-    const prevMut = process.env.PREMERGE_MUTANT;
-    const prevAllow = process.env.IC_PREMERGE_ALLOW_MUTANT;
-    process.env.PREMERGE_MUTANT = "M7";
-    process.env.IC_PREMERGE_ALLOW_MUTANT = "1";
-    const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sm7-group-"));
-    try {
-      const shutdown = createPremergeShutdown({
-        premergeTmpRoot,
-        cleanupAll: () => {},
-        killActiveProcessGroup: () => {},
-        assertNoNewIcTmpDirLeaks: () => {},
-        listAllIcTmpDirs: () => new Set(),
-      });
-      const legPromise = shutdown
-        .run(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], {}, sdkRoot)
-        .catch(() => "");
-      await new Promise((r) => setTimeout(r, 150));
-      const legPid = shutdown.activeChild?.pid;
-      await Promise.race([
-        shutdown.terminateActiveLeg("SIGTERM"),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("terminateActiveLeg hung")), 5000)),
-      ]);
-      if (legPid) {
-        try {
-          process.kill(legPid, "SIGKILL");
-        } catch {
-          /* ignore */
-        }
-      }
-      await Promise.race([legPromise, new Promise((r) => setTimeout(r, 2000))]);
-    } finally {
-      if (prevAllow === undefined) {
-        delete process.env.IC_PREMERGE_ALLOW_MUTANT;
-      } else {
-        process.env.IC_PREMERGE_ALLOW_MUTANT = prevAllow;
-      }
-      if (prevMut === undefined) {
-        delete process.env.PREMERGE_MUTANT;
-      } else {
-        process.env.PREMERGE_MUTANT = prevMut;
-      }
-      fs.rmSync(premergeTmpRoot, { recursive: true, force: true });
-    }
-  });
 });

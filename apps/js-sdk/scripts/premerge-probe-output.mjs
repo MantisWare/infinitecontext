@@ -1,8 +1,14 @@
 /**
  * Synthetic pnpm test output for IC_PREMERGE_PROBE gate tests (skip real test leg).
+ * Unknown probe values must throw — never return a green default.
  * @param {string} probe
  */
 export function premergeProbeTestOutput(probe) {
+  const p = String(probe ?? "").trim();
+  if (!p) {
+    throw new Error("premerge: unknown IC_PREMERGE_PROBE (empty)");
+  }
+
   const basePackages = `
 > @infinitecontext/auth@0.1.0 test /workspace/packages/auth
 # tests 11
@@ -61,16 +67,29 @@ export function premergeProbeTestOutput(probe) {
 > infinitecontext-python-sdk@ test /workspace/apps/python-sdk
 6 passed in 0.01s
 `;
-  if (probe === "missing-package") {
+
+  const infinitecontextOk = `
+> infinitecontext@1.5.0 test /workspace/apps/js-sdk
+# tests 671
+# pass 669
+# fail 0
+# skipped 2
+# duration_ms 1
+`;
+
+  if (p === "ok" || p === "green") {
+    return `${basePackages}${infinitecontextOk}`;
+  }
+  if (p === "missing-package") {
     return basePackages;
   }
-  if (probe === "zero-tests") {
+  if (p === "zero-tests") {
     return `${basePackages}
 > infinitecontext@1.5.0 test /workspace/apps/js-sdk
 # duration_ms 1
 `;
   }
-  if (probe === "floor-violation") {
+  if (p === "floor-violation") {
     return `${basePackages}
 > infinitecontext@1.5.0 test /workspace/apps/js-sdk
 # tests 595
@@ -80,12 +99,16 @@ export function premergeProbeTestOutput(probe) {
 # duration_ms 1
 `;
   }
-  return `${basePackages}
-> infinitecontext@1.5.0 test /workspace/apps/js-sdk
-# tests 671
-# pass 669
-# fail 0
-# skipped 2
-# duration_ms 1
-`;
+  if (p === "expected-sha-mismatch") {
+    return `${basePackages}${infinitecontextOk}`;
+  }
+  throw new Error(`premerge: unknown IC_PREMERGE_PROBE ${JSON.stringify(p)}`);
+}
+
+/**
+ * Validate probe name without returning synthetic green output.
+ * @param {string} probe
+ */
+export function assertKnownPremergeProbe(probe) {
+  premergeProbeTestOutput(String(probe ?? "").trim());
 }

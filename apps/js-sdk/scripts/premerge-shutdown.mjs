@@ -213,10 +213,12 @@ export function createPremergeShutdown(opts) {
    */
   function run(cmd, args, env, cwd, runOpts = {}) {
     const { allowFailure = false } = runOpts;
+    const legEnv =
+      env !== undefined && env !== null && Object.keys(env).length > 0 ? env : process.env;
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, {
         cwd,
-        env: { ...process.env, ...env },
+        env: legEnv,
         stdio: ["inherit", "pipe", "pipe"],
         detached: true,
       });
@@ -276,7 +278,7 @@ export function createPremergeShutdown(opts) {
               setTimeout(fire, sigDelayMs);
             }
           }
-          if (String(process.env.PREMERGE_TEST_REVERT_B1 ?? "").trim() === "1") {
+          if (hasPremergeMutant("B1")) {
             void terminateActiveLeg("SIGKILL").then(() => {
               if (shuttingDown) {
                 reject(new Error("shutting down"));

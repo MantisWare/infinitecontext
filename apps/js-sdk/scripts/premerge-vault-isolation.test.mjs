@@ -45,44 +45,58 @@ describe("premerge vault-agent cleanup isolation", () => {
     const premergeHome = path.join(root, "premerge-home");
     const devHome = path.join(root, "devhome");
     const otherHome = path.join(root, "otherhome");
-    for (const h of [premergeHome, devHome, otherHome]) {
-      fs.mkdirSync(h, { recursive: true });
-    }
-
-    const devPid = spawnDetachedAgent(devHome, serveScript);
-    const otherPid = spawnDetachedAgent(otherHome, otherScript);
-    const premergePid = spawnDetachedAgent(premergeHome, serveScript);
-    assert.ok(devPid && otherPid && premergePid);
-
-    await new Promise((r) => setTimeout(r, 400));
-
-    const registry = path.join(root, "vault-pids.txt");
-    registerPremergeVaultAgentPid(registry, premergePid);
-
-    syncVaultAgentCleanup({
-      sdkRoot,
-      premergeHome,
-      vaultPidRegistryPath: registry,
-    });
-    await new Promise((r) => setTimeout(r, 300));
-
-    assert.equal(listVaultAgentServePidsForHome(premergeHome).length, 0);
-    assert.ok(listVaultAgentServePidsForHome(devHome).length > 0);
-    assert.ok(listVaultAgentServePidsForHome(otherHome).length > 0);
-
-    const devPaths = agentRuntimePaths(devHome);
-    const otherPaths = agentRuntimePaths(otherHome);
-    assert.ok(fs.existsSync(devPaths.sock) || fs.existsSync(devPaths.pid));
-    assert.ok(fs.existsSync(otherPaths.sock) || fs.existsSync(otherPaths.pid));
-
-    for (const pid of [devPid, otherPid]) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        /* ignore */
+    /** @type {number[]} */
+    const spawnedPids = [];
+    try {
+      for (const h of [premergeHome, devHome, otherHome]) {
+        fs.mkdirSync(h, { recursive: true });
       }
+
+      const devPid = spawnDetachedAgent(devHome, serveScript);
+      const otherPid = spawnDetachedAgent(otherHome, otherScript);
+      const premergePid = spawnDetachedAgent(premergeHome, serveScript);
+      spawnedPids.push(devPid, otherPid, premergePid);
+      assert.ok(devPid && otherPid && premergePid);
+
+      await new Promise((r) => setTimeout(r, 400));
+
+      const registry = path.join(root, "vault-pids.txt");
+      registerPremergeVaultAgentPid(registry, premergePid);
+
+      syncVaultAgentCleanup({
+        sdkRoot,
+        premergeHome,
+        vaultPidRegistryPath: registry,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+
+      assert.equal(listVaultAgentServePidsForHome(premergeHome).length, 0);
+      assert.ok(listVaultAgentServePidsForHome(devHome).length > 0);
+      assert.ok(listVaultAgentServePidsForHome(otherHome).length > 0);
+
+      const devPaths = agentRuntimePaths(devHome);
+      const otherPaths = agentRuntimePaths(otherHome);
+      assert.ok(fs.existsSync(devPaths.sock) || fs.existsSync(devPaths.pid));
+      assert.ok(fs.existsSync(otherPaths.sock) || fs.existsSync(otherPaths.pid));
+    } finally {
+      for (const pid of spawnedPids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
+      await new Promise((r) => setTimeout(r, 200));
+      for (const pid of spawnedPids) {
+        try {
+          process.kill(pid, 0);
+          assert.fail(`expected vault-agent pid ${pid} to be dead after test cleanup`);
+        } catch (err) {
+          assert.ok(err && typeof err === "object" && "code" in err && err.code === "ESRCH");
+        }
+      }
+      fs.rmSync(root, { recursive: true, force: true });
     }
-    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("never reads the developer real ~/.infinitecontext", () => {

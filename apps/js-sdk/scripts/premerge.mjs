@@ -27,12 +27,18 @@ import {
   assertPremergePostgresUrlsSafe,
   startEphemeralPostgresForPremerge,
 } from "./premerge-ephemeral-postgres.mjs";
-import { sanitizePremergeProductionEnv } from "./premerge-mutant.mjs";
+import { assertPremergeProductionMutantPolicy } from "./premerge-mutant.mjs";
 import { createPremergeShutdown } from "./premerge-shutdown.mjs";
 import { syncVaultAgentCleanup } from "./premerge-vault-cleanup.mjs";
-import { premergeProbeTestOutput } from "./premerge-probe-output.mjs";
+import { assertKnownPremergeProbe } from "./premerge-probe-output.mjs";
+import { buildPremergeLegEnv } from "./premerge-env.mjs";
 
-sanitizePremergeProductionEnv();
+try {
+  assertPremergeProductionMutantPolicy(process.env);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
@@ -109,27 +115,11 @@ shutdown = createPremergeShutdown({
 shutdown.registerSignalHandlers();
 
 function premergeChildEnv(extra = {}) {
-  const forceNoPty = String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1";
-  /** @type {Record<string, string | undefined>} */
-  const base = { ...process.env };
-  delete base.PREMERGE_MUTANT;
-  delete base.PREMERGE_TEST_REVERT_B1;
-  delete base.PREMERGE_TEST_B1_SIGINT_DELAY_MS;
-  delete base.PREMERGE_TEST_B1_SIGINT_OFFSET_MS;
-  delete base.IC_PREMERGE_ALLOW_MUTANT;
-  return {
-    ...base,
-    HOME: premergeHome,
-    IC_PREMERGE_HOME: premergeHome,
-    IC_PREMERGE_VAULT_PID_REGISTRY: vaultPidRegistryPath,
-    TMPDIR: premergeTmpRoot,
-    TMP: premergeTmpRoot,
-    TEMP: premergeTmpRoot,
-    IC_PREMERGE_TMPDIR: premergeTmpRoot,
-    DISABLE_V8_COMPILE_CACHE: "1",
-    ...(forceNoPty ? { IC_PREMERGE_FORCE_NO_PTY: "1" } : {}),
-    ...extra,
-  };
+  return buildPremergeLegEnv(process.env, {
+    premergeHome,
+    premergeTmpRoot,
+    vaultPidRegistryPath,
+  }, extra);
 }
 
 function cleanupEmu() {
@@ -349,12 +339,28 @@ async function main() {
     INFINITECONTEXT_S3_TEST_PREFIX: "premerge-local",
   };
 
+  const probe = String(process.env.IC_PREMERGE_PROBE ?? "").trim();
+  if (skipLegs && skipLegsAllowed) {
+    if (!probe) {
+      console.error(
+        "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no IC_PREMERGE_PROBE); this is not a full gate pass",
+      );
+      exitPremerge(92);
+    }
+    try {
+      assertKnownPremergeProbe(probe);
+    } catch (error) {
+      await fail(error instanceof Error ? error.message : String(error), 1);
+    }
+    console.error(
+      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
+    );
+    exitPremerge(92);
+  }
+
   let testOut = "";
   let testRunFailed = false;
-  const probe = String(process.env.IC_PREMERGE_PROBE ?? "");
-  if (skipLegs && probe) {
-    testOut = premergeProbeTestOutput(probe);
-  } else if (!skipLegs) {
+  if (!skipLegs) {
     try {
       testOut = await runLeg(
         "pnpm",
@@ -385,7 +391,7 @@ async function main() {
     }
   } else if (skipLegs) {
     console.error(
-      "premerge: IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_PROBE — refusing synthetic summary (exit 92)",
+      "premerge: IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_ALLOW_SKIP_LEGS=1 (exit 92)",
     );
     exitPremerge(92);
   }
@@ -396,17 +402,8 @@ async function main() {
   totals.skipped = parsed.skipped;
   totals.tests = parsed.tests;
 
-  if (skipLegs && skipLegsAllowed && probe === "green") {
-    console.error(
-      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
-    );
-    exitPremerge(92);
-  }
-
   try {
-    if (!(skipLegs && probe === "floor-violation")) {
-      assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
-    }
+    assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
     assertPremergePackageTestSections(testOut, { nodePtyLoadable });
   } catch (error) {
     await fail(error instanceof Error ? error.message : String(error));

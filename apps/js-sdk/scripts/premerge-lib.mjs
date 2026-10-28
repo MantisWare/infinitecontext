@@ -423,7 +423,9 @@ export function isEphemeralPremergeTestFixtureDir(dirPath) {
     base.startsWith("ic-m6-path-") ||
     base.startsWith("ic-group-kill-") ||
     base.startsWith("ic-m1b-group-") ||
-    base.startsWith("ic-sm7-group-")
+    base.startsWith("ic-sm7-group-") ||
+    base.startsWith("ic-sm7-skip-") ||
+    base.startsWith("ic-env-strip-")
   );
 }
 

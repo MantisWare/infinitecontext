@@ -27,8 +27,7 @@ const CASES = [
   {
     id: "S-M7",
     patch: "sm7.patch",
-    testRel: "apps/js-sdk/scripts/premerge-shutdown-group-kill.test.mjs",
-    filter: "terminateActiveLeg sends kill",
+    testRel: "apps/js-sdk/scripts/premerge-shutdown-m7-skip.test.mjs",
   },
 ];
 
@@ -70,7 +69,10 @@ function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
       args.push("--test-name-pattern", nameFilter);
     }
     /** @type {Record<string, string | undefined>} */
-    const childEnv = { ...process.env };
+    const childEnv = {
+      ...process.env,
+      IC_PREMERGE_COMMITTED_MUTANT_RUNNER: "1",
+    };
     for (const key of Object.keys(childEnv)) {
       if (key.startsWith("NODE_TEST")) {
         delete childEnv[key];

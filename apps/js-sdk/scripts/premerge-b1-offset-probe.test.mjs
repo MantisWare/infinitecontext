@@ -62,7 +62,10 @@ describe("B1 leg fail vs SIGINT offset probe (300 ms leg exit)", () => {
     const positive = offsetRange(full).filter((o) => o >= 5);
     for (const offset of positive) {
       for (let rep = 0; rep < reps; rep += 1) {
-        const code = await runOffsetOnce(offset, { PREMERGE_TEST_REVERT_B1: "1" });
+        const code = await runOffsetOnce(offset, {
+          PREMERGE_MUTANT: "B1",
+          IC_PREMERGE_ALLOW_MUTANT: "1",
+        });
         assert.equal(code, 1, `offset=${offset} rep=${rep + 1}`);
       }
     }

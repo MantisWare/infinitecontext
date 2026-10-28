@@ -12,6 +12,25 @@ const blockingFixture = path.join(
 const premerge = path.join(sdkRoot, "scripts/premerge.mjs");
 
 describe("premerge production env sanitization", () => {
+  it("real premerge refuses inherited PREMERGE_MUTANT without committed-mutant runner", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(sdkRoot, "../.."),
+      encoding: "utf8",
+    }).stdout.trim();
+    const res = spawnSync(process.execPath, [premerge], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SHA: head,
+        IC_PREMERGE_ALLOW_DIRTY: "1",
+        PREMERGE_MUTANT: "M3",
+      },
+    });
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr + res.stdout, /refuses inherited mutant/);
+  });
+
   it("inherited PREMERGE_MUTANT without IC_PREMERGE_ALLOW_MUTANT does not change SIGINT behavior", async () => {
     const { spawn } = await import("node:child_process");
     const child = spawn(process.execPath, [blockingFixture], {

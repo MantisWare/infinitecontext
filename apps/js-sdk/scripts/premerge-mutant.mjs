@@ -1,11 +1,13 @@
-/** @typedef {"M1" | "M1b" | "M2" | "M3" | "M6" | "M7"} PremergeMutantId */
+import { listActiveInheritedMutantEnvKeys } from "./premerge-env.mjs";
+
+/** @typedef {"M1" | "M1b" | "M2" | "M3" | "M6" | "M7" | "B1"} PremergeMutantId */
 
 const ALLOWED = /** @type {Set<PremergeMutantId>} */ (
-  new Set(["M1", "M1b", "M2", "M3", "M6", "M7"])
+  new Set(["M1", "M1b", "M2", "M3", "M6", "M7", "B1"])
 );
 
 /**
- * Mutants are test-only. Set `IC_PREMERGE_ALLOW_MUTANT=1` in tests or campaign fixtures.
+ * Mutants are test-only. Set `IC_PREMERGE_ALLOW_MUTANT=1` only under committed-mutant runner or fixtures.
  */
 export function premergeMutantsEnabled() {
   return String(process.env.IC_PREMERGE_ALLOW_MUTANT ?? "").trim() === "1";
@@ -41,12 +43,29 @@ export function hasPremergeMutant(id) {
 }
 
 /**
- * Strip test-only env that must not affect normal premerge runs.
+ * Real premerge refuses inherited mutant/test hooks unless the committed-mutant runner owns the process.
+ * @param {Record<string, string | undefined>} env
  */
-export function sanitizePremergeProductionEnv() {
-  if (premergeMutantsEnabled()) {
+export function assertPremergeProductionMutantPolicy(env) {
+  const runner = String(env.IC_PREMERGE_COMMITTED_MUTANT_RUNNER ?? "").trim() === "1";
+  const inherited = listActiveInheritedMutantEnvKeys(env);
+  if (runner) {
+    if (inherited.length > 0 || premergeMutantsEnabled()) {
+      const active = String(env.PREMERGE_MUTANT ?? "").trim() || "(allow only)";
+      console.error(`premerge: MUTANT ACTIVE (committed-mutant runner): ${active}`);
+    }
     return;
   }
-  delete process.env.PREMERGE_MUTANT;
-  delete process.env.PREMERGE_TEST_REVERT_B1;
+  if (inherited.length > 0) {
+    throw new Error(
+      `premerge refuses inherited mutant/test env (${inherited.join(", ")}) — only premerge-committed-mutant-runner.mjs may set these`,
+    );
+  }
+}
+
+/**
+ * @deprecated use assertPremergeProductionMutantPolicy at premerge entry
+ */
+export function sanitizePremergeProductionEnv() {
+  assertPremergeProductionMutantPolicy(process.env);
 }

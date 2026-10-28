@@ -46,7 +46,7 @@ for (let i = 1; i <= 5; i += 1) {
   runs.push([
     "fail-cleanup",
     `gate-${i}`,
-    /premerge package test coverage failed/,
+    /SYNTHETIC|premerge package test coverage failed/,
     {
       IC_PREMERGE_SKIP_LEGS: "1",
       IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
