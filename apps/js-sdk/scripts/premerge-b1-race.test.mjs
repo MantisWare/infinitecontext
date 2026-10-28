@@ -36,7 +36,7 @@ describe("B1 pnpm-check leg fail vs SIGINT (deterministic ordering)", () => {
   it("reverted B1 hunk: 20/20 exit 1 when drainPendingSigint is skipped", async () => {
     for (let i = 0; i < 20; i += 1) {
       const code = await runOnce({
-        PREMERGE_MUTANT: "B1",
+        IC_PREMERGE_FIXTURE_SIMULATE_B1_REVERT: "1",
         PREMERGE_TEST_B1_SIGINT_DELAY_MS: "5000",
       });
       assert.equal(code, 1, `run ${i + 1}`);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Deterministic B1 ordering: leg exits 1, SIGINT scheduled on same tick after close enters.
- * PREMERGE_TEST_REVERT_B1=1 skips drainPendingSigint (simulates reverted 55b8e33 hunk).
+ * IC_PREMERGE_FIXTURE_SIMULATE_B1_REVERT=1 skips drainPendingSigint (simulates reverted 55b8e33 hunk).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -17,7 +17,11 @@ const shutdown = createPremergeShutdown({
   killActiveProcessGroup: () => {},
   assertNoNewIcTmpDirLeaks: () => {},
   listAllIcTmpDirs: () => new Set([premergeTmpRoot]),
-  testHooks: { scheduleSigintOnLegFailureClose: true },
+  testHooks: {
+    scheduleSigintOnLegFailureClose: true,
+    skipDrainPendingSigintOnLegFailure:
+      String(process.env.IC_PREMERGE_FIXTURE_SIMULATE_B1_REVERT ?? "").trim() === "1",
+  },
 });
 
 shutdown.registerSignalHandlers();

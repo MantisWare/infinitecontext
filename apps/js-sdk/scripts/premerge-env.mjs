@@ -12,6 +12,12 @@
 export function buildPremergeLegEnv(parentEnv, paths, extra = {}) {
   const forceNoPty =
     String(parentEnv.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1" || Boolean(paths.forceNoPty);
+  const stripped = listActiveInheritedMutantEnvKeys(parentEnv);
+  if (stripped.length > 0) {
+    console.error(
+      `premerge: leg env stripped inherited mutant/test keys (${stripped.join(", ")})`,
+    );
+  }
   /** @type {Record<string, string | undefined>} */
   const env = { ...parentEnv };
   delete env.PREMERGE_MUTANT;

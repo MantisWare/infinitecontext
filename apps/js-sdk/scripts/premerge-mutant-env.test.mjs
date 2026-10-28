@@ -12,6 +12,47 @@ const blockingFixture = path.join(
 const premerge = path.join(sdkRoot, "scripts/premerge.mjs");
 
 describe("premerge production env sanitization", () => {
+  it("real premerge refuses inherited IC_PREMERGE_ALLOW_MUTANT=1", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(sdkRoot, "../.."),
+      encoding: "utf8",
+    }).stdout.trim();
+    const res = spawnSync(process.execPath, [premerge], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SHA: head,
+        IC_PREMERGE_ALLOW_DIRTY: "1",
+        IC_PREMERGE_ALLOW_MUTANT: "1",
+      },
+    });
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr + res.stdout, /refuses IC_PREMERGE_ALLOW_MUTANT/);
+  });
+
+  it("IC_PREMERGE_SKIP_LEGS allow+unknown probe exits non-zero (no green summary)", () => {
+    const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(sdkRoot, "../.."),
+      encoding: "utf8",
+    }).stdout.trim();
+    const res = spawnSync(process.execPath, [premerge], {
+      cwd: sdkRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        EXPECTED_SHA: head,
+        IC_PREMERGE_ALLOW_DIRTY: "1",
+        IC_PREMERGE_SKIP_LEGS: "1",
+        IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
+        IC_PREMERGE_PROBE: "x",
+      },
+    });
+    assert.notEqual(res.status, 0);
+    assert.doesNotMatch(res.stdout, /premerge summary:/);
+    assert.match(res.stderr + res.stdout, /unknown IC_PREMERGE_PROBE|refuses|SYNTHETIC/);
+  });
+
   it("real premerge refuses inherited PREMERGE_MUTANT without committed-mutant runner", () => {
     const head = spawnSync("git", ["rev-parse", "HEAD"], {
       cwd: path.resolve(sdkRoot, "../.."),

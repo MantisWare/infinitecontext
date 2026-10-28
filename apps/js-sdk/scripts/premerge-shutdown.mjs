@@ -22,7 +22,7 @@ const LEG_KILL_WAIT_MS = 8000;
  * @param {(before: Set<string>, after: Set<string>) => void} [opts.assertNoNewIcTmpDirLeaks]
  * @param {() => Set<string>} [opts.listAllIcTmpDirs]
  * @param {typeof process.kill} [opts.killProcess]
- * @param {{ scheduleSigintOnLegFailureClose?: boolean }} [opts.testHooks]
+ * @param {{ scheduleSigintOnLegFailureClose?: boolean, skipDrainPendingSigintOnLegFailure?: boolean }} [opts.testHooks]
  */
 export function createPremergeShutdown(opts) {
   const {
@@ -278,7 +278,7 @@ export function createPremergeShutdown(opts) {
               setTimeout(fire, sigDelayMs);
             }
           }
-          if (hasPremergeMutant("B1")) {
+          if (testHooks.skipDrainPendingSigintOnLegFailure) {
             void terminateActiveLeg("SIGKILL").then(() => {
               if (shuttingDown) {
                 reject(new Error("shutting down"));

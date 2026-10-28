@@ -1,9 +1,9 @@
 import { listActiveInheritedMutantEnvKeys } from "./premerge-env.mjs";
 
-/** @typedef {"M1" | "M1b" | "M2" | "M3" | "M6" | "M7" | "B1"} PremergeMutantId */
+/** @typedef {"M1" | "M1b" | "M2" | "M3" | "M6" | "M7"} PremergeMutantId */
 
 const ALLOWED = /** @type {Set<PremergeMutantId>} */ (
-  new Set(["M1", "M1b", "M2", "M3", "M6", "M7", "B1"])
+  new Set(["M1", "M1b", "M2", "M3", "M6", "M7"])
 );
 
 /**
@@ -55,6 +55,11 @@ export function assertPremergeProductionMutantPolicy(env) {
       console.error(`premerge: MUTANT ACTIVE (committed-mutant runner): ${active}`);
     }
     return;
+  }
+  if (premergeMutantsEnabled()) {
+    throw new Error(
+      "premerge refuses IC_PREMERGE_ALLOW_MUTANT outside committed-mutant-runner — pass mutants only via explicit test fixtures",
+    );
   }
   if (inherited.length > 0) {
     throw new Error(

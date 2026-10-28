@@ -79,6 +79,15 @@ describe("premerge vault-agent cleanup isolation", () => {
       assert.ok(fs.existsSync(devPaths.sock) || fs.existsSync(devPaths.pid));
       assert.ok(fs.existsSync(otherPaths.sock) || fs.existsSync(otherPaths.pid));
     } finally {
+      for (const home of [premergeHome, devHome, otherHome]) {
+        for (const pid of listVaultAgentServePidsForHome(home)) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       for (const pid of spawnedPids) {
         try {
           process.kill(pid, "SIGKILL");
@@ -100,13 +109,16 @@ describe("premerge vault-agent cleanup isolation", () => {
   });
 
   it("never reads the developer real ~/.infinitecontext", () => {
-    const realIcDir = path.join(os.homedir(), ".infinitecontext");
-    fs.mkdirSync(realIcDir, { recursive: true });
-    const sentinel = path.join(realIcDir, "ic-premerge-no-read-sentinel");
+    const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-vault-sentinel-home-"));
+    const icDir = path.join(isolatedHome, ".infinitecontext");
+    fs.mkdirSync(icDir, { recursive: true });
+    const sentinel = path.join(icDir, "ic-premerge-no-read-sentinel");
     fs.writeFileSync(sentinel, `probe-${process.pid}-${Date.now()}\n`);
     const before = fs.statSync(sentinel).mtimeMs;
 
     const fakePremergeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ic-fake-premerge-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = isolatedHome;
     try {
       const pids = listVaultAgentServePidsForHome(fakePremergeHome);
       assert.ok(Array.isArray(pids));
@@ -117,14 +129,11 @@ describe("premerge vault-agent cleanup isolation", () => {
         vaultPidRegistryPath: path.join(fakePremergeHome, "empty-registry.txt"),
       });
       const after = fs.statSync(sentinel).mtimeMs;
-      assert.equal(after, before, "real ~/.infinitecontext sentinel must not be touched");
+      assert.equal(after, before, "isolated HOME sentinel must not be touched by cleanup");
     } finally {
+      process.env.HOME = prevHome;
       fs.rmSync(fakePremergeHome, { recursive: true, force: true });
-      try {
-        fs.unlinkSync(sentinel);
-      } catch {
-        /* ignore */
-      }
+      fs.rmSync(isolatedHome, { recursive: true, force: true });
     }
   });
 });

@@ -11,7 +11,7 @@ const repoRoot = path.resolve(sdkRoot, "../..");
 const patchDir = path.join(sdkRoot, "tests/fixtures/committed-mutants");
 
 /** @type {{ id: string, patch: string, testRel: string, filter?: string }[]} */
-const CASES = [
+export const COMMITTED_MUTANT_CASES = [
   { id: "S-M3", patch: "sm3.patch", testRel: "apps/js-sdk/scripts/premerge-shutdown-m3-latch.test.mjs" },
   {
     id: "S-M6",
@@ -36,7 +36,7 @@ const CASES = [
  * @param {string} testRel
  * @param {string | undefined} nameFilter
  */
-function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
+export function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
   const wtRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-mutant-wt-"));
   const branch = `cursor/mutant-${patchName.replace(/\.patch$/, "")}-ee80-${Date.now()}`;
   const add = spawnSync("git", ["worktree", "add", "-B", branch, wtRoot, "HEAD"], {
@@ -93,13 +93,19 @@ function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
   }
 }
 
-for (const c of CASES) {
-  const res = runInCommittedMutantWorktree(c.patch, c.testRel, c.filter);
-  assert.notEqual(
-    res.status,
-    0,
-    `${c.id}: expected failure on mutant; stdout=${res.stdout}\nstderr=${res.stderr}`,
-  );
-}
+const isMain =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-console.log("committed-mutant-runner: all regressions failed on mutant branches as expected");
+if (isMain) {
+  for (const c of COMMITTED_MUTANT_CASES) {
+    const res = runInCommittedMutantWorktree(c.patch, c.testRel, c.filter);
+    assert.notEqual(
+      res.status,
+      0,
+      `${c.id}: expected failure on mutant; stdout=${res.stdout}\nstderr=${res.stderr}`,
+    );
+  }
+
+  console.log("committed-mutant-runner: all regressions failed on mutant branches as expected");
+}

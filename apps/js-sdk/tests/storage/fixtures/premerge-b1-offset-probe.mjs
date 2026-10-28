@@ -32,13 +32,19 @@ if (offsetMs > 0) {
   process.env.PREMERGE_TEST_B1_SIGINT_DELAY_MS = String(offsetMs);
 }
 
+const simulateRevert =
+  String(process.env.IC_PREMERGE_FIXTURE_SIMULATE_B1_REVERT ?? "").trim() === "1";
+
 const shutdown = createPremergeShutdown({
   premergeTmpRoot,
   cleanupAll: () => {},
   killActiveProcessGroup: () => {},
   assertNoNewIcTmpDirLeaks: () => {},
   listAllIcTmpDirs: () => new Set([premergeTmpRoot]),
-  testHooks: { scheduleSigintOnLegFailureClose: offsetMs >= 0 },
+  testHooks: {
+    scheduleSigintOnLegFailureClose: offsetMs >= 0,
+    skipDrainPendingSigintOnLegFailure: simulateRevert,
+  },
 });
 
 shutdown.registerSignalHandlers();
