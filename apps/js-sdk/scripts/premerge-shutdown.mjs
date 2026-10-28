@@ -230,11 +230,11 @@ export function createPremergeShutdown(opts) {
    * @param {string[]} args
    * @param {Record<string, string | undefined>} [env]
    * @param {string} [cwd]
-   * @param {{ allowFailure?: boolean }} [runOpts]
+   * @param {{ allowFailure?: boolean, recordExitCode?: { value: number } }} [runOpts]
    * @returns {Promise<string>}
    */
   function run(cmd, args, env, cwd, runOpts = {}) {
-    const { allowFailure = false } = runOpts;
+    const { allowFailure = false, recordExitCode } = runOpts;
     const legEnv =
       env !== undefined && env !== null && Object.keys(env).length > 0 ? env : process.env;
     return new Promise((resolve, reject) => {
@@ -280,6 +280,11 @@ export function createPremergeShutdown(opts) {
           if (allowFailure) {
             if (shuttingDown) {
               reject(new Error("shutting down"));
+              return;
+            }
+            if (recordExitCode) {
+              recordExitCode.value = status ?? 1;
+              resolve(out);
               return;
             }
             reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));

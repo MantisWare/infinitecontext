@@ -12,7 +12,9 @@ import { createPremergeShutdown } from "../../../scripts/premerge-shutdown.mjs";
 
 const tag = `ic-orphan-fd-${process.pid}`;
 const callerTmp = path.resolve(process.env.TMPDIR ?? os.tmpdir());
-const premergeTmpRoot = process.env.IC_PREMERGE_TMPDIR ?? fs.mkdtempSync(path.join(callerTmp, `${tag}-tmpdir-`));
+// Never reuse a parent real-gate private tmp (IC_PREMERGE_TMPDIR); path-kill would SIGKILL the gate.
+delete process.env.IC_PREMERGE_TMPDIR;
+const premergeTmpRoot = fs.mkdtempSync(path.join(callerTmp, `${tag}-tmpdir-`));
 process.env.TMPDIR = premergeTmpRoot;
 process.env.IC_PREMERGE_TMPDIR = premergeTmpRoot;
 

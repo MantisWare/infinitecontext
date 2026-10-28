@@ -22,20 +22,38 @@ function processAlive(pid) {
 }
 
 const callerTmp = fs.mkdtempSync(path.join(os.tmpdir(), "ic-o4-caller-"));
+const probeHome = fs.mkdtempSync(path.join(callerTmp, "home-"));
 const orphanPidFile = path.join(callerTmp, "orphan-outside-tmp.pid");
 /** @type {number | null} */
 let legPid = null;
 /** @type {number | null} */
 let orphanPid = null;
 
+/** Env for an isolated O4 leg — must not inherit real premerge private tmp/home. */
+function isolatedO4LegEnv() {
+  /** @type {Record<string, string | undefined>} */
+  const env = { ...process.env };
+  for (const key of [
+    "IC_PREMERGE_TMPDIR",
+    "IC_PREMERGE_HOME",
+    "IC_PREMERGE_VAULT_PID_REGISTRY",
+    "IC_PREMERGE_ORPHAN_PID_FILE",
+    "IC_TEST_TMP_RUN_TAG",
+  ]) {
+    delete env[key];
+  }
+  env.TMPDIR = callerTmp;
+  env.TMP = callerTmp;
+  env.TEMP = callerTmp;
+  env.HOME = probeHome;
+  env.IC_PREMERGE_ORPHAN_PID_FILE = orphanPidFile;
+  return env;
+}
+
 try {
   const child = spawn(process.execPath, [orphanFdLeg], {
     cwd: sdkRoot,
-    env: {
-      ...process.env,
-      TMPDIR: callerTmp,
-      IC_PREMERGE_ORPHAN_PID_FILE: orphanPidFile,
-    },
+    env: isolatedO4LegEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
   legPid = child.pid ?? null;

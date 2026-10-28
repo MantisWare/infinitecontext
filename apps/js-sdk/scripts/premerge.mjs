@@ -362,6 +362,7 @@ async function main() {
 
   let testOut = "";
   let testRunFailed = false;
+  const testLegRc = { value: 0 };
   if (!skipLegs) {
     try {
       testOut = await runLeg(
@@ -369,7 +370,7 @@ async function main() {
         ["-r", "--workspace-concurrency=1", "test"],
         emuEnv,
         repoRoot,
-        { allowFailure: true },
+        { allowFailure: true, recordExitCode: testLegRc },
       );
     } catch {
       if (!shutdown.shuttingDown) {
@@ -384,8 +385,8 @@ async function main() {
 
     await shutdown.drainPendingSigint();
 
-    if (testRunFailed && !shutdown.shuttingDown) {
-      exitPremerge(1);
+    if (testLegRc.value !== 0 && !shutdown.shuttingDown) {
+      testRunFailed = true;
     }
 
     if (shutdown.shuttingDown) {
@@ -442,7 +443,7 @@ async function main() {
     );
   }
 
-  if (totals.fail > 0) {
+  if (totals.fail > 0 || testRunFailed) {
     await shutdown.drainPendingSigint();
     exitPremerge(1);
   }
