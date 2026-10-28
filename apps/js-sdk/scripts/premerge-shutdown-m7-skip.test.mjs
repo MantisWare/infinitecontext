@@ -12,6 +12,8 @@ const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 describe("premerge shutdown M7 skip (S-M7 committed mutant target)", () => {
   it("terminateActiveLeg kills the active leg (sm7 must not no-op all shutdown)", async () => {
     const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-sm7-skip-"));
+    /** @type {number | undefined} */
+    let legPid;
     try {
       const shutdown = createPremergeShutdown({
         premergeTmpRoot,
@@ -24,7 +26,7 @@ describe("premerge shutdown M7 skip (S-M7 committed mutant target)", () => {
         .run(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], process.env, sdkRoot)
         .catch(() => "");
       await new Promise((r) => setTimeout(r, 150));
-      const legPid = shutdown.activeChild?.pid;
+      legPid = shutdown.activeChild?.pid;
       assert.ok(legPid);
       await shutdown.terminateActiveLeg("SIGTERM");
       await Promise.race([legPromise, new Promise((r) => setTimeout(r, 3000))]);
@@ -35,6 +37,13 @@ describe("premerge shutdown M7 skip (S-M7 committed mutant target)", () => {
         assert.ok(err && typeof err === "object" && "code" in err && err.code === "ESRCH");
       }
     } finally {
+      if (legPid) {
+        try {
+          process.kill(legPid, "SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
       fs.rmSync(premergeTmpRoot, { recursive: true, force: true });
     }
   });
