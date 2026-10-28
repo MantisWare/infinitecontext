@@ -213,8 +213,11 @@ export async function runPremergeSigintOnce(opts) {
     afterDocker.networks.length === 0 &&
     afterDocker.volumes.length === 0;
 
+  const exitOk =
+    code === 130 ||
+    (category === "fail-cleanup" && code === 92 && /SYNTHETIC/.test(log));
   const ok =
-    code === 130 &&
+    exitOk &&
     tmpLeft === 0 &&
     hit === 1 &&
     premergeAlive === 0 &&
