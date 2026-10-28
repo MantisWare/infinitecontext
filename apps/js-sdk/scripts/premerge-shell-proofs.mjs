@@ -106,7 +106,8 @@ console.log("rc", inheritedAllow.status);
 if (inheritedAllow.status === 0) {
   failures.push("inherited allow+M6: must not exit 0");
 }
-if (!/refuses inherited mutant/.test(`${inheritedAllow.stdout}\n${inheritedAllow.stderr}`)) {
+const allowCombined = `${inheritedAllow.stdout}\n${inheritedAllow.stderr}`;
+if (!/refuses inherited mutant|refuses IC_PREMERGE_ALLOW_MUTANT/.test(allowCombined)) {
   failures.push("inherited allow+M6: missing refuse message");
 }
 
