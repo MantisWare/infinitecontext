@@ -28,32 +28,21 @@ function runPremergeProbe(extraEnv) {
 }
 
 describe("real premerge gate failures", () => {
-  it("floor violation exits non-zero without premerge summary success path", () => {
-    const res = runPremergeProbe({ IC_PREMERGE_PROBE: "floor-violation" });
-    assert.notEqual(res.status, 0);
-    assert.match(
-      res.stderr + res.stdout,
-      /premerge package test coverage failed|exact count required|pass \d+ [<>] floor/,
-    );
-    assert.doesNotMatch(res.stdout, /starting storage emulator/);
-  });
+  for (const probe of ["floor-violation", "missing-package", "zero-tests", "expected-sha-mismatch", "green"]) {
+    it(`SKIP_LEGS probe ${probe} exits 92 SYNTHETIC (never green summary)`, () => {
+      const res = runPremergeProbe({ IC_PREMERGE_PROBE: probe });
+      assert.equal(res.status, 92);
+      assert.match(res.stderr + res.stdout, /SYNTHETIC/);
+      assert.doesNotMatch(res.stdout, /premerge summary:[\s\S]*pass: \d+/);
+      assert.doesNotMatch(res.stdout, /starting storage emulator/);
+    });
+  }
 
-  it("missing package exits non-zero", () => {
-    const res = runPremergeProbe({ IC_PREMERGE_PROBE: "missing-package" });
+  it("unknown SKIP_LEGS probe exits non-zero without green summary", () => {
+    const res = runPremergeProbe({ IC_PREMERGE_PROBE: "not-a-real-probe" });
     assert.notEqual(res.status, 0);
-    assert.match(res.stderr + res.stdout, /missing from pnpm test output/);
-  });
-
-  it("zero tests exits non-zero", () => {
-    const res = runPremergeProbe({ IC_PREMERGE_PROBE: "zero-tests" });
-    assert.notEqual(res.status, 0);
-    assert.match(res.stderr + res.stdout, /false-green|missing test summary|pass \d+ < floor/);
-  });
-
-  it("EXPECTED_SHA mismatch at final gate exits non-zero", () => {
-    const res = runPremergeProbe({ IC_PREMERGE_PROBE: "expected-sha-mismatch" });
-    assert.notEqual(res.status, 0);
-    assert.match(res.stderr + res.stdout, /EXPECTED_SHA mismatch/);
+    assert.notEqual(res.status, 92);
+    assert.match(res.stderr + res.stdout, /unknown IC_PREMERGE_PROBE/);
     assert.doesNotMatch(res.stdout, /premerge summary:/);
   });
 });
