@@ -135,8 +135,30 @@ export function createPremergeShutdown(opts) {
     activeChild = null;
   }
 
+  function reapHintedOrphanPids() {
+    const hintPath = String(process.env.IC_PREMERGE_ORPHAN_PID_FILE ?? "").trim();
+    if (!hintPath) {
+      return;
+    }
+    let pid = NaN;
+    try {
+      pid = Number(fs.readFileSync(hintPath, "utf8").trim());
+    } catch {
+      return;
+    }
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return;
+    }
+    try {
+      killProcess(pid, "SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
+
   function finishShutdown() {
     cleanupAll();
+    reapHintedOrphanPids();
     if (!hasPremergeMutant("M6")) {
       killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
     }
