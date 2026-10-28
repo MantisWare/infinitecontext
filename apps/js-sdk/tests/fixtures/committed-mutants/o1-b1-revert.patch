@@ -1,5 +1,5 @@
 diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
-index 4e1a5da..32d0e61 100644
+index 3de6189..32d0e61 100644
 --- a/apps/js-sdk/scripts/premerge-shutdown.mjs
 +++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
 @@ -1,10 +1,8 @@
@@ -83,7 +83,21 @@ index 4e1a5da..32d0e61 100644
        finishShutdown();
        process.exit(shutdownExitCode ?? 130);
      }
-@@ -244,11 +237,6 @@ export function createPremergeShutdown(opts) {
+@@ -213,12 +206,10 @@ export function createPremergeShutdown(opts) {
+    */
+   function run(cmd, args, env, cwd, runOpts = {}) {
+     const { allowFailure = false } = runOpts;
+-    const legEnv =
+-      env !== undefined && env !== null && Object.keys(env).length > 0 ? env : process.env;
+     return new Promise((resolve, reject) => {
+       const child = spawn(cmd, args, {
+         cwd,
+-        env: legEnv,
++        env: { ...process.env, ...env },
+         stdio: ["inherit", "pipe", "pipe"],
+         detached: true,
+       });
+@@ -246,11 +237,6 @@ export function createPremergeShutdown(opts) {
            return;
          }
          if (signal) {
@@ -95,7 +109,7 @@ index 4e1a5da..32d0e61 100644
            reject(new Error(`${cmd} ${args.join(" ")} terminated by ${signal}`));
            return;
          }
-@@ -261,46 +249,14 @@ export function createPremergeShutdown(opts) {
+@@ -263,46 +249,14 @@ export function createPremergeShutdown(opts) {
              reject(new Error(`${cmd} ${args.join(" ")} exited ${status ?? 1}`));
              return;
            }
@@ -114,7 +128,7 @@ index 4e1a5da..32d0e61 100644
 -              setTimeout(fire, sigDelayMs);
 -            }
 -          }
--          if (String(process.env.PREMERGE_TEST_REVERT_B1 ?? "").trim() === "1") {
+-          if (hasPremergeMutant("B1")) {
 -            void terminateActiveLeg("SIGKILL").then(() => {
 -              if (shuttingDown) {
 -                reject(new Error("shutting down"));
@@ -144,7 +158,7 @@ index 4e1a5da..32d0e61 100644
            return;
          }
          resolve(out);
-@@ -332,7 +288,7 @@ export function createPremergeShutdown(opts) {
+@@ -334,7 +288,7 @@ export function createPremergeShutdown(opts) {
          }
          void completeShutdownAfterSignal();
        };
@@ -153,185 +167,3 @@ index 4e1a5da..32d0e61 100644
          setTimeout(arm, 2000);
          return;
        }
-diff --git a/apps/js-sdk/scripts/premerge-shutdown.test.mjs b/apps/js-sdk/scripts/premerge-shutdown.test.mjs
-index 8a7d696..02fcb19 100644
---- a/apps/js-sdk/scripts/premerge-shutdown.test.mjs
-+++ b/apps/js-sdk/scripts/premerge-shutdown.test.mjs
-@@ -18,6 +18,7 @@ const sigintDuringCleanup = path.join(
-   sdkRoot,
-   "tests/storage/fixtures/premerge-sigint-during-cleanup.mjs",
- );
-+
- describe("premerge shutdown helpers", () => {
-   it("removePrivateTmpDirVerified returns true when path is already gone", () => {
-     const root = path.join(os.tmpdir(), `ic-tmp-missing-${Date.now()}`);
-diff --git a/apps/js-sdk/scripts/premerge-sigint-campaign.mjs b/apps/js-sdk/scripts/premerge-sigint-campaign.mjs
-index df7affd..e04405e 100644
---- a/apps/js-sdk/scripts/premerge-sigint-campaign.mjs
-+++ b/apps/js-sdk/scripts/premerge-sigint-campaign.mjs
-@@ -29,12 +29,7 @@ for (let i = 1; i <= 4; i += 1) {
-   runs.push(["early", `guard-${i}`, /guard:12|check-12-paths/, {}]);
- }
- for (let i = 1; i <= 3; i += 1) {
--  runs.push([
--    "early",
--    `pnpm-${i}`,
--    /premerge: starting pnpm -r check|Scope: [0-9]+ of/,
--    {},
--  ]);
-+  runs.push(["early", `pnpm-${i}`, /(^|# )Scope: [0-9]+ of/, {}]);
- }
- for (let i = 1; i <= 3; i += 1) {
-   runs.push(["early", `fetch-${i}`, /check-12-paths/, {}]);
-@@ -49,7 +44,6 @@ for (let i = 1; i <= 5; i += 1) {
-     /premerge package test coverage failed/,
-     {
-       IC_PREMERGE_SKIP_LEGS: "1",
--      IC_PREMERGE_ALLOW_SKIP_LEGS: "1",
-       IC_PREMERGE_ALLOW_DIRTY: "1",
-       IC_PREMERGE_PROBE: "floor-violation",
-     },
-diff --git a/apps/js-sdk/scripts/premerge.mjs b/apps/js-sdk/scripts/premerge.mjs
-index afa772a..d504864 100644
---- a/apps/js-sdk/scripts/premerge.mjs
-+++ b/apps/js-sdk/scripts/premerge.mjs
-@@ -27,13 +27,10 @@ import {
-   assertPremergePostgresUrlsSafe,
-   startEphemeralPostgresForPremerge,
- } from "./premerge-ephemeral-postgres.mjs";
--import { sanitizePremergeProductionEnv } from "./premerge-mutant.mjs";
- import { createPremergeShutdown } from "./premerge-shutdown.mjs";
- import { syncVaultAgentCleanup } from "./premerge-vault-cleanup.mjs";
- import { premergeProbeTestOutput } from "./premerge-probe-output.mjs";
- 
--sanitizePremergeProductionEnv();
--
- const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
- 
- const icTestTmpRunTag = `ic-premerge-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-@@ -110,15 +107,8 @@ shutdown.registerSignalHandlers();
- 
- function premergeChildEnv(extra = {}) {
-   const forceNoPty = String(process.env.IC_PREMERGE_FORCE_NO_PTY ?? "").trim() === "1";
--  /** @type {Record<string, string | undefined>} */
--  const base = { ...process.env };
--  delete base.PREMERGE_MUTANT;
--  delete base.PREMERGE_TEST_REVERT_B1;
--  delete base.PREMERGE_TEST_B1_SIGINT_DELAY_MS;
--  delete base.PREMERGE_TEST_B1_SIGINT_OFFSET_MS;
--  delete base.IC_PREMERGE_ALLOW_MUTANT;
-   return {
--    ...base,
-+    ...process.env,
-     HOME: premergeHome,
-     IC_PREMERGE_HOME: premergeHome,
-     IC_PREMERGE_VAULT_PID_REGISTRY: vaultPidRegistryPath,
-@@ -255,31 +245,16 @@ async function main() {
-   }
- 
-   const skipLegs = process.env.IC_PREMERGE_SKIP_LEGS === "1";
--  const skipLegsAllowed = String(process.env.IC_PREMERGE_ALLOW_SKIP_LEGS ?? "").trim() === "1";
-   const stopAfter = String(process.env.IC_PREMERGE_STOP_AFTER ?? "");
--  const stopAfterAllowed = String(process.env.IC_PREMERGE_ALLOW_STOP_AFTER ?? "").trim() === "1";
--
--  if (skipLegs && !skipLegsAllowed) {
--    await fail(
--      "premerge refuses IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_ALLOW_SKIP_LEGS=1 (not a real gate pass)",
--    );
--  }
--  if (stopAfter && !stopAfterAllowed) {
--    await fail(
--      "premerge refuses IC_PREMERGE_STOP_AFTER without IC_PREMERGE_ALLOW_STOP_AFTER=1 (test-only hook)",
--    );
--  }
- 
-   if (!skipLegs) {
-     await runLeg("npm", ["run", "guard:12"]);
-     if (stopAfter === "guard:12") {
--      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
--      exitPremerge(92);
-+      exitPremerge(0);
-     }
-     await runLeg("node", ["scripts/check-lib-no-test-env.mjs"]);
-     if (stopAfter === "check-lib") {
--      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
--      exitPremerge(92);
-+      exitPremerge(0);
-     }
-     loadApiEnvFile();
-     for (const key of ["SYNC_E2E_DATABASE_URL", "VAULT_E2E_DATABASE_URL"]) {
-@@ -302,11 +277,9 @@ async function main() {
-       await fail(error instanceof Error ? error.message : String(error));
-     }
- 
--    console.log("premerge: starting pnpm -r check…");
-     await runLeg("pnpm", ["-r", "check"], {}, repoRoot);
-     if (stopAfter === "pnpm-check") {
--      console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
--      exitPremerge(92);
-+      exitPremerge(0);
-     }
- 
-     const emuComposeEnv = {
-@@ -384,10 +357,7 @@ async function main() {
-       exitPremerge(shutdown.shutdownExitCode ?? 130);
-     }
-   } else if (skipLegs) {
--    console.error(
--      "premerge: IC_PREMERGE_SKIP_LEGS without IC_PREMERGE_PROBE — refusing synthetic summary (exit 92)",
--    );
--    exitPremerge(92);
-+    testOut = premergeProbeTestOutput("ok");
-   }
- 
-   const parsed = absorbNodeTestTotals(testOut);
-@@ -396,13 +366,6 @@ async function main() {
-   totals.skipped = parsed.skipped;
-   totals.tests = parsed.tests;
- 
--  if (skipLegs && skipLegsAllowed && probe === "green") {
--    console.error(
--      "premerge: SYNTHETIC — IC_PREMERGE_SKIP_LEGS=1 (no real legs ran); this is not a full gate pass",
--    );
--    exitPremerge(92);
--  }
--
-   try {
-     if (!(skipLegs && probe === "floor-violation")) {
-       assertPremergeTestTotalsValid({ ...totals, blocks: parsed.blocks });
-diff --git a/apps/js-sdk/tests/storage/fixtures/premerge-pnpm-check-sigint-race.mjs b/apps/js-sdk/tests/storage/fixtures/premerge-pnpm-check-sigint-race.mjs
-deleted file mode 100644
-index dd18f6e..0000000
---- a/apps/js-sdk/tests/storage/fixtures/premerge-pnpm-check-sigint-race.mjs
-+++ /dev/null
-@@ -1,30 +0,0 @@
--#!/usr/bin/env node
--import fs from "node:fs";
--import os from "node:os";
--import path from "node:path";
--
--import { createPremergeShutdown } from "../../../scripts/premerge-shutdown.mjs";
--
--const premergeTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ic-pnpm-check-sigint-"));
--
--const shutdown = createPremergeShutdown({
--  premergeTmpRoot,
--  cleanupAll: () => {},
--  killActiveProcessGroup: () => {},
--  assertNoNewIcTmpDirLeaks: () => {},
--  listAllIcTmpDirs: () => new Set(),
--});
--
--shutdown.registerSignalHandlers();
--
--console.log("premerge: starting pnpm -r check…");
--console.log("PNPM_CHECK_LEG_READY");
--try {
--  await shutdown.run("bash", ["-c", "sleep 0.08; exit 1"], {}, process.cwd());
--} catch {
--  if (shutdown.shuttingDown) {
--    shutdown.exitPremerge(shutdown.shutdownExitCode ?? 130);
--  }
--  process.exit(1);
--}
--process.exit(0);
