@@ -1,10 +1,10 @@
 diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
 --- a/apps/js-sdk/scripts/premerge-shutdown.mjs
 +++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
-@@ -137,9 +137,6 @@ export function createPremergeShutdown(opts) {
- 
+@@ -159,9 +159,6 @@ export function createPremergeShutdown(opts) {
    function finishShutdown() {
      cleanupAll();
+     reapHintedOrphanPids();
 -    if (!hasPremergeMutant("M6")) {
 -      killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
 -    }

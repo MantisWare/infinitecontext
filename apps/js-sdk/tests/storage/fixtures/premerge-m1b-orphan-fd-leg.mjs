@@ -18,9 +18,10 @@ process.env.IC_PREMERGE_TMPDIR = premergeTmpRoot;
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 const worker = path.join(fixtureDir, "premerge-m1b-orphan-fd-worker.mjs");
-if (!String(process.env.IC_PREMERGE_ORPHAN_PID_FILE ?? "").trim()) {
-  process.env.IC_PREMERGE_ORPHAN_PID_FILE = path.join(callerTmp, `${tag}-orphan.pid`);
-}
+const orphanPidFile =
+  String(process.env.IC_PREMERGE_ORPHAN_PID_FILE ?? "").trim() ||
+  path.join(callerTmp, `${tag}-orphan.pid`);
+process.env.IC_PREMERGE_ORPHAN_PID_FILE = orphanPidFile;
 
 const shutdown = createPremergeShutdown({
   premergeTmpRoot,
@@ -34,15 +35,21 @@ const shutdown = createPremergeShutdown({
 
 shutdown.registerSignalHandlers();
 
+const legPromise = shutdown
+  .run(process.execPath, [worker], {}, fixtureDir)
+  .catch(() => {
+    if (!shutdown.shuttingDown) {
+      shutdown.exitPremerge(1);
+    }
+  });
+
+const pidDeadline = Date.now() + 15_000;
+while (!fs.existsSync(orphanPidFile) && Date.now() < pidDeadline) {
+  await new Promise((r) => setTimeout(r, 25));
+}
 console.log("ORPHAN_FD_LEG_READY");
 
-try {
-  await shutdown.run(process.execPath, [worker], {}, fixtureDir);
-} catch {
-  if (!shutdown.shuttingDown) {
-    shutdown.exitPremerge(1);
-  }
-}
+await legPromise;
 
 if (!shutdown.shuttingDown) {
   shutdown.exitPremerge(0);

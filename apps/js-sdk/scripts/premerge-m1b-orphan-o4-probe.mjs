@@ -23,70 +23,85 @@ function processAlive(pid) {
 
 const callerTmp = fs.mkdtempSync(path.join(os.tmpdir(), "ic-o4-caller-"));
 const orphanPidFile = path.join(callerTmp, "orphan-outside-tmp.pid");
-
-const child = spawn(process.execPath, [orphanFdLeg], {
-  cwd: sdkRoot,
-  env: {
-    ...process.env,
-    TMPDIR: callerTmp,
-    IC_PREMERGE_ORPHAN_PID_FILE: orphanPidFile,
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let buf = "";
-await new Promise((resolve, reject) => {
-  const deadline = Date.now() + 15_000;
-  const onData = (c) => {
-    buf += String(c);
-    if (buf.includes("ORPHAN_FD_LEG_READY")) {
-      resolve(undefined);
-    }
-  };
-  child.stdout?.on("data", onData);
-  child.stderr?.on("data", onData);
-  const poll = () => {
-    if (buf.includes("ORPHAN_FD_LEG_READY")) {
-      resolve(undefined);
-      return;
-    }
-    if (Date.now() > deadline) {
-      reject(new Error("ORPHAN_FD_LEG_READY timeout"));
-      return;
-    }
-    setImmediate(poll);
-  };
-  poll();
-});
-const pidWaitDeadline = Date.now() + 10_000;
-while (!fs.existsSync(orphanPidFile) && Date.now() < pidWaitDeadline) {
-  await new Promise((r) => setTimeout(r, 50));
-}
-await new Promise((r) => setTimeout(r, 100));
-child.kill("SIGINT");
-await new Promise((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
-
+/** @type {number | null} */
+let legPid = null;
+/** @type {number | null} */
 let orphanPid = null;
-if (fs.existsSync(orphanPidFile)) {
-  orphanPid = Number(fs.readFileSync(orphanPidFile, "utf8").trim());
-}
-assert.ok(orphanPid && orphanPid > 0, "worker must record orphan pid outside TMPDIR");
 
-const reapDeadline = Date.now() + 4000;
-while (orphanPid && processAlive(orphanPid) && Date.now() < reapDeadline) {
-  await new Promise((r) => setTimeout(r, 100));
-}
-if (orphanPid && processAlive(orphanPid)) {
+try {
+  const child = spawn(process.execPath, [orphanFdLeg], {
+    cwd: sdkRoot,
+    env: {
+      ...process.env,
+      TMPDIR: callerTmp,
+      IC_PREMERGE_ORPHAN_PID_FILE: orphanPidFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  legPid = child.pid ?? null;
+  let buf = "";
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 15_000;
+    const onData = (c) => {
+      buf += String(c);
+      if (buf.includes("ORPHAN_FD_LEG_READY")) {
+        resolve(undefined);
+      }
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    const poll = () => {
+      if (buf.includes("ORPHAN_FD_LEG_READY")) {
+        resolve(undefined);
+        return;
+      }
+      if (Date.now() > deadline) {
+        reject(new Error("ORPHAN_FD_LEG_READY timeout"));
+        return;
+      }
+      setImmediate(poll);
+    };
+    poll();
+  });
+  assert.ok(fs.existsSync(orphanPidFile), "orphan pid file must exist outside private tmp subdir");
+  orphanPid = Number(fs.readFileSync(orphanPidFile, "utf8").trim());
+  assert.ok(orphanPid && orphanPid > 0, "worker must record orphan pid outside TMPDIR");
+  assert.ok(
+    !path.dirname(orphanPidFile).startsWith(path.join(callerTmp, "ic-orphan-fd-")),
+    "pid file must not live under the private premerge tmp subdir",
+  );
+
+  child.kill("SIGINT");
+  await new Promise((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
+
+  const reapDeadline = Date.now() + 8000;
+  while (orphanPid && processAlive(orphanPid) && Date.now() < reapDeadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.equal(
+    processAlive(orphanPid),
+    false,
+    "orphan must be reaped by shutdown (hint pid + path kill)",
+  );
+} finally {
+  if (orphanPid && orphanPid > 0) {
+    try {
+      process.kill(orphanPid, "SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
+  if (legPid && legPid > 0) {
+    try {
+      process.kill(legPid, "SIGKILL");
+    } catch {
+      /* ignore */
+    }
+  }
   try {
-    process.kill(orphanPid, "SIGKILL");
+    fs.unlinkSync(orphanPidFile);
   } catch {
     /* ignore */
   }
-  process.exit(2);
+  fs.rmSync(callerTmp, { recursive: true, force: true });
 }
-try {
-  fs.unlinkSync(orphanPidFile);
-} catch {
-  /* ignore */
-}
-fs.rmSync(callerTmp, { recursive: true, force: true });
-process.exit(0);
