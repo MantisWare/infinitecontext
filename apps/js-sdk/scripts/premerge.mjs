@@ -295,7 +295,7 @@ async function main() {
     }
 
     console.log("premerge: starting pnpm -r check…");
-    await runLeg("pnpm", ["-r", "check"], {}, repoRoot);
+    await runLeg("pnpm", ["-r", "--workspace-concurrency=1", "check"], {}, repoRoot);
     if (stopAfter === "pnpm-check") {
       console.error(`premerge: STOP_AFTER=${stopAfter} (partial run — not a full gate pass)`);
       exitPremerge(92);
