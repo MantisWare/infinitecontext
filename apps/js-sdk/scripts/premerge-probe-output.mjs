@@ -70,8 +70,8 @@ export function premergeProbeTestOutput(probe) {
 
   const infinitecontextOk = `
 > infinitecontext@1.5.0 test /workspace/apps/js-sdk
-# tests 671
-# pass 669
+# tests 678
+# pass 676
 # fail 0
 # skipped 2
 # duration_ms 1

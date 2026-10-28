@@ -137,14 +137,14 @@ export const PREMERGE_PACKAGE_MIN_PASS = {
   "@infinitecontext/storage": 3,
   "@infinitecontext/sync": 27,
   "@infinitecontext/sync-cursor": 1,
-  infinitecontext: 656,
+  infinitecontext: 663,
   "infinitecontext-api": 93,
   "infinitecontext-mcp-server": 2,
   "infinitecontext-python-sdk": 6,
 };
 
 /** Measured infinitecontext pass when node-pty loads (onboarding wizard e2e suite runs). */
-export const PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY = 669;
+export const PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY = 676;
 
 /** Onboarding wizard e2e tests when node-pty loads (describe.skip when absent). */
 export const PREMERGE_ONBOARDING_PTY_TEST_COUNT = 13;

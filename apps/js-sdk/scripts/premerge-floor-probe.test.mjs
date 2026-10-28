@@ -33,7 +33,7 @@ function okOutFor(nodePtyLoadable) {
   if (!nodePtyLoadable) {
     const floor = infinitecontextMinPassFloor(false);
     out = withPackagePass(out, "infinitecontext", floor);
-    out = out.replace(/(> infinitecontext@.+?\n# tests )671/m, `$1${floor + 2}`);
+    out = out.replace(/(> infinitecontext@.+?\n# tests )678/m, `$1${floor + 2}`);
   }
   return out;
 }
