@@ -61,7 +61,11 @@ describe("M1b orphan defense (O4)", () => {
       };
       poll();
     });
-    await new Promise((r) => setTimeout(r, 250));
+    const pidWaitDeadline = Date.now() + 10_000;
+    while (!fs.existsSync(orphanPidFile) && Date.now() < pidWaitDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 100));
     child.kill("SIGINT");
     const exitCode = await new Promise((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
 

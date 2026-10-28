@@ -1,3 +1,5 @@
+import { PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY } from "./premerge-lib.mjs";
+
 /**
  * Synthetic pnpm test output for IC_PREMERGE_PROBE gate tests (skip real test leg).
  * Unknown probe values must throw — never return a green default.
@@ -68,10 +70,11 @@ export function premergeProbeTestOutput(probe) {
 6 passed in 0.01s
 `;
 
+  const icPass = PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY;
   const infinitecontextOk = `
 > infinitecontext@1.5.0 test /workspace/apps/js-sdk
-# tests 678
-# pass 676
+# tests ${icPass + 2}
+# pass ${icPass}
 # fail 0
 # skipped 2
 # duration_ms 1
