@@ -13,7 +13,10 @@ const LEG_FAIL_MS = 300;
 const offsetMs = Number(process.env.PREMERGE_TEST_B1_SIGINT_OFFSET_MS ?? 0);
 const fireAtMs = LEG_FAIL_MS + offsetMs;
 
-const tmpBase = path.resolve(process.env.IC_PREMERGE_TMPDIR ?? process.env.TMPDIR ?? os.tmpdir());
+const callerTmp = path.resolve(process.env.TMPDIR ?? os.tmpdir());
+const inheritedIcTmp = String(process.env.IC_PREMERGE_TMPDIR ?? "").trim();
+const tmpBase =
+  inheritedIcTmp && path.resolve(inheritedIcTmp) === callerTmp ? inheritedIcTmp : callerTmp;
 const premergeTmpRoot = fs.mkdtempSync(path.join(tmpBase, "ic-b1-offset-"));
 
 function cleanupTmp() {
