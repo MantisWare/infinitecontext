@@ -40,6 +40,8 @@ try {
   process.exit(1);
 }
 
+process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT ??= "0";
+
 const { sdkRoot, repoRoot } = resolveRepoRootsFromImportMeta(import.meta.url);
 
 const icTestTmpRunTag = `ic-premerge-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
