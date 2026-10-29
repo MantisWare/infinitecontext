@@ -106,8 +106,9 @@ export function premergeProcessAlive(pid) {
  * @param {number} defaultMs
  */
 function resolvePremergeSigintRaceTimeoutMs(category, defaultMs) {
+  const harness = String(process.env.IC_PREMERGE_SIGINT_TEST_HARNESS ?? "").trim() === "1";
   const override = Number(process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS ?? "");
-  if (Number.isFinite(override) && override > 0) {
+  if (harness && Number.isFinite(override) && override > 0) {
     return override;
   }
   return defaultMs;

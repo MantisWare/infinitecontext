@@ -18,6 +18,8 @@ import { loadPostgresPassword, runPremergeSigintOnce } from "./premerge-sigint-l
 
 const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(sdkRoot, "../..");
+delete process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS;
+delete process.env.IC_PREMERGE_SIGINT_TEST_HARNESS;
 const head = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8" }).trim();
 const password = loadPostgresPassword(repoRoot);
 const tsvPath = process.env.PREMERGE_SIGINT_TSV ?? "/tmp/premerge-sigint-final.tsv";

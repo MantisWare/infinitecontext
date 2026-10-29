@@ -148,6 +148,7 @@ premerge: node pid=4242
     process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP = "";
     try {
       await runSigintSpawnIntegrationCase(async () => {
+        process.env.IC_PREMERGE_SIGINT_TEST_HARNESS = "1";
         process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS = "150";
         const row = await runPremergeSigintOnce({
           category: "early",
@@ -167,6 +168,7 @@ premerge: node pid=4242
         );
       });
     } finally {
+      delete process.env.IC_PREMERGE_SIGINT_TEST_HARNESS;
       if (savedRaceMs === undefined) {
         delete process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS;
       } else {
