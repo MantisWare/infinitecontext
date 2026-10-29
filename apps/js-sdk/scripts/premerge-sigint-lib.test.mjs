@@ -155,7 +155,7 @@ premerge: node pid=4242
           pattern: /ic-premerge-sigint-never-match/,
           head: "0".repeat(40),
           password: "unused",
-          testInnerShell: "sleep 120",
+          testInnerShell: "sleep 5",
         });
         assert.equal(row.code, 124, "race timeout must resolve 124");
         assert.equal(row.shellExitSignal, "SIGKILL", "shell child must exit from SIGKILL");
