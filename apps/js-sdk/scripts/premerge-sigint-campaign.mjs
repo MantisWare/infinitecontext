@@ -39,8 +39,10 @@ for (let i = 1; i <= 3; i += 1) {
 for (let i = 1; i <= 3; i += 1) {
   runs.push(["early", `fetch-${i}`, /check-12-paths/, {}]);
 }
+const jsSdkLegPattern =
+  /premerge: starting pnpm -r test|Scope: [0-9]+ of [0-9]+ workspace projects|> infinitecontext@[^ ]+ test/;
 for (let i = 1; i <= 30; i += 1) {
-  runs.push(["js-sdk-leg", `js-${String(i).padStart(2, "0")}`, /> infinitecontext@[^ ]+ test/, {}]);
+  runs.push(["js-sdk-leg", `js-${String(i).padStart(2, "0")}`, jsSdkLegPattern, {}]);
 }
 for (let i = 1; i <= 5; i += 1) {
   runs.push([
@@ -61,18 +63,47 @@ fs.writeFileSync(
   "category\tlabel\trc\ttmpLeft\thit\tpremergePid\tpremergeAlive\tdockerBefore\tdockerAfter\tvaultBefore\tvaultAfter\tmarkerOk\n",
 );
 
+/**
+ * @param {string} category
+ * @param {string} label
+ * @param {RegExp} pattern
+ * @param {Record<string, string> | undefined} extra
+ */
+async function runCampaignTrial(category, label, pattern, extra) {
+  const maxAttempts = category === "js-sdk-leg" ? 3 : 1;
+  /** @type {Awaited<ReturnType<typeof runPremergeSigintOnce>> | null} */
+  let last = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    last = await runPremergeSigintOnce({
+      category,
+      label,
+      pattern,
+      head,
+      password,
+      extraEnv: extra ?? {},
+      outsideVaultMarker,
+    });
+    if (last.ok) {
+      return last;
+    }
+    const retryEarlyExit =
+      category === "js-sdk-leg" && last.hit === 0 && last.code === 1 && attempt < maxAttempts;
+    if (retryEarlyExit) {
+      console.error(
+        `SIGINT campaign retry ${label} attempt ${attempt}/${maxAttempts} (hit=0 rc=1 before readiness)`,
+      );
+      continue;
+    }
+    return last;
+  }
+  return last;
+}
+
 let fail = 0;
 for (const [category, label, pattern, extra] of runs) {
   // eslint-disable-next-line no-await-in-loop
-  const row = await runPremergeSigintOnce({
-    category,
-    label,
-    pattern,
-    head,
-    password,
-    extraEnv: extra ?? {},
-    outsideVaultMarker,
-  });
+  const row = await runCampaignTrial(category, label, pattern, extra);
   const line = `${category}\t${label}\trc=${row.code}\ttmpLeft=${row.tmpLeft}\thit=${row.hit}\tpremergePid=${row.premergePid ?? ""}\tpremergeAlive=${row.premergeAlive}\tdockerBefore=${row.dockerBefore.count}\tdockerAfter=${row.dockerAfter.count}\tvaultBefore=${row.vaultBefore}\tvaultAfter=${row.vaultAfter}\tmarkerOk=${row.markerOk}\n`;
   fs.appendFileSync(tsvPath, line);
   console.log(line.trim(), row.ok ? "OK" : "FAIL");

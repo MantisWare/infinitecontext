@@ -142,6 +142,44 @@ premerge: node pid=4242
     });
   });
 
+  it("runPremergeSigintOnce SIGKILLs shell child when race timeout elapses", async () => {
+    const savedRaceMs = process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS;
+    const savedWrap = process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP;
+    process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP = "";
+    try {
+      await runSigintSpawnIntegrationCase(async () => {
+        process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS = "150";
+        const row = await runPremergeSigintOnce({
+          category: "early",
+          label: "race-sigkill",
+          pattern: /ic-premerge-sigint-never-match/,
+          head: "0".repeat(40),
+          password: "unused",
+          testInnerShell: "sleep 120",
+        });
+        assert.equal(row.code, 124, "race timeout must resolve 124");
+        assert.equal(row.shellExitSignal, "SIGKILL", "shell child must exit from SIGKILL");
+        assert.equal(row.shellAliveAfterRace, 0, "shell child must not survive race timeout");
+        assert.equal(
+          row.raceKillChildMarkedKilled,
+          true,
+          "race kill must use ChildProcess.kill (child.killed)",
+        );
+      });
+    } finally {
+      if (savedRaceMs === undefined) {
+        delete process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS;
+      } else {
+        process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS = savedRaceMs;
+      }
+      if (savedWrap === undefined) {
+        delete process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP;
+      } else {
+        process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP = savedWrap;
+      }
+    }
+  });
+
   it("runPremergeSigintOnce clears SIGINT race timeout when child exits", async () => {
     const before = countActiveTimeoutResources();
     await runSigintSpawnIntegrationCase(async ({ head, password }) => {

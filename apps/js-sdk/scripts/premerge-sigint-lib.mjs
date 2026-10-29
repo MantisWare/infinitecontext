@@ -101,22 +101,67 @@ export function premergeProcessAlive(pid) {
  * @param {Record<string, string>} [opts.extraEnv]
  * @param {string} [opts.outsideVaultMarker]
  */
+/**
+ * @param {string} category
+ * @param {number} defaultMs
+ */
+function resolvePremergeSigintRaceTimeoutMs(category, defaultMs) {
+  const override = Number(process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS ?? "");
+  if (Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  return defaultMs;
+}
+
+/**
+ * @param {import("node:child_process").ChildProcess} child
+ */
+export function premergeSigintRaceKillChild(child) {
+  child.kill("SIGKILL");
+}
+
+/**
+ * @param {object} opts
+ * @param {string} opts.category
+ * @param {string} opts.label
+ * @param {RegExp} opts.pattern
+ * @param {string} opts.head
+ * @param {string} opts.password
+ * @param {Record<string, string>} [opts.extraEnv]
+ * @param {string} [opts.outsideVaultMarker]
+ * @param {(child: import("node:child_process").ChildProcess) => void} [opts.testRaceKillChild]
+ * @param {string} [opts.testInnerShell]
+ */
 export async function runPremergeSigintOnce(opts) {
-  const { category, label, pattern, head, password, extraEnv = {}, outsideVaultMarker } = opts;
+  const {
+    category,
+    label,
+    pattern,
+    head,
+    password,
+    extraEnv = {},
+    outsideVaultMarker,
+    testRaceKillChild,
+    testInnerShell,
+  } = opts;
   const intDelayMs =
     category === "js-sdk-leg" ? 450 : category === "fail-cleanup" ? 0 : 80;
-  const timeoutMs =
+  const defaultTimeoutMs =
     category === "js-sdk-leg" ? 1_500_000 : category === "fail-cleanup" ? 900_000 : 900_000;
+  const timeoutMs = resolvePremergeSigintRaceTimeoutMs(category, defaultTimeoutMs);
+  const raceKillChild = testRaceKillChild ?? premergeSigintRaceKillChild;
 
   const envPairs = Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`);
-  const inner = [
-    "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
-    "PREMERGE_MUTANT=",
-    `EXPECTED_SHA=${head}`,
-    `POSTGRES_PASSWORD=${password}`,
-    ...envPairs,
-    "node scripts/premerge.mjs",
-  ].join(" ");
+  const inner =
+    testInnerShell ??
+    [
+      "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      "PREMERGE_MUTANT=",
+      `EXPECTED_SHA=${head}`,
+      `POSTGRES_PASSWORD=${password}`,
+      ...envPairs,
+      "node scripts/premerge.mjs",
+    ].join(" ");
 
   const dockerWrap = String(process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP ?? "sg docker -c").trim();
   const shellCmd = dockerWrap ? `${dockerWrap} ${JSON.stringify(inner)}` : inner;
@@ -177,12 +222,19 @@ export async function runPremergeSigintOnce(opts) {
 
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let raceTimeoutId;
+  /** @type {string | null} */
+  let shellExitSignal = null;
+  let raceKillChildMarkedKilled = false;
+  child.on("exit", (_code, signal) => {
+    shellExitSignal = signal;
+  });
   const code = await Promise.race([
     new Promise((resolve) => child.on("close", (c) => resolve(c ?? 1))),
     new Promise((resolve) => {
       raceTimeoutId = setTimeout(() => {
         try {
-          child.kill("SIGKILL");
+          raceKillChild(child);
+          raceKillChildMarkedKilled = child.killed === true;
         } catch {
           /* ignore */
         }
@@ -194,6 +246,22 @@ export async function runPremergeSigintOnce(opts) {
       clearTimeout(raceTimeoutId);
     }
   });
+  await new Promise((resolve) => {
+    if (child.exitCode !== null) {
+      resolve(undefined);
+      return;
+    }
+    child.once("close", () => resolve(undefined));
+  });
+  let shellAliveAfterRace = 0;
+  if (child.pid !== undefined) {
+    try {
+      process.kill(child.pid, 0);
+      shellAliveAfterRace = 1;
+    } catch {
+      shellAliveAfterRace = 0;
+    }
+  }
 
   if (!hit && pattern.test(log)) {
     hit = 1;
@@ -254,6 +322,10 @@ export async function runPremergeSigintOnce(opts) {
     markerOk,
     dockerBefore: beforeDocker,
     dockerAfter: afterDocker,
+    shellExitSignal,
+    shellAliveAfterRace,
+    raceKillChildMarkedKilled,
     ok,
   };
 }
+
