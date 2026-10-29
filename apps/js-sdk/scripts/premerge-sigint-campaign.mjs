@@ -20,6 +20,10 @@ const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = path.resolve(sdkRoot, "../..");
 delete process.env.IC_PREMERGE_SIGINT_RACE_TIMEOUT_MS;
 delete process.env.IC_PREMERGE_SIGINT_TEST_HARNESS;
+// Default lib wrap is `sg docker -c` (Tester VM). Campaign uses direct docker when unset/empty.
+if (!String(process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP ?? "").trim()) {
+  process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP = "";
+}
 const head = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8" }).trim();
 const password = loadPostgresPassword(repoRoot);
 const tsvPath = process.env.PREMERGE_SIGINT_TSV ?? "/tmp/premerge-sigint-final.tsv";
