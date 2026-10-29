@@ -1,8 +1,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { listIcPremergeDockerResources } from "./premerge-ephemeral-postgres.mjs";
 import { listVaultAgentServePidsForHome } from "./premerge-vault-cleanup.mjs";
+
+const premergeSigintSdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * @param {string | URL} [importMetaUrl]
+ */
+export function resolvePremergeSigintSdkRoot(importMetaUrl = import.meta.url) {
+  return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..");
+}
 
 /**
  * @param {string} log
@@ -99,21 +110,19 @@ export async function runPremergeSigintOnce(opts) {
 
   const envPairs = Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`);
   const inner = [
-    "cd /workspace/apps/js-sdk",
-    [
-      "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
-      "PREMERGE_MUTANT=",
-      `EXPECTED_SHA=${head}`,
-      `POSTGRES_PASSWORD=${password}`,
-      ...envPairs,
-      "node scripts/premerge.mjs",
-    ].join(" "),
-  ].join(" && ");
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+    "PREMERGE_MUTANT=",
+    `EXPECTED_SHA=${head}`,
+    `POSTGRES_PASSWORD=${password}`,
+    ...envPairs,
+    "node scripts/premerge.mjs",
+  ].join(" ");
 
   const dockerWrap = String(process.env.IC_PREMERGE_SIGINT_DOCKER_WRAP ?? "sg docker -c").trim();
   const shellCmd = dockerWrap ? `${dockerWrap} ${JSON.stringify(inner)}` : inner;
   const beforeDocker = icPremergeDockerInventory();
   const child = spawn("bash", ["-lc", shellCmd], {
+    cwd: premergeSigintSdkRoot,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
