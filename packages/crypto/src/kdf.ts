@@ -20,9 +20,8 @@ export function serializeKdfParams(): VaultKdfParams {
     };
 }
 
-/** Upper bound on memorySizeKiB × iterations (65536×3 profile = 196608). */
-/** 4× default profile cost (65536 KiB × 3 iterations). */
-export const VAULT_KDF_MAX_COST_PRODUCT = 786_432;
+/** Upper bound on memorySizeKiB × iterations (256 MiB × 10 iterations = 2621440). */
+export const VAULT_KDF_MAX_COST_PRODUCT = 2_621_440;
 
 export function assertVaultKdfCostWithinCap(params: VaultKdfParams): void {
     const product = params.memorySizeKiB * params.iterations;

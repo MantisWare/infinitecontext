@@ -1,0 +1,117 @@
+import { PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY } from "./premerge-lib.mjs";
+
+/**
+ * Synthetic pnpm test output for IC_PREMERGE_PROBE gate tests (skip real test leg).
+ * Unknown probe values must throw — never return a green default.
+ * @param {string} probe
+ */
+export function premergeProbeTestOutput(probe) {
+  const p = String(probe ?? "").trim();
+  if (!p) {
+    throw new Error("premerge: unknown IC_PREMERGE_PROBE (empty)");
+  }
+
+  const basePackages = `
+> @infinitecontext/auth@0.1.0 test /workspace/packages/auth
+# tests 11
+# pass 11
+# fail 0
+# skipped 0
+# duration_ms 1
+> @infinitecontext/core@0.1.0 test /workspace/packages/core
+# tests 179
+# pass 179
+# fail 0
+# skipped 0
+# duration_ms 1
+> @infinitecontext/crypto@0.1.0 test /workspace/packages/crypto
+# tests 23
+# pass 23
+# fail 0
+# skipped 0
+# duration_ms 1
+> @infinitecontext/parsers@0.1.0 test /workspace/packages/parsers
+# tests 117
+# pass 115
+# fail 0
+# skipped 2
+# duration_ms 1
+> @infinitecontext/storage@0.1.0 test /workspace/packages/storage
+# tests 3
+# pass 3
+# fail 0
+# skipped 0
+# duration_ms 1
+> @infinitecontext/sync@0.1.0 test /workspace/packages/sync
+# tests 27
+# pass 27
+# fail 0
+# skipped 0
+# duration_ms 1
+> @infinitecontext/sync-cursor@0.1.0 test /workspace/packages/sync-cursor
+# tests 1
+# pass 1
+# fail 0
+# skipped 0
+# duration_ms 1
+> infinitecontext-api@ test /workspace/apps/api
+# tests 93
+# pass 93
+# fail 0
+# skipped 0
+# duration_ms 1
+> infinitecontext-mcp-server@ test /workspace/apps/mcp-server
+# tests 2
+# pass 2
+# fail 0
+# skipped 0
+# duration_ms 1
+> infinitecontext-python-sdk@ test /workspace/apps/python-sdk
+6 passed in 0.01s
+`;
+
+  const icPass = PREMERGE_INFINITECONTEXT_MIN_PASS_WITH_PTY;
+  const infinitecontextOk = `
+> infinitecontext@1.5.0 test /workspace/apps/js-sdk
+# tests ${icPass + 2}
+# pass ${icPass}
+# fail 0
+# skipped 2
+# duration_ms 1
+`;
+
+  if (p === "ok" || p === "green") {
+    return `${basePackages}${infinitecontextOk}`;
+  }
+  if (p === "missing-package") {
+    return basePackages;
+  }
+  if (p === "zero-tests") {
+    return `${basePackages}
+> infinitecontext@1.5.0 test /workspace/apps/js-sdk
+# duration_ms 1
+`;
+  }
+  if (p === "floor-violation") {
+    return `${basePackages}
+> infinitecontext@1.5.0 test /workspace/apps/js-sdk
+# tests 595
+# pass 100
+# fail 0
+# skipped 2
+# duration_ms 1
+`;
+  }
+  if (p === "expected-sha-mismatch") {
+    return `${basePackages}${infinitecontextOk}`;
+  }
+  throw new Error(`premerge: unknown IC_PREMERGE_PROBE ${JSON.stringify(p)}`);
+}
+
+/**
+ * Validate probe name without returning synthetic green output.
+ * @param {string} probe
+ */
+export function assertKnownPremergeProbe(probe) {
+  premergeProbeTestOutput(String(probe ?? "").trim());
+}

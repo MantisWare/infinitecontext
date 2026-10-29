@@ -11,12 +11,19 @@ function expectedIcn(publicId: string): string {
     return `icn_${hex}`;
 }
 
+function parseMigrationStdoutValue(stdout: string, key: string): string {
+    const prefix = `${key}=`;
+    const line = (stdout ?? '').split('\n').find((row) => row.startsWith(prefix));
+    assert.ok(line, `verify-migration-chain.sh must print ${key}`);
+    return line.slice(prefix.length).trim();
+}
+
 function dropFreshDatabase(dbName: string) {
-    const pgHost = process.env.PGHOST ?? '127.0.0.1';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.POSTGRES_USER ?? 'infinitecontext';
     const pgPassword = process.env.POSTGRES_PASSWORD;
     if (!pgPassword) return;
+    const pgHost = process.env.PGHOST ?? '127.0.0.1';
+    const pgPort = process.env.PGPORT ?? '5433';
+    const pgUser = process.env.POSTGRES_USER ?? 'infinitecontext';
     const adminUrl = `postgresql://${pgUser}:${pgPassword}@${pgHost}:${pgPort}/postgres`;
     spawnSync(
         'psql',
@@ -33,21 +40,24 @@ describe('postgres migration chain (fresh DB)', () => {
         );
 
         const dbName = `ic_migrate_fresh_${Date.now()}`;
+        let dbUrl = '';
         try {
             const res = spawnSync('bash', [script], {
                 encoding: 'utf8',
                 timeout: 180_000,
                 env: {
                     ...process.env,
+                    MIGRATION_VERIFY_USE_HOST: '1',
                     POSTGRES_DB: dbName,
                     PGHOST: process.env.PGHOST ?? '127.0.0.1',
-                    PGPORT: process.env.PGPORT ?? '5432',
+                    PGPORT: process.env.PGPORT ?? '5433',
                 },
             });
             assert.equal(res.status, 0, res.stderr || res.stdout);
             assert.match(res.stdout ?? '', /Migration chain init/);
 
-            const dbUrl = `postgresql://${process.env.POSTGRES_USER ?? 'infinitecontext'}:${process.env.POSTGRES_PASSWORD}@${process.env.PGHOST ?? '127.0.0.1'}:${process.env.PGPORT ?? '5432'}/${dbName}`;
+            dbUrl = parseMigrationStdoutValue(res.stdout ?? '', 'MIGRATION_VERIFY_DATABASE_URL');
+
             const legacyMsgId = 'msg_migration_icn_legacy_round7';
             const seed = spawnSync(
                 'psql',

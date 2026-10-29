@@ -30,9 +30,7 @@ const OBJECTS_SUBDIR = "objects";
 export const TOMBSTONE_SWEEP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** @type {number} */
-let tombstoneSweepMaxAgeMs = Number(
-  process.env.IC_FS_OBJECT_TEST_TOMBSTONE_SWEEP_MAX_AGE_MS || TOMBSTONE_SWEEP_MAX_AGE_MS,
-);
+let tombstoneSweepMaxAgeMs = TOMBSTONE_SWEEP_MAX_AGE_MS;
 
 /** @param {number} ms */
 export function setFilesystemTombstoneSweepMaxAgeMsForTests(ms) {
@@ -40,7 +38,7 @@ export function setFilesystemTombstoneSweepMaxAgeMsForTests(ms) {
 }
 
 /** @type {number} */
-let testStallBeforeLinkMs = Number(process.env.IC_FS_OBJECT_TEST_STALL_BEFORE_LINK_MS || 0);
+let testStallBeforeLinkMs = 0;
 
 /** @param {number} ms */
 export function setFilesystemObjectTestStallBeforeLinkMsForTests(ms) {
@@ -48,13 +46,18 @@ export function setFilesystemObjectTestStallBeforeLinkMsForTests(ms) {
 }
 
 /** @type {number} */
-let testSweepPauseAfterMarkerMs = Number(
-  process.env.IC_FS_OBJECT_TEST_SWEEP_PAUSE_AFTER_MARKER_MS || 0,
-);
+let testSweepPauseAfterMarkerMs = 0;
 
 /** @param {number} ms */
 export function setFilesystemTombstoneSweepPauseAfterMarkerMsForTests(ms) {
   testSweepPauseAfterMarkerMs = ms;
+}
+
+/** Restore filesystem generation test hooks to production defaults. */
+export function resetFilesystemObjectTestHooksForTests() {
+  tombstoneSweepMaxAgeMs = TOMBSTONE_SWEEP_MAX_AGE_MS;
+  testStallBeforeLinkMs = 0;
+  testSweepPauseAfterMarkerMs = 0;
 }
 
 /** @param {number} gen */

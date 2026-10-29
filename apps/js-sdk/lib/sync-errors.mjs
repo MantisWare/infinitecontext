@@ -8,6 +8,9 @@ export class SyncApiUnavailableError extends Error {
 }
 
 export function formatSyncCliError(error) {
+  if (error?.code === "cas_conditional_unconfirmed") {
+    return error?.message ?? String(error);
+  }
   if (error?.code === "sync_api_unavailable" || error?.name === "SyncApiUnavailableError") {
     return (
       "Centralized sync is not available on this API deployment.\n" +

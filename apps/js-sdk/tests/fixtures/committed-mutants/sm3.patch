@@ -1,0 +1,14 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -156,10 +156,6 @@ export function createPremergeShutdown(opts) {
+   }
+ 
+   function exitPremerge(code) {
+-    if (shuttingDown && !hasPremergeMutant("M3")) {
+-      finishShutdown();
+-      process.exit(shutdownExitCode ?? 130);
+-    }
+     if (!cleanupPremergeTmpRoot()) {
+       process.exit(1);
+     }

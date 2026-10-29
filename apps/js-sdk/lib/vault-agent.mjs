@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { infinitecontextHome } from "./credentials.mjs";
+import { registerPremergeVaultAgentPid } from "./premerge-vault-registry.mjs";
 
 const SOCKET_NAME = "vault-agent.sock";
 const PID_NAME = "vault-agent.pid";
@@ -85,6 +86,14 @@ export async function ensureDetachedVaultAgent() {
     stdio: "ignore",
     env: vaultAgentChildEnv(),
   });
+  if (
+    child.pid &&
+    process.env.IC_PREMERGE_VAULT_PID_REGISTRY &&
+    process.env.IC_PREMERGE_HOME &&
+    path.resolve(process.env.HOME ?? "") === path.resolve(process.env.IC_PREMERGE_HOME)
+  ) {
+    registerPremergeVaultAgentPid(process.env.IC_PREMERGE_VAULT_PID_REGISTRY, child.pid);
+  }
   child.unref();
   for (let i = 0; i < 20; i += 1) {
     if (await pingAgent()) return;

@@ -48,3 +48,4 @@ __pycache__/
 !.yarn/versions
 *.tgz
 .pg-test-env
+apps/js-sdk/tests/storage/fixtures/ssh/generated/

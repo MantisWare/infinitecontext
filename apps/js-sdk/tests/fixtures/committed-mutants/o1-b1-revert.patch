@@ -1,0 +1,50 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+index 0000000..1111111 100644
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -246,11 +246,6 @@
+           return;
+         }
+         if (signal) {
+-          if (signal === "SIGINT" || signal === "SIGTERM") {
+-            beginShutdown(signal);
+-            reject(new Error("shutting down"));
+-            return;
+-          }
+           reject(new Error(`${cmd} ${args.join(" ")} terminated by ${signal}`));
+           return;
+         }
+@@ -278,31 +273,14 @@
+               setTimeout(fire, sigDelayMs);
+             }
+           }
+-          if (testHooks.skipDrainPendingSigintOnLegFailure) {
+-            void terminateActiveLeg("SIGKILL").then(() => {
+-              if (shuttingDown) {
+-                reject(new Error("shutting down"));
+-                return;
+-              }
+-              cleanupAll();
+-              exitPremerge(status ?? 1);
+-            });
+-            return;
+-          }
+-          void (async () => {
+-            await drainPendingSigint();
+-            if (shuttingDown) {
+-              reject(new Error("shutting down"));
+-              return;
+-            }
+-            await terminateActiveLeg("SIGKILL");
++          void terminateActiveLeg("SIGKILL").then(() => {
+             if (shuttingDown) {
+               reject(new Error("shutting down"));
+               return;
+             }
+             cleanupAll();
+             exitPremerge(status ?? 1);
+-          })();
++          });
+           return;
+         }
+         resolve(out);

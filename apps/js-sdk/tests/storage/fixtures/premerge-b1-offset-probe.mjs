@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+/**
+ * B1 race probe: leg exits 1 at 300 ms; SIGINT at 300 + PREMERGE_TEST_B1_SIGINT_OFFSET_MS.
+ * Head must exit 130 for offsets −60…+450 ms; reverted drain must exit 1 for offsets ≥ +5 ms.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { createPremergeShutdown } from "../../../scripts/premerge-shutdown.mjs";
+
+const LEG_FAIL_MS = 300;
+const offsetMs = Number(process.env.PREMERGE_TEST_B1_SIGINT_OFFSET_MS ?? 0);
+const fireAtMs = LEG_FAIL_MS + offsetMs;
+
+const callerTmp = path.resolve(process.env.TMPDIR ?? os.tmpdir());
+const inheritedIcTmp = String(process.env.IC_PREMERGE_TMPDIR ?? "").trim();
+const tmpBase =
+  inheritedIcTmp && path.resolve(inheritedIcTmp) === callerTmp ? inheritedIcTmp : callerTmp;
+const premergeTmpRoot = fs.mkdtempSync(path.join(tmpBase, "ic-b1-offset-"));
+
+function cleanupTmp() {
+  try {
+    if (fs.existsSync(premergeTmpRoot)) {
+      fs.rmSync(premergeTmpRoot, { recursive: true, force: true });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+process.on("exit", cleanupTmp);
+
+if (offsetMs > 0) {
+  process.env.PREMERGE_TEST_B1_SIGINT_DELAY_MS = String(offsetMs);
+}
+
+const simulateRevert =
+  String(process.env.IC_PREMERGE_FIXTURE_SIMULATE_B1_REVERT ?? "").trim() === "1";
+
+const shutdown = createPremergeShutdown({
+  premergeTmpRoot,
+  cleanupAll: () => {},
+  killActiveProcessGroup: () => {},
+  assertNoNewIcTmpDirLeaks: () => {},
+  listAllIcTmpDirs: () => new Set([premergeTmpRoot]),
+  testHooks: {
+    scheduleSigintOnLegFailureClose: offsetMs >= 0,
+    skipDrainPendingSigintOnLegFailure: simulateRevert,
+  },
+});
+
+shutdown.registerSignalHandlers();
+
+if (offsetMs < 0) {
+  setTimeout(() => {
+    try {
+      process.kill(process.pid, "SIGINT");
+    } catch {
+      /* ignore */
+    }
+  }, fireAtMs);
+}
+
+const legScript = `setTimeout(()=>process.exit(1), ${LEG_FAIL_MS})`;
+
+try {
+  await shutdown.run(process.execPath, ["-e", legScript], {}, process.cwd());
+  cleanupTmp();
+  process.exit(0);
+} catch {
+  if (shutdown.shuttingDown) {
+    cleanupTmp();
+    shutdown.exitPremerge(shutdown.shutdownExitCode ?? 130);
+  }
+  cleanupTmp();
+  process.exit(1);
+}

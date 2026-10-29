@@ -42,7 +42,8 @@
                             "guides/edit-contexts",
                             "guides/view-context-history",
                             "guides/fork-clone-contexts",
-                            "guides/self-hosting"
+                            "guides/self-hosting",
+                            "guides/storage-backends"
                         ]
                     }
                 ]

@@ -15,6 +15,7 @@ import { keyringBackendAvailable } from "../../lib/storage/secret-store-keyring.
 import {
   probeKeyringSecretService,
   resetKeyringProbeCacheForTests,
+  setKeyringProbeForceFailForTests,
 } from "../../lib/storage/secret-store-keyring-probe.mjs";
 import {
   formatGenerationSecretsFileName,
@@ -324,9 +325,8 @@ describe("resolveSecretStoreBackend auto", () => {
     }
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "ic-secret-store-marker-keyring-"));
     writeBackendMarker(rootDir, "secret-service");
-    const prevForce = process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE;
     try {
-      process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE = "fail";
+      setKeyringProbeForceFailForTests(true);
       resetKeyringProbeCacheForTests();
       await assert.rejects(
         () => resolveSecretStoreBackend({ mode: "auto", rootDir }),
@@ -337,11 +337,8 @@ describe("resolveSecretStoreBackend auto", () => {
           /storage-secrets\.backend is "secret-service"/.test(error.message),
       );
     } finally {
-      if (prevForce === undefined) {
-        delete process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE;
-      } else {
-        process.env.INFINITECONTEXT_KEYRING_PROBE_FORCE = prevForce;
-      }
+      setKeyringProbeForceFailForTests(false);
+      resetKeyringProbeCacheForTests();
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });

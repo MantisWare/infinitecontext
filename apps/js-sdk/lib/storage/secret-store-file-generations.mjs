@@ -15,11 +15,16 @@ const MAX_GENERATION = 999_999_999_999;
 const MAX_CAS_ATTEMPTS = 64;
 
 /** @type {number} */
-let testStallBeforeLinkMs = Number(process.env.IC_SECRET_STORE_TEST_STALL_BEFORE_LINK_MS || 0);
+let testStallBeforeLinkMs = 0;
 
 /** @param {number} ms */
 export function setTestStallBeforeLinkMsForTests(ms) {
   testStallBeforeLinkMs = ms;
+}
+
+/** Restore secret-store file generation test hooks to production defaults. */
+export function resetSecretStoreFileTestHooksForTests() {
+  testStallBeforeLinkMs = 0;
 }
 
 /** @param {number} gen */

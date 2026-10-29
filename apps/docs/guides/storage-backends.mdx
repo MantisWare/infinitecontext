@@ -1,0 +1,55 @@
+---
+title: 'Storage backends (local object store)'
+description: 'Configure folder, filesystem, and S3-compatible backends for the InfiniteContext JS SDK'
+---
+
+Object-store sync can persist encrypted vault data on **folder**, **local filesystem**, or **S3-compatible** backends. Credentials for cloud storage use the standard AWS environment chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, `AWS_REGION`) — never commit secrets to `config.json`.
+
+## Requirements
+
+- **Node.js ≥ 22.12** for the JS SDK storage stack (`apps/js-sdk/package.json` `engines`).
+- Local verification: from the repo root, `make premerge` (or `cd apps/js-sdk && EXPECTED_SHA=<git rev-parse HEAD> npm run premerge`) after starting Docker for the MinIO/SFTP emulator.
+
+## Quick setup
+
+```bash
+cd apps/js-sdk
+npm run storage:emu:up    # MinIO on 127.0.0.1:9000 + test SFTP on 127.0.0.1:2222
+infinitecontext config set storage.backend s3
+infinitecontext config set storage.s3.bucket infinitecontext-ci
+infinitecontext config set storage.s3.endpoint http://127.0.0.1:9000
+export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_REGION=us-east-1
+infinitecontext storage doctor
+npm run storage:emu:down
+```
+
+## SFTP backend (`storage.sftp`)
+
+The SFTP adapter treats the server’s **writable chroot subdirectory** as the storage root. Set `storage.sftp.root` to that directory name (not a full path on your machine).
+
+| Setting | Typical value | Notes |
+| --- | --- | --- |
+| `storage.sftp.root` | `upload` | Path segment **inside** the SFTP user’s chroot where objects are stored |
+
+On [atmoz/sftp](https://github.com/atmoz/sftp), declare the writable directory in the `command` user line — for example password auth `user:pass:::upload` (user, password, default uid/gid, directory `upload`) or the key-auth equivalent with an empty password and public keys under `/home/<user>/.ssh/keys/`.
+
+The local premerge emulator (`apps/js-sdk/tests/storage/compose.yaml`) uses:
+
+```yaml
+command: ic:::::upload
+```
+
+(volumes mount `fixtures/ssh/generated/id_ed25519.pub` for user `ic` on port `127.0.0.1:2222`). Configure the SDK with `storage.sftp.root` = `upload` when pointing at that service.
+
+## Support overrides (environment)
+
+These variables are for support and automated tests — not part of normal setup.
+
+| Variable | Purpose |
+| --- | --- |
+| `INFINITECONTEXT_DEVICE_UUID` | Pin the local device UUID without writing `config.json` (multi-machine debugging). |
+| `INFINITECONTEXT_KEYRING_DURABLE=0` | Opt out of OS keychain auto-selection; logs a loud warning when set. Prefer `storage-secrets` file mode via config for intentional non-keyring setups. |
+
+## Residual metadata
+
+Encrypted objects still expose **layout prefixes** in AAD and key paths, and small fixed-size device/manifest blobs can leak coarse counts. See `docs/design/storage-object-security.md` for the threat model.

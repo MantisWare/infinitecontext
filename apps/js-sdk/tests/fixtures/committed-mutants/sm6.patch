@@ -1,0 +1,27 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -159,9 +159,6 @@ export function createPremergeShutdown(opts) {
+   function finishShutdown() {
+     cleanupAll();
+     reapHintedOrphanPids();
+-    if (!hasPremergeMutant("M6")) {
+-      killProcessesUsingPath(premergeTmpRoot, "SIGKILL");
+-    }
+     if (!cleanupPremergeTmpRoot()) {
+       process.exit(1);
+     }
+diff --git a/apps/js-sdk/scripts/premerge-process-utils.mjs b/apps/js-sdk/scripts/premerge-process-utils.mjs
+--- a/apps/js-sdk/scripts/premerge-process-utils.mjs
++++ b/apps/js-sdk/scripts/premerge-process-utils.mjs
+@@ -213,9 +213,6 @@ export function removePrivateTmpDirVerified(root, beforeRm) {
+   if (!fs.existsSync(root)) {
+     return true;
+   }
+   for (let attempt = 0; attempt < 2; attempt += 1) {
+-    if (!hasPremergeMutant("M6")) {
+-      killProcessesUsingPath(root, "SIGKILL");
+-    }
+     try {
+       fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+     } catch {

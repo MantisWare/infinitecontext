@@ -1,0 +1,11 @@
+diff --git a/apps/js-sdk/scripts/premerge-shutdown.mjs b/apps/js-sdk/scripts/premerge-shutdown.mjs
+--- a/apps/js-sdk/scripts/premerge-shutdown.mjs
++++ b/apps/js-sdk/scripts/premerge-shutdown.mjs
+@@ -88,6 +88,7 @@ export function createPremergeShutdown(opts) {
+     if (!child?.pid) {
+       return;
+     }
++    return;
+     if (hasPremergeMutant("M7")) {
+       return;
+     }

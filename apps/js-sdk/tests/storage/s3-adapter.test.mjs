@@ -27,6 +27,12 @@ export function resolveS3AdapterTestConfigFromEnv(env = process.env) {
 
 const s3ConfigRaw = resolveS3AdapterTestConfigFromEnv();
 
+if (process.env.IC_REQUIRE_MINIO === "1" && !s3ConfigRaw) {
+  throw new Error(
+    "IC_REQUIRE_MINIO=1 but S3 test config is missing (set AWS_ENDPOINT_URL and INFINITECONTEXT_S3_TEST_BUCKET)",
+  );
+}
+
 /**
  * @param {{ bucket: string, prefix: string, region: string, endpoint?: string }} cfg
  */

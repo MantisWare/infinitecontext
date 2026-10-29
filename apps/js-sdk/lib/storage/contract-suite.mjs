@@ -5,7 +5,7 @@ import {
   buildStorageObjectBytes,
   scanStorageObjectForLeaks,
 } from "./ciphertext.mjs";
-import { PreconditionFailedError } from "./errors.mjs";
+import { NotSupportedError, PreconditionFailedError } from "./errors.mjs";
 import { STORAGE_CAPABILITIES } from "./types.mjs";
 
 /** @typedef {import("./types.mjs").StorageAdapter} StorageAdapter */
@@ -66,12 +66,15 @@ const DEFAULT_CONTRACT_CAPABILITIES = [
 /**
  * @param {() => StorageAdapterTestHarness | Promise<StorageAdapterTestHarness>} createHarness
  * @param {{ describe: Function, it: Function }} test
- * @param {{ requiredCapabilities?: import("./types.mjs").StorageCapability[], skipConditionalReplaceTests?: boolean, skipConditionalDeleteIfMatchTests?: boolean }} [suiteOptions]
+ * @param {{ requiredCapabilities?: import("./types.mjs").StorageCapability[], skipConditionalReplaceTests?: boolean, skipConditionalDeleteIfMatchTests?: boolean, conditionalReplaceExpectNotSupported?: boolean }} [suiteOptions]
  */
 export function runStorageAdapterContractSuite(createHarness, { describe, it }, suiteOptions = {}) {
   const requiredCapabilities = suiteOptions.requiredCapabilities ?? DEFAULT_CONTRACT_CAPABILITIES;
-  const skipConditionalReplaceTests = suiteOptions.skipConditionalReplaceTests ?? false;
-  const skipConditionalDeleteIfMatchTests = suiteOptions.skipConditionalDeleteIfMatchTests ?? false;
+  const conditionalReplaceExpectNotSupported = suiteOptions.conditionalReplaceExpectNotSupported ?? false;
+  const skipConditionalReplaceTests =
+    (suiteOptions.skipConditionalReplaceTests ?? false) && !conditionalReplaceExpectNotSupported;
+  const skipConditionalDeleteIfMatchTests =
+    (suiteOptions.skipConditionalDeleteIfMatchTests ?? false) && !conditionalReplaceExpectNotSupported;
 
   describe("StorageAdapter contract", () => {
     /** @type {StorageAdapter} */
@@ -206,6 +209,14 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }, 
       );
 
       const head = await adapter.head(key);
+      if (conditionalReplaceExpectNotSupported) {
+        await assert.rejects(
+          () => adapter.put(key, second, { ifMatch: head?.etag }),
+          (err) => err instanceof NotSupportedError,
+        );
+        assertBackingIsCiphertextOnly();
+        return;
+      }
       await adapter.put(key, second, { ifMatch: head?.etag });
       const got = await adapter.get(key);
       assert.deepEqual(got?.body, second);
@@ -228,7 +239,10 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }, 
       await adapter.put(keyB, b, { ifNoneMatch: "*" });
       await assert.rejects(
         () => adapter.put(keyB, b, { ifMatch: created.etag }),
-        (err) => err instanceof PreconditionFailedError,
+        (err) =>
+          conditionalReplaceExpectNotSupported
+            ? err instanceof NotSupportedError
+            : err instanceof PreconditionFailedError,
       );
     });
 
@@ -246,6 +260,14 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }, 
 
       const writerA = sampleEncryptedObjectBytesVariant(key, 0x01);
       const writerB = sampleEncryptedObjectBytesVariant(key, 0x02);
+      if (conditionalReplaceExpectNotSupported) {
+        await assert.rejects(
+          () => adapter.put(key, writerA, { ifMatch: afterCreate.etag }),
+          (err) => err instanceof NotSupportedError,
+        );
+        assertBackingIsCiphertextOnly();
+        return;
+      }
       const results = await Promise.allSettled([
         adapter.put(key, writerA, { ifMatch: afterCreate.etag }),
         adapter.put(key, writerB, { ifMatch: afterCreate.etag }),
@@ -263,7 +285,10 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }, 
       await adapter.init();
       await assert.rejects(
         () => adapter.delete("missing.enc", { ifMatch: '"ghost"' }),
-        (err) => err instanceof PreconditionFailedError,
+        (err) =>
+          conditionalReplaceExpectNotSupported
+            ? err instanceof NotSupportedError
+            : err instanceof PreconditionFailedError,
       );
     });
 
@@ -273,6 +298,14 @@ export function runStorageAdapterContractSuite(createHarness, { describe, it }, 
       await adapter.init();
       const key = "del/me.enc";
       const ref = await adapter.put(key, sampleEncryptedObjectBytesForKey(key), { ifNoneMatch: "*" });
+      if (conditionalReplaceExpectNotSupported) {
+        await assert.rejects(
+          () => adapter.delete(key, { ifMatch: '"stale"' }),
+          (err) => err instanceof NotSupportedError,
+        );
+        assertBackingIsCiphertextOnly();
+        return;
+      }
       await assert.rejects(
         () => adapter.delete(key, { ifMatch: '"stale"' }),
         (err) => err instanceof PreconditionFailedError,
