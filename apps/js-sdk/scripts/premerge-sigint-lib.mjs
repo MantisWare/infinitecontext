@@ -175,19 +175,25 @@ export async function runPremergeSigintOnce(opts) {
   child.stdout.on("data", onData);
   child.stderr.on("data", onData);
 
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let raceTimeoutId;
   const code = await Promise.race([
     new Promise((resolve) => child.on("close", (c) => resolve(c ?? 1))),
-    new Promise((resolve) =>
-      setTimeout(() => {
+    new Promise((resolve) => {
+      raceTimeoutId = setTimeout(() => {
         try {
-          process.kill(child.pid, "SIGKILL");
+          child.kill("SIGKILL");
         } catch {
           /* ignore */
         }
         resolve(124);
-      }, timeoutMs),
-    ),
-  ]);
+      }, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (raceTimeoutId !== undefined) {
+      clearTimeout(raceTimeoutId);
+    }
+  });
 
   if (!hit && pattern.test(log)) {
     hit = 1;

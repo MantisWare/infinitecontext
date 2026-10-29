@@ -29,6 +29,24 @@ function loadPasswordOrDummy(root) {
   }
 }
 
+function countActiveTimeoutResources() {
+  return process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+}
+
+/** @param {() => Promise<void>} run */
+async function runSigintSpawnIntegrationCase(run) {
+  const head = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8" }).trim();
+  const password = loadPasswordOrDummy(repoRoot);
+  await withScrubbedSigintCallerEnv(async () => {
+    const cwd = process.cwd();
+    assert.notEqual(cwd, repoRoot, "caller cwd must not be repo root");
+    assert.notEqual(cwd, sdkRoot, "caller cwd must not be js-sdk root");
+    assert.equal(process.env.EXPECTED_SHA, undefined, "caller env must not inherit EXPECTED_SHA");
+    assert.deepEqual(Object.keys(process.env).sort(), ["HOME", "IC_PREMERGE_SIGINT_DOCKER_WRAP", "PATH"]);
+    await run({ head, password });
+  });
+}
+
 /**
  * env -i style caller: minimal PATH/HOME only, no inherited EXPECTED_SHA, cwd outside repo/sdk.
  * @param {() => Promise<void>} run
@@ -108,14 +126,7 @@ premerge: node pid=4242
   });
 
   it("runPremergeSigintOnce spawn path uses lib cwd and inner EXPECTED_SHA under scrubbed caller env", async () => {
-    const head = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8" }).trim();
-    const password = loadPasswordOrDummy(repoRoot);
-    await withScrubbedSigintCallerEnv(async () => {
-      const cwd = process.cwd();
-      assert.notEqual(cwd, repoRoot, "caller cwd must not be repo root");
-      assert.notEqual(cwd, sdkRoot, "caller cwd must not be js-sdk root");
-      assert.equal(process.env.EXPECTED_SHA, undefined, "caller env must not inherit EXPECTED_SHA");
-      assert.deepEqual(Object.keys(process.env).sort(), ["HOME", "IC_PREMERGE_SIGINT_DOCKER_WRAP", "PATH"]);
+    await runSigintSpawnIntegrationCase(async ({ head, password }) => {
       const row = await runPremergeSigintOnce({
         category: "early",
         label: "scrubbed-caller-env",
@@ -129,5 +140,28 @@ premerge: node pid=4242
       assert.equal(row.hit, 1, "must reach post-EXPECTED_SHA guard leg (guard:12 marker)");
       assert.equal(row.code, 130, "SIGINT during guard leg must exit 130");
     });
+  });
+
+  it("runPremergeSigintOnce clears SIGINT race timeout when child exits", async () => {
+    const before = countActiveTimeoutResources();
+    await runSigintSpawnIntegrationCase(async ({ head, password }) => {
+      await runPremergeSigintOnce({
+        category: "early",
+        label: "race-timeout-cleanup",
+        pattern: /check-12-paths|guard:12/,
+        head,
+        password,
+        extraEnv: {
+          IC_PREMERGE_ALLOW_DIRTY: "1",
+        },
+      });
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const after = countActiveTimeoutResources();
+    assert.equal(
+      after,
+      before,
+      "must not leave active Timeout handle after runPremergeSigintOnce settles",
+    );
   });
 });

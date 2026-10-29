@@ -33,4 +33,6 @@ Each row must show `rc=130`, `tmpLeft=0`, `hit=1`, `premergeAlive=0`, `dockerBef
 
 Clear inherited `PREMERGE_MUTANT` before each run (the driver sets `PREMERGE_MUTANT=` on the child).
 
+The lib's `bash -lc` starts a login shell that resets `PATH`, so an isolated `HOME` needs a `.profile` that puts `node`, `docker`, and other tools on `PATH`.
+
 SIGINT is sent only to the Node PID printed as `premerge: node pid=…` in that run's log (never broad `pgrep`).

@@ -64,7 +64,7 @@ export function runInCommittedMutantWorktree(patchName, testRel, nameFilter) {
 
     const testFile = path.join(wtRoot, testRel);
     /** @type {string[]} */
-    const args = ["--test", testFile];
+    const args = ["--test", "--test-reporter=tap", testFile];
     if (nameFilter) {
       args.push("--test-name-pattern", nameFilter);
     }

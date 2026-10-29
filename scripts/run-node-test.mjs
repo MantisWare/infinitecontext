@@ -52,7 +52,7 @@ if (unique.length === 0) {
 }
 
 /** @type {string[]} */
-const nodeArgs = ["--test", "--test-concurrency=1"];
+const nodeArgs = ["--test", "--test-reporter=tap", "--test-concurrency=1"];
 for (const imp of imports) {
   nodeArgs.push("--import", imp);
 }
